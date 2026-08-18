@@ -84,7 +84,7 @@ Violet/
 
 **建设内容**
 
-- 用户提供私有 Git 远端后，在 Mac 初始化仓库并推送；Mac 和 Devbox 分别克隆同一远端，保护主分支，采用短分支、PR、审查和线性历史。
+- Git 仓库已在 Mac 初始化，GitHub `origin` 与内部 `bits` 保存相同的 `main` 提交；后续保护主分支，采用短分支、PR、审查和线性历史，Devbox 使用独立克隆。
 - 建立 pnpm workspace 和 Swift 工程边界。
 - 建立 `apps/dev-cli`，只通过生成 SDK 和 SSH 隧道进行流式文字对话、健康检查与诊断，不直接访问数据库。
 - 建立 `packages/protocol`：JSON Schema 2020-12 是数据与事件结构的唯一事实源，OpenAPI 3.1 引用这些 Schema 描述 HTTP API。
@@ -97,7 +97,7 @@ Violet/
   - Policy
 - 建立 PostgreSQL 迁移、事件表、身份表和最小对话存储。
 - 对话、事件和身份内容在写入 PostgreSQL 前使用应用层信封加密。
-- 建立模型供应商 Port，接入用户选择并授权的一个文字模型适配器；不可用时明确失败，不自动切换供应商。
+- 建立模型供应商 Port；供应商确定前使用永久保留的确定性测试适配器验证协议和集成，真实对话交付前接入用户选择并授权的一个文字模型适配器。供应商不可用时明确失败，不自动切换。
 - 建立 Docker Compose：Core、PostgreSQL、OpenTelemetry Collector 和 Grafana LGTM。
 - 在 Devbox 部署，同一份 Compose 可在空白 Linux 环境启动。
 - Core 监听容器内部接口，但 Devbox 宿主机只在 `127.0.0.1` 发布端口，Mac 只通过 SSH 隧道访问；PostgreSQL 只存在于容器内部网络。
@@ -386,10 +386,10 @@ CI 必须验证协议兼容、TypeScript、Swift、数据库迁移、容器构�
 
 ### 4.5 第一阶段依赖与授权
 
-- 开工硬门槛：用户提供私有 Git 远端和一个选择并授权的文字模型 API；1C 开始前再提供多模态模型。
+- GitHub 上游和内部镜像已经就绪。协议、目录、领域边界和确定性集成测试可以先行；完成 1A 真实对话闭环前必须提供一个选择并授权的文字模型 API，1C 开始前再提供多模态模型。
 - Devbox SSH、Docker 和必要网络能力。
 - PostgreSQL。
-- 火山引擎 TOS 账号、私有普通桶、地域、Endpoint 和最小权限 IAM 子账号；创建桶和产生费用前单独确认。
+- 火山引擎 TOS 账号、私有普通桶、地域、Endpoint 和最小权限 IAM 子账号在 1A 备份切片开始前提供；创建桶和产生费用前单独确认。
 - macOS 麦克风、屏幕录制和 Accessibility 权限。
 - Mac 本地签名能力；正式分发前再决定 Apple Developer 账号。
 - 正式发布、付费资源、外部身份和高风险权限仍按委托契约单独审批。
