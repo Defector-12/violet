@@ -97,7 +97,7 @@ services:
     restart: unless-stopped
     environment:
       GF_AUTH_ANONYMOUS_ENABLED: "false"
-      GF_SECURITY_ADMIN_PASSWORD__FILE: /run/violet-secrets/grafana_admin_password
+      GF_SECURITY_ADMIN_PASSWORD: $$__file{/run/violet-secrets/grafana_admin_password}
       GF_SECURITY_ADMIN_USER: violet-admin
     networks:
       - egress
