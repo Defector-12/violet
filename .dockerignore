@@ -1,0 +1,12 @@
+.env
+.env.*
+!.env.example
+.git
+.github
+.build
+.swiftpm
+coverage
+dist
+node_modules
+*.log
+*.tsbuildinfo

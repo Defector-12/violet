@@ -1,0 +1,14 @@
+packages:
+  - apps/*
+  - packages/*
+  - services/*
+
+allowBuilds:
+  esbuild: true
+  protobufjs: true
+
+injectWorkspacePackages: true
+
+minimumReleaseAge: 1440
+minimumReleaseAgeExclude:
+  - "@violet/*"

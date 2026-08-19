@@ -1,0 +1,79 @@
+openapi: 3.1.1
+info:
+  title: Violet Core API
+  version: 0.1.0
+  description: Versioned control-plane API for the single-user Violet instance.
+servers:
+  - url: http://127.0.0.1:4310
+paths:
+  /v1/health/live:
+    get:
+      operationId: getLiveHealth
+      summary: Report process liveness without reading personal content.
+      responses:
+        "200":
+          description: Core process is alive.
+          content:
+            application/json:
+              schema:
+                $ref: ../schemas/v1/health.schema.json
+  /v1/status:
+    get:
+      operationId: getCoreStatus
+      summary: Report whether Core is sealed or ready.
+      security:
+        - deviceToken: []
+      responses:
+        "200":
+          description: Current Core status.
+          content:
+            application/json:
+              schema:
+                $ref: ../schemas/v1/status.schema.json
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /v1/chat/stream:
+    post:
+      operationId: streamChat
+      summary: Stream one text interaction as newline-delimited protocol events.
+      security:
+        - deviceToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/v1/chat-request.schema.json
+      responses:
+        "200":
+          description: Newline-delimited ChatStreamEvent values.
+          content:
+            application/x-ndjson:
+              schema:
+                type: string
+              x-ndjson-schema:
+                $ref: ../schemas/v1/chat-stream-event.schema.json
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "423":
+          description: Core is sealed.
+          content:
+            application/json:
+              schema:
+                $ref: ../schemas/v1/error.schema.json
+components:
+  schemas:
+    ChatStreamEvent:
+      $ref: ../schemas/v1/chat-stream-event.schema.json
+  securitySchemes:
+    deviceToken:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque-device-token
+  responses:
+    Unauthorized:
+      description: Device token is missing or invalid.
+      content:
+        application/json:
+          schema:
+            $ref: ../schemas/v1/error.schema.json

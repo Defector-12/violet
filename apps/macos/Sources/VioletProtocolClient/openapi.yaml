@@ -1,0 +1,347 @@
+openapi: 3.1.1
+info:
+  title: Violet Core API
+  version: 0.1.0
+  description: Versioned control-plane API for the single-user Violet instance.
+servers:
+  - url: http://127.0.0.1:4310
+paths:
+  /v1/health/live:
+    get:
+      operationId: getLiveHealth
+      summary: Report process liveness without reading personal content.
+      responses:
+        '200':
+          description: Core process is alive.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/health.schema'
+  /v1/status:
+    get:
+      operationId: getCoreStatus
+      summary: Report whether Core is sealed or ready.
+      security:
+        - deviceToken: []
+      responses:
+        '200':
+          description: Current Core status.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/status.schema'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /v1/chat/stream:
+    post:
+      operationId: streamChat
+      summary: Stream one text interaction as newline-delimited protocol events.
+      security:
+        - deviceToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/chat-request.schema'
+      responses:
+        '200':
+          description: Newline-delimited ChatStreamEvent values.
+          content:
+            application/x-ndjson:
+              schema:
+                type: string
+              x-ndjson-schema:
+                $schema: https://json-schema.org/draft/2020-12/schema
+                $id: https://violet.local/schemas/v1/chat-stream-event.schema.json
+                title: ChatStreamEvent
+                oneOf:
+                  - type: object
+                    additionalProperties: false
+                    required:
+                      - eventId
+                      - requestId
+                      - type
+                    properties:
+                      eventId:
+                        type: string
+                        format: uuid
+                      requestId:
+                        type: string
+                        format: uuid
+                      type:
+                        const: start
+                  - type: object
+                    additionalProperties: false
+                    required:
+                      - content
+                      - eventId
+                      - requestId
+                      - type
+                    properties:
+                      content:
+                        type: string
+                        minLength: 1
+                      eventId:
+                        type: string
+                        format: uuid
+                      requestId:
+                        type: string
+                        format: uuid
+                      type:
+                        const: delta
+                  - type: object
+                    additionalProperties: false
+                    required:
+                      - eventId
+                      - messageId
+                      - requestId
+                      - type
+                      - usage
+                    properties:
+                      eventId:
+                        type: string
+                        format: uuid
+                      messageId:
+                        type: string
+                        format: uuid
+                      requestId:
+                        type: string
+                        format: uuid
+                      type:
+                        const: complete
+                      usage:
+                        type: object
+                        additionalProperties: false
+                        required:
+                          - inputTokens
+                          - outputTokens
+                        properties:
+                          inputTokens:
+                            type: integer
+                            minimum: 0
+                          outputTokens:
+                            type: integer
+                            minimum: 0
+                  - type: object
+                    additionalProperties: false
+                    required:
+                      - error
+                      - eventId
+                      - requestId
+                      - type
+                    properties:
+                      error:
+                        $ref: '#/components/schemas/error.schema'
+                      eventId:
+                        type: string
+                        format: uuid
+                      requestId:
+                        type: string
+                        format: uuid
+                      type:
+                        const: error
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '423':
+          description: Core is sealed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/error.schema'
+components:
+  schemas:
+    ChatStreamEvent:
+      $ref: '#/components/schemas/chat-stream-event.schema'
+    health.schema:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      $id: https://violet.local/schemas/v1/health.schema.json
+      title: Health
+      type: object
+      additionalProperties: false
+      required:
+        - service
+        - status
+        - time
+        - version
+      properties:
+        service:
+          const: violet-core
+        status:
+          const: ok
+        time:
+          type: string
+          format: date-time
+        version:
+          type: string
+          minLength: 1
+    status.schema:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      $id: https://violet.local/schemas/v1/status.schema.json
+      title: CoreStatus
+      type: object
+      additionalProperties: false
+      required:
+        - service
+        - state
+        - time
+        - version
+      properties:
+        service:
+          const: violet-core
+        state:
+          type: string
+          enum:
+            - sealed
+            - ready
+        reason:
+          type: string
+          minLength: 1
+        time:
+          type: string
+          format: date-time
+        version:
+          type: string
+          minLength: 1
+    error.schema:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      $id: https://violet.local/schemas/v1/error.schema.json
+      title: ApiError
+      type: object
+      additionalProperties: false
+      required:
+        - code
+        - message
+        - requestId
+        - retryable
+      properties:
+        code:
+          type: string
+          pattern: ^[A-Z][A-Z0-9_]+$
+        message:
+          type: string
+          minLength: 1
+        requestId:
+          type: string
+          format: uuid
+        retryable:
+          type: boolean
+    chat-request.schema:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      $id: https://violet.local/schemas/v1/chat-request.schema.json
+      title: ChatRequest
+      type: object
+      additionalProperties: false
+      required:
+        - message
+        - requestId
+      properties:
+        message:
+          type: string
+          minLength: 1
+          maxLength: 65536
+        requestId:
+          type: string
+          format: uuid
+    chat-stream-event.schema:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      $id: https://violet.local/schemas/v1/chat-stream-event.schema.json
+      title: ChatStreamEvent
+      oneOf:
+        - type: object
+          additionalProperties: false
+          required:
+            - eventId
+            - requestId
+            - type
+          properties:
+            eventId:
+              type: string
+              format: uuid
+            requestId:
+              type: string
+              format: uuid
+            type:
+              const: start
+        - type: object
+          additionalProperties: false
+          required:
+            - content
+            - eventId
+            - requestId
+            - type
+          properties:
+            content:
+              type: string
+              minLength: 1
+            eventId:
+              type: string
+              format: uuid
+            requestId:
+              type: string
+              format: uuid
+            type:
+              const: delta
+        - type: object
+          additionalProperties: false
+          required:
+            - eventId
+            - messageId
+            - requestId
+            - type
+            - usage
+          properties:
+            eventId:
+              type: string
+              format: uuid
+            messageId:
+              type: string
+              format: uuid
+            requestId:
+              type: string
+              format: uuid
+            type:
+              const: complete
+            usage:
+              type: object
+              additionalProperties: false
+              required:
+                - inputTokens
+                - outputTokens
+              properties:
+                inputTokens:
+                  type: integer
+                  minimum: 0
+                outputTokens:
+                  type: integer
+                  minimum: 0
+        - type: object
+          additionalProperties: false
+          required:
+            - error
+            - eventId
+            - requestId
+            - type
+          properties:
+            error:
+              $ref: '#/components/schemas/error.schema'
+            eventId:
+              type: string
+              format: uuid
+            requestId:
+              type: string
+              format: uuid
+            type:
+              const: error
+  securitySchemes:
+    deviceToken:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque-device-token
+  responses:
+    Unauthorized:
+      description: Device token is missing or invalid.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/error.schema'

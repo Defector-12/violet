@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://violet.local/schemas/v1/chat-request.schema.json",
+  "title": "ChatRequest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["message", "requestId"],
+  "properties": {
+    "message": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 65536
+    },
+    "requestId": {
+      "type": "string",
+      "format": "uuid"
+    }
+  }
+}

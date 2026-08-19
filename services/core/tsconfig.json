@@ -1,0 +1,16 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    "rootDir": "src",
+    "tsBuildInfoFile": "tsconfig.tsbuildinfo"
+  },
+  "include": ["src/**/*.ts"],
+  "references": [
+    { "path": "../../packages/crypto" },
+    { "path": "../../packages/domain" },
+    { "path": "../../packages/policy" },
+    { "path": "../../packages/protocol" },
+    { "path": "../../packages/sdk" }
+  ]
+}

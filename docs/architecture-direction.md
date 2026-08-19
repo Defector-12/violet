@@ -4,11 +4,11 @@
 
 ## 1. 当前状态
 
-- 当前 Violet 工作区已经初始化 Git，并将同一 `main` 提交推送到内部集成远端和 GitHub 可迁移镜像；仓库仍只有设计与路线文档，尚无可运行代码。
+- Release 1A 已进入交付收尾。当前特性分支已经建立并验证 pnpm workspace、JSON Schema/OpenAPI 协议、TypeScript SDK、Swift 生成客户端边界、模块化 Core、`dev-cli`、PostgreSQL 迁移、应用层信封加密、DeepSeek Adapter、Docker Compose、可观测配置和加密备份恢复。
 - 已完成现有阅读工具 Sprinkle 的只读评估。Sprinkle 是 WXT、React、TypeScript 构建的浏览器扩展，可复用其页面提取、文字与图片选择、区域框选和浏览器内交互能力，但不能作为 Violet 本体。
 - 当前可使用一台公司 Devbox 作为临时云环境：32 核 CPU、128G 内存、120G 系统盘、500G 数据盘、veLinux 1.0。它足以支撑第一阶段的后端、数据库、Worker、沙箱和测试。
 - Violet 是单用户、云端智能优先、Mac 先行的绿地项目。
-- Git 基线已建立，但尚未开始协议、Core、客户端或基础设施实现。
+- 本地 `pnpm check` 已覆盖格式、类型、构建和 27 个单元测试；Devbox 部署、真实模型 20 轮纵向验证、两次物理重启、加密备份、TOS 上传下载和空库恢复已经通过。
 
 ## 2. 架构目标
 
@@ -319,7 +319,7 @@ Violet 只能通过只读诊断 Port 查询与当前目标相关的脱敏证据�
 - 火山引擎 TOS 私有普通桶，通过 S3 兼容 Port 接入；1A 用于加密备份，1C 起用于经过授权和信封加密的截图与附件。
 - Devbox 上一个或少量隔离执行 Worker 与任务沙箱。
 - Devbox 上 OpenTelemetry Collector 和 Grafana LGTM。
-- 按需连接模型供应商、MCP 和开发 Agent。
+- Release 1A 文字模型使用 DeepSeek OpenAI 兼容 API，模型为 `deepseek-v4-flash`；MCP 和开发 Agent 后续按需接入。
 
 Core、数据库、Worker、观测系统和沙箱即使同机部署，也必须分进程、分网络、分权限。第一阶段暂不引入多用户体系、Kubernetes、独立消息队列、独立向量数据库和复杂微服务。
 
@@ -331,7 +331,9 @@ Core、数据库、Worker、观测系统和沙箱即使同机部署，也必须�
 个人 Mac
 ├── apps/dev-cli
 ├── SSH 隧道
-├── Keychain：设备令牌、内容密钥、备份恢复私钥
+├── 开发期本地 `.env`：设备令牌、内容密钥和外部凭证
+├── 文件权限 0600，Git 与 Docker 构建上下文强制忽略
+├── 后续 Mac App 使用 Keychain 取代本地 `.env`
 └── Git 工作副本
           │
           ▼
@@ -348,12 +350,12 @@ Devbox
 ```
 
 - Core 可监听容器内部接口，但 Docker 只在 Devbox 宿主机 `127.0.0.1` 发布端口；Mac 只通过 SSH 隧道访问，不向公网或办公网直接暴露 Violet 端口。
-- Mac 生成设备令牌并保存在 Keychain；Core 仅保存令牌哈希。
+- 开发期由 Mac 生成设备令牌并保存在权限为 `0600` 且被 Git 忽略的本地 `.env`；Core 仅获得令牌哈希和到期时间，并在每次认证时执行到期检查。原生 Mac App 建立后迁移到 Keychain。
 - 对话、事件和记忆在写入 PostgreSQL 前进行应用层加密。
 - 内容密钥和模型 API Key 由 Mac 注入 Devbox 的临时内存文件系统，以只读方式挂载给 Core，不进入 Git、数据库、日志、镜像或备份。
-- Devbox 重启后进入 `sealed` 状态，只有 Mac 重新注入密钥后才能恢复处理个人内容。
+- ready Core 使用 `/dev/shm` 中的运行秘密；独立的 sealed 回退 Core 只读取持久化的 Token 哈希和到期时间。运行秘密消失或 Devbox 重启后只有 sealed 回退容器可启动并拒绝内容访问，Mac 重新注入后再切换回 ready Core。
 - 模型供应商不可用时保留任务状态并明确失败，不自动切换到未经用户授权的供应商。
-- PostgreSQL 备份使用 Mac 持有私钥对应的恢复公钥加密后上传 TOS，并在 Mac 保留一份加密备份。
+- PostgreSQL custom dump 使用 Mac 持有 X25519 私钥对应的恢复公钥、HKDF-SHA256 和 AES-256-GCM 流式加密后上传 TOS，并在 Mac 保留一份加密备份；Devbox 不获得恢复私钥。
 - Git 提交历史是唯一代码事实源；内部 `bits` 承担 Devbox 开发、短分支和受保护 `main` 集成，GitHub `origin` 保存同提交的外部可迁移镜像。Mac 与 Devbox 使用独立工作副本，Devbox 只部署已同步到两个远端的确定 commit 或镜像，不从未提交工作区部署。
 
 ### 14.2 TOS 边界
@@ -366,6 +368,14 @@ Devbox
 - 用户可删除内容所在桶不得开启 WORM 或 Object Lock。
 - 临时对象、历史版本和不可解密密文通过生命周期规则清理。
 - 短时预签名 URL 只用于访问仍为信封密文的私有对象；明文由受控客户端或 Core 解密，不生成公共明文 URL。
+
+### 14.3 DeepSeek 边界
+
+- Release 1A 使用 OpenAI 兼容入口 `https://api.deepseek.com` 和 `deepseek-v4-flash`，通过模型 Port/Adapter 接入。
+- 用户明确允许真实个人记忆进入该模型 API；绝对秘密始终禁止上传，受控敏感信息仍只在当前对象、目的和会话的临时授权范围内处理。
+- 思考模式可以启用，但 `reasoning_content` 不写入事件账本、记忆、日志或 Trace；持久化范围仅包含用户输入、最终回复和脱敏用量元数据。
+- 模型 API Key 只从 Mac 本地秘密源注入 Devbox `/dev/shm`，只读挂载给 Core，不进入 Git、镜像、数据库、日志或备份。
+- DeepSeek 不可用时明确失败并保留已持久化状态，不静默切换供应商。
 
 ## 15. 可迁移性约束
 
@@ -389,6 +399,7 @@ Devbox
 - 云端核心与 Worker：Node.js、TypeScript，前后端通过版本化 API 和事件协议分离。
 - 协议：JSON Schema 2020-12 是数据和事件结构的唯一事实源；OpenAPI 3.1 引用这些 Schema 描述 HTTP API，并生成 TypeScript 与 Swift SDK。
 - 数据：PostgreSQL、`pgvector`、通过 S3 Port 接入的火山引擎 TOS。
+- Release 1A 文字模型：DeepSeek `deepseek-v4-flash`，通过 OpenAI 兼容 Adapter 接入。
 - 可观测：OpenTelemetry Collector 与 Grafana LGTM。
 - 部署：Docker Compose 起步，Devbox 作为当前环境。
 
@@ -399,7 +410,7 @@ Devbox
 - [Letta Stateful Agents](https://docs.letta.com/guides/core-concepts/stateful-agents/)：借鉴核心记忆与外部记忆分层，但 Violet 保留自己的治理与事实源。
 - [MCP 2026-07-28](https://modelcontextprotocol.io/specification/2026-07-28)：外部资源、工具和异步任务的优先连接协议。
 - Playwright：候选浏览器操作与 UI 验证工具。
-- 模型供应商、唤醒词引擎、沙箱执行引擎和未来个人云平台需要通过实测确定。
+- 多模态模型供应商、唤醒词引擎、沙箱执行引擎和未来个人云平台需要通过实测确定。
 
 ## 17. Sprinkle 的定位
 
@@ -415,12 +426,12 @@ Sprinkle 不扩建为 Violet 本体，而演化为浏览器结构化感官：
 - 任意应用中的指向、选区和结构化语义能否稳定融合，需要专项评估。
 - 记忆的正确写入、相关检索、冲突处理与删除传播尚需专项设计和测试。
 - 开发 Agent、部署工具和外部平台是否提供稳定 API、CLI 或 MCP 尚需验证。
-- 云端模型、TOS 地域和外部供应商的数据保留与隐私条款尚未选定。
+- 用户已经接受真实个人记忆进入当前 DeepSeek API 的数据处理风险；供应商条款变化仍需持续复核。
 - 隔离执行采用本机容器、远程沙箱或混合方式尚未决定。
 - 模型自评与真实能力之间的偏差，需要通过独立测试和证据门禁控制。
 - 第一版成本、延迟、离线降级和服务故障恢复策略尚需设计。
 - Mac 到 Devbox 的第一阶段连接锁定为 SSH 隧道；非公司网络下是否可达仍需验证。
-- 内部集成远端和 GitHub 可迁移镜像已经配置。模型供应商不阻塞契约与测试适配器开发，但在真实对话闭环前必须提供；TOS 地域与凭证在备份切片开始前必须提供。
+- 内部集成远端、GitHub 可迁移镜像、DeepSeek 模型配置和个人火山引擎 TOS 桶已经就绪。两次暴露的 TOS Secret 均未使用；第二次轮换后的凭证已完成真实最小权限、版本清理、加密上传下载和恢复验证。
 
 ## 19. 下一步
 

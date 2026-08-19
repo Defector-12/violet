@@ -1,0 +1,63 @@
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch: {}
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 256
+  transform/allowlist:
+    error_mode: ignore
+    trace_statements:
+      - context: resource
+        statements:
+          - keep_keys(resource.attributes, ["service.name", "service.version", "deployment.environment.name"])
+      - context: span
+        statements:
+          - keep_keys(span.attributes, ["error.type", "http.request.method", "http.response.status_code", "server.address", "url.path", "violet.request_id"])
+    metric_statements:
+      - context: resource
+        statements:
+          - keep_keys(resource.attributes, ["service.name", "service.version", "deployment.environment.name"])
+      - context: datapoint
+        statements:
+          - keep_keys(datapoint.attributes, ["error.type", "http.request.method", "http.response.status_code", "model.name", "operation.name", "status", "url.path"])
+    log_statements:
+      - context: resource
+        statements:
+          - keep_keys(resource.attributes, ["service.name", "service.version", "deployment.environment.name"])
+      - context: log
+        statements:
+          - set(log.body, log.attributes["event.name"])
+          - keep_keys(log.attributes, ["error.type", "event.name", "http.request.method", "http.response.status_code", "operation.name", "status", "url.path", "violet.request_id"])
+
+exporters:
+  otlp_http/lgtm:
+    endpoint: http://lgtm:4318
+    tls:
+      insecure: true
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+service:
+  extensions: [health_check]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, transform/allowlist, batch]
+      exporters: [otlp_http/lgtm]
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, transform/allowlist, batch]
+      exporters: [otlp_http/lgtm]
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, transform/allowlist, batch]
+      exporters: [otlp_http/lgtm]
