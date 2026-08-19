@@ -100,6 +100,7 @@ services:
       GF_SECURITY_ADMIN_PASSWORD__FILE: /run/violet-secrets/grafana_admin_password
       GF_SECURITY_ADMIN_USER: violet-admin
     networks:
+      - egress
       - observability
     ports:
       - 127.0.0.1:${VIOLET_GRAFANA_PORT:-3300}:3000
