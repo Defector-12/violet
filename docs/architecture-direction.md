@@ -4,7 +4,7 @@
 
 ## 1. 当前状态
 
-- Release 1A 已进入交付收尾。当前特性分支已经建立并验证 pnpm workspace、JSON Schema/OpenAPI 协议、TypeScript SDK、Swift 生成客户端边界、模块化 Core、`dev-cli`、PostgreSQL 迁移、应用层信封加密、DeepSeek Adapter、Docker Compose、可观测配置和加密备份恢复。
+- Release 1A 已完成交付。当前 `main` 已包含 pnpm workspace、JSON Schema/OpenAPI 协议、TypeScript SDK、Swift 生成客户端边界、模块化 Core、`dev-cli`、PostgreSQL 迁移、应用层信封加密、DeepSeek Adapter、Docker Compose、可观测配置和加密备份恢复。
 - 已完成现有阅读工具 Sprinkle 的只读评估。Sprinkle 是 WXT、React、TypeScript 构建的浏览器扩展，可复用其页面提取、文字与图片选择、区域框选和浏览器内交互能力，但不能作为 Violet 本体。
 - 当前可使用一台公司 Devbox 作为临时云环境：32 核 CPU、128G 内存、120G 系统盘、500G 数据盘、veLinux 1.0。它足以支撑第一阶段的后端、数据库、Worker、沙箱和测试。
 - Violet 是单用户、云端智能优先、Mac 先行的绿地项目。
@@ -15,6 +15,7 @@
 - 一个 Violet 身份可以跨设备、模型和执行环境持续存在。
 - Mac 全局感知是第一阶段的基础能力，浏览器、IDE 等应用适配器只增强结构化理解，不能成为 Violet 看见内容的前提。
 - 设备负责原生交互、感知、敏感过滤和数据出境控制，云端负责主要智能。
+- 实时语音可以由 ASR、文字模型和 TTS 组成的 Pipeline 完成，也可以由端到端实时模型统一完成；两种运行时不得改变 Violet 的身份、记忆、权限和审计边界。
 - 客户端与后端严格分离，以版本化协议和生成式 SDK 通信；领域核心不依赖 UI、数据库、模型厂商或执行引擎。
 - 认知、任务编排和专业执行分离，避免自行重写所有 Agent 与工具能力。
 - 所有长任务可持久化、暂停、恢复、重试、审计和回滚。
@@ -30,6 +31,7 @@
 ▼
 Mac 原生身体
 ├── 唤醒与轻量交互
+├── 音频采集、播放、静音与立即停止
 ├── 全局屏幕、声音、文件与应用感知
 ├── 用户指向、选区与区域框选
 ├── Accessibility / ScreenCaptureKit / OCR / 视觉理解
@@ -37,11 +39,11 @@ Mac 原生身体
 ├── 保密工作区隔离
 ├── 敏感数据过滤与加密
 └── Mac 数据出境与本机执行网关
-          │ Context Envelope / versioned API
+          │ Context Envelope / Realtime Session / versioned API
           ▼
 后端接入层
 ├── 设备认证与授权
-├── 流式对话与事件
+├── 实时会话协商、流式对话与事件
 └── 协议校验与兼容
           ▼
 Violet 应用与领域核心
@@ -74,6 +76,7 @@ Mac 客户端是 Violet 的第一具身体，不承载完整身份。
 职责包括：
 
 - 全局唤醒、悬浮交互、语音与文字输入。
+- 通过 `AudioIOPort` 采集和播放音频，处理静音、耳机、回声、打断与设备切换；Mac 身体不固定使用 Apple、Qwen 或其他语音认知实现。
 - 在用户主动唤醒后读取已授权的当前屏幕、窗口、音频、文件与应用上下文。
 - 通过用户明确框选、当前应用结构、Accessibility 语义、ScreenCaptureKit 截图、OCR 和视觉模型识别“这个”所指向的内容。
 - 明确显示听取、读取、思考、行动和授权状态。
@@ -95,6 +98,36 @@ Mac 客户端是 Violet 的第一具身体，不承载完整身份。
 ```
 
 应用专用适配器不是必需入口。没有 Sprinkle 或其他适配器时，Violet 仍应能够理解桌面、图片预览、PDF、IDE 和任意可见窗口；适配器只负责提供更高精度的结构化证据。遇到系统权限、DRM 或应用实现限制时，Violet 必须明确说明无法可靠读取。
+
+### 4.1 实时对话运行时
+
+实时语音不是两个独立的“语音转文字”和“文字转语音”按钮，而是包含音频输入、轮次判断、理解、推理、文字与音频输出、打断和恢复的双向会话。
+
+Violet 使用版本化 `RealtimeSession` 协议连接设备与 Core。协议至少覆盖：
+
+- 会话创建、能力协商、授权范围、语言、音色配置和过期时间。
+- 音频输入分片、提交与取消，以及可选的文字输入。
+- 用户开始和停止说话、VAD 状态、响应开始、打断、完成和错误。
+- 输入转写的临时与最终结果、输出文字增量和输出音频分片。
+- 供应商能力描述，包括输入输出模态、音频格式、预设或自定义音色、工具调用、转写可用性和中断能力。
+
+Mac 只通过 `AudioIOPort` 处理设备音频，通过 `RealtimeSession` 传递与供应商无关的事件。Core 提供 `RealtimeConversationPort`，允许接入两类适配器：
+
+```text
+Pipeline Adapter
+音频 → ASR → 文字认知模型 → TTS → 音频
+
+Integrated Realtime Adapter
+音频 → 端到端实时模型的理解与推理 → 文字 + 音频
+```
+
+端到端实时模型可以在当前语音会话中替代 DeepSeek 等文字模型，但不能替代 Violet Core。Core 仍负责注入当前身份、相关记忆、授权和系统约束，接收最终转写与回复，更新事件账本，并对工具调用和现实行动执行确定性策略。
+
+控制面始终经过 Core。媒体面默认由 Core 或受控实时网关中继，Mac 不持有模型供应商长期凭证。只有供应商提供单会话、短时、最小作用域凭证，并且直接媒体路径仍能执行 Mac 出境策略、云端审计和立即吊销时，才允许后续评估由 Mac 直连供应商以降低延迟。
+
+音色是会话能力而不是 UI 或模型常量。若端到端模型支持目标音色，直接使用其音频输出；若只支持预设音色，则可请求文字输出并交给独立 TTS Adapter。更换音色实现不得修改 Violet 的对话、记忆或任务领域模型。
+
+原始连续音频默认不持久化。事件账本只保存经过授权的最终用户转写、最终回复和脱敏运行元数据；临时转写、模型内部推理和音频分片在会话结束或过期后清理。
 
 ## 5. Context Envelope 协议
 
@@ -128,7 +161,7 @@ Mac / 浏览器 / 未来设备
 
 硬性边界：
 
-- 客户端不能直接访问数据库、模型供应商、执行 Worker 或生产凭证。
+- 客户端不能直接访问数据库、执行 Worker 或生产凭证，也不能持有模型供应商长期凭证。任何未来的供应商直连媒体路径都必须由 Core 签发单会话短期能力并满足实时出境与审计策略。
 - 领域核心不能依赖 SwiftUI、React、HTTP 框架、数据库驱动或模型 SDK。
 - 模型、Agent、数据库、对象存储、沙箱和部署平台必须通过 Port/Adapter 替换。
 - API、事件和数据结构必须版本化，并定义兼容与迁移策略。
@@ -142,6 +175,7 @@ Mac / 浏览器 / 未来设备
 
 - **身份与关系模块**：维护 Violet 的人格、价值宪法、用户关系和连续身份。
 - **模型网关**：按任务质量、成本、延迟和多模态需求选择模型，避免绑定单一供应商。
+- **实时会话编排器**：协商音频与模型能力，管理 Pipeline 或端到端实时适配器、打断、恢复和最终事件落账。
 - **认知编排器**：理解意图、分配注意力、决定聊天、回答、行动或创建任务。
 - **统一记忆模块**：写入、检索、冲突处理、遗忘、编辑和删除传播。
 - **持久任务运行时**：维护目标、步骤、依赖、状态、检查点、授权中断和恢复。
@@ -372,6 +406,7 @@ Devbox
 ### 14.3 DeepSeek 边界
 
 - Release 1A 使用 OpenAI 兼容入口 `https://api.deepseek.com` 和 `deepseek-v4-flash`，通过模型 Port/Adapter 接入。
+- DeepSeek 是当前文字认知适配器，不是 Violet 的固定大脑。后续实时语音会话可以继续通过 Pipeline 使用 DeepSeek，也可以由经过评估的端到端实时模型完成理解、推理和语音输出。
 - 用户明确允许真实个人记忆进入该模型 API；绝对秘密始终禁止上传，受控敏感信息仍只在当前对象、目的和会话的临时授权范围内处理。
 - 思考模式可以启用，但 `reasoning_content` 不写入事件账本、记忆、日志或 Trace；持久化范围仅包含用户输入、最终回复和脱敏用量元数据。
 - 模型 API Key 只从 Mac 本地秘密源注入 Devbox `/dev/shm`，只读挂载给 Core，不进入 Git、镜像、数据库、日志或备份。
@@ -395,9 +430,10 @@ Devbox
 当前推荐基线：
 
 - Mac 身体：Swift、SwiftUI、AppKit、ScreenCaptureKit、Accessibility、Keychain。
+- Mac 音频边界：`AudioIOPort` 封装系统麦克风、扬声器、耳机、静音、回声与打断；Apple Speech 和 AVSpeechSynthesizer 只能作为可替换 Adapter，不是协议或领域依赖。
 - 浏览器增强感官：Sprinkle 的 WXT、React、TypeScript 核心，按浏览器封装差异；浏览器不是全局感知前提。
 - 云端核心与 Worker：Node.js、TypeScript，前后端通过版本化 API 和事件协议分离。
-- 协议：JSON Schema 2020-12 是数据和事件结构的唯一事实源；OpenAPI 3.1 引用这些 Schema 描述 HTTP API，并生成 TypeScript 与 Swift SDK。
+- 协议：JSON Schema 2020-12 是数据和事件结构的唯一事实源；OpenAPI 3.1 引用这些 Schema 描述 HTTP API，并生成 TypeScript 与 Swift SDK；实时语音使用同一 Schema 体系定义版本化 `RealtimeSession` 双向事件。
 - 数据：PostgreSQL、`pgvector`、通过 S3 Port 接入的火山引擎 TOS。
 - Release 1A 文字模型：DeepSeek `deepseek-v4-flash`，通过 OpenAI 兼容 Adapter 接入。
 - 可观测：OpenTelemetry Collector 与 Grafana LGTM。
@@ -410,7 +446,8 @@ Devbox
 - [Letta Stateful Agents](https://docs.letta.com/guides/core-concepts/stateful-agents/)：借鉴核心记忆与外部记忆分层，但 Violet 保留自己的治理与事实源。
 - [MCP 2026-07-28](https://modelcontextprotocol.io/specification/2026-07-28)：外部资源、工具和异步任务的优先连接协议。
 - Playwright：候选浏览器操作与 UI 验证工具。
-- 多模态模型供应商、唤醒词引擎、沙箱执行引擎和未来个人云平台需要通过实测确定。
+- [Qwen-Omni-Realtime](https://help.aliyun.com/zh/model-studio/realtime)：候选端到端实时音视频会话适配器；是否采用取决于延迟、打断、转写、音色、工具、数据治理和稳定性实测。
+- 其他实时多模态模型供应商、独立 ASR/TTS、唤醒词引擎、沙箱执行引擎和未来个人云平台需要通过实测确定。
 
 ## 17. Sprinkle 的定位
 
@@ -423,6 +460,8 @@ Sprinkle 不扩建为 Violet 本体，而演化为浏览器结构化感官：
 ## 18. 关键风险与待决事项
 
 - Mac 屏幕、麦克风、辅助功能和全局唤醒权限需要实际验证。
+- Pipeline 与端到端实时模型的质量、首包延迟、弱网恢复、回声消除、打断、最终转写和费用需要在同一评估集上实测；不能根据供应商宣传静默选型。
+- 端到端实时模型的预设音色不等于可克隆或任意设计音色；目标音色能力和合法使用边界尚需单独验证。
 - 任意应用中的指向、选区和结构化语义能否稳定融合，需要专项评估。
 - 记忆的正确写入、相关检索、冲突处理与删除传播尚需专项设计和测试。
 - 开发 Agent、部署工具和外部平台是否提供稳定 API、CLI 或 MCP 尚需验证。
@@ -435,4 +474,4 @@ Sprinkle 不扩建为 Violet 本体，而演化为浏览器结构化感官：
 
 ## 19. 下一步
 
-按《工程路线》执行第一阶段：先建立仓库、契约与可迁移 Devbox 基座，再完成 Mac 原生在场、全局感知、云端对话、统一记忆、持久任务、工具执行和端到端验收闭环。
+按《工程路线》执行第一阶段。Release 1A 基座已经完成；下一步先建立供应商无关的 `RealtimeSession`、`RealtimeConversationPort` 和 `AudioIOPort`，再完成 Mac 原生在场与至少一种真实实时语音运行时，之后继续全局感知、统一记忆、持久任务、工具执行和端到端验收闭环。
