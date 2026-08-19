@@ -5,7 +5,17 @@ import { createReadStream } from "node:fs";
 import { mkdir, readFile, rename, rm, stat } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { stdin, stdout } from "node:process";
-import { HeadObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import {
+  AbortMultipartUploadCommand,
+  CreateMultipartUploadCommand,
+  DeleteObjectCommand,
+  HeadObjectCommand,
+  ListMultipartUploadsCommand,
+  ListObjectsV2Command,
+  ListObjectVersionsCommand,
+  PutObjectCommand,
+  S3Client,
+} from "@aws-sdk/client-s3";
 import {
   type BackupEncryptionResult,
   decryptBackupToFile,
@@ -19,8 +29,10 @@ try {
     await encryptAndMaybeUpload(process.env);
   } else if (command === "decrypt") {
     await decrypt(arguments_, process.env);
+  } else if (command === "verify-access") {
+    await verifyTosAccess(process.env);
   } else {
-    throw new Error("Usage: violet-backup <encrypt-upload|decrypt> [input] [output]");
+    throw new Error("Usage: violet-backup <encrypt-upload|decrypt|verify-access> [input] [output]");
   }
 } catch (error) {
   process.stderr.write(`${error instanceof Error ? error.message : "Backup command failed"}\n`);
@@ -98,30 +110,13 @@ async function uploadBackup(input: {
   readonly path: string;
 }): Promise<string> {
   const bucket = required(input.env, "TOS_BUCKET");
-  const endpoint = new URL(required(input.env, "TOS_ENDPOINT"));
-  if (endpoint.protocol !== "https:") {
-    throw new Error("TOS_ENDPOINT must use HTTPS");
-  }
-  const accessKeyId = await readSecret(input.env, "TOS_ACCESS_KEY_ID", "TOS_ACCESS_KEY_ID_FILE");
-  const secretAccessKey = await readSecret(
-    input.env,
-    "TOS_SECRET_ACCESS_KEY",
-    "TOS_SECRET_ACCESS_KEY_FILE",
-  );
   const objectKey = buildBackupObjectKey(
     input.env["TOS_PREFIX"] ?? "violet",
     input.metadata.createdAt,
     basename(input.path),
   );
   const fileStats = await stat(input.path);
-  const client = new S3Client({
-    credentials: { accessKeyId, secretAccessKey },
-    endpoint: endpoint.toString(),
-    forcePathStyle: parseBoolean(input.env["TOS_FORCE_PATH_STYLE"] ?? "false"),
-    region: required(input.env, "TOS_REGION"),
-    requestChecksumCalculation: "WHEN_REQUIRED",
-    responseChecksumValidation: "WHEN_REQUIRED",
-  });
+  const client = await createTosClient(input.env);
 
   try {
     await client.send(
@@ -153,6 +148,212 @@ async function uploadBackup(input: {
   } finally {
     client.destroy();
   }
+}
+
+async function verifyTosAccess(env: NodeJS.ProcessEnv): Promise<void> {
+  const bucket = required(env, "TOS_BUCKET");
+  const prefix = `${(env["TOS_PREFIX"] ?? "violet").replace(/^\/+|\/+$/g, "")}/tmp/access-verification`;
+  const key = `${prefix}/${randomUUID()}.txt`;
+  const multipartKey = `${prefix}/${randomUUID()}.multipart`;
+  const client = await createTosClient(env);
+  const versionIds = new Set<string>();
+  let deleteMarkerVersionId: string | undefined;
+  let uploadId: string | undefined;
+
+  try {
+    await expectOutsidePrefixDenied(client, bucket);
+    for (const generation of ["first", "second"]) {
+      const put = await client.send(
+        new PutObjectCommand({
+          Body: randomUUID(),
+          Bucket: bucket,
+          ContentType: "text/plain",
+          Key: key,
+          Metadata: { generation },
+          ServerSideEncryption: "AES256",
+        }),
+      );
+      if (!put.VersionId) {
+        throw new Error("TOS versioning did not return a version ID");
+      }
+      versionIds.add(put.VersionId);
+    }
+
+    const head = await client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
+    if (head.ServerSideEncryption !== "AES256" || head.Metadata?.["generation"] !== "second") {
+      throw new Error("TOS object encryption or metadata verification failed");
+    }
+    const deleted = await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
+    if (!deleted.VersionId || deleted.DeleteMarker !== true) {
+      throw new Error("TOS versioned delete did not create a delete marker");
+    }
+    deleteMarkerVersionId = deleted.VersionId;
+
+    const listed = await client.send(
+      new ListObjectVersionsCommand({ Bucket: bucket, Prefix: key }),
+    );
+    const listedVersionIds = new Set(
+      (listed.Versions ?? [])
+        .filter((version) => version.Key === key && version.VersionId)
+        .map((version) => version.VersionId as string),
+    );
+    const listedDeleteMarker = (listed.DeleteMarkers ?? []).find(
+      (marker) => marker.Key === key && marker.VersionId === deleteMarkerVersionId,
+    );
+    if (
+      listedVersionIds.size !== versionIds.size ||
+      [...versionIds].some((versionId) => !listedVersionIds.has(versionId)) ||
+      !listedDeleteMarker
+    ) {
+      throw new Error("TOS version listing did not return all test versions");
+    }
+
+    const multipart = await client.send(
+      new CreateMultipartUploadCommand({
+        Bucket: bucket,
+        ContentType: "application/octet-stream",
+        Key: multipartKey,
+        ServerSideEncryption: "AES256",
+      }),
+    );
+    if (!multipart.UploadId) {
+      throw new Error("TOS multipart upload did not return an upload ID");
+    }
+    uploadId = multipart.UploadId;
+    const uploads = await client.send(
+      new ListMultipartUploadsCommand({ Bucket: bucket, Prefix: multipartKey }),
+    );
+    if (
+      !(uploads.Uploads ?? []).some(
+        (upload) => upload.Key === multipartKey && upload.UploadId === uploadId,
+      )
+    ) {
+      throw new Error("TOS multipart upload was not visible to the IAM user");
+    }
+    await client.send(
+      new AbortMultipartUploadCommand({
+        Bucket: bucket,
+        Key: multipartKey,
+        UploadId: uploadId,
+      }),
+    );
+    uploadId = undefined;
+
+    await deleteVersion(client, bucket, key, deleteMarkerVersionId);
+    deleteMarkerVersionId = undefined;
+    for (const versionId of versionIds) {
+      await deleteVersion(client, bucket, key, versionId);
+    }
+    versionIds.clear();
+
+    const remainingVersions = await client.send(
+      new ListObjectVersionsCommand({ Bucket: bucket, Prefix: key }),
+    );
+    const remainingUploads = await client.send(
+      new ListMultipartUploadsCommand({ Bucket: bucket, Prefix: multipartKey }),
+    );
+    if (
+      (remainingVersions.Versions ?? []).some((version) => version.Key === key) ||
+      (remainingVersions.DeleteMarkers ?? []).some((marker) => marker.Key === key) ||
+      (remainingUploads.Uploads ?? []).some((upload) => upload.Key === multipartKey)
+    ) {
+      throw new Error("TOS access verification cleanup was incomplete");
+    }
+
+    stdout.write(
+      `${JSON.stringify({
+        cleanup: true,
+        outsidePrefixDenied: true,
+        serverSideEncryption: "AES256",
+        versionsVerified: 2,
+      })}\n`,
+    );
+  } finally {
+    if (uploadId) {
+      await client
+        .send(
+          new AbortMultipartUploadCommand({
+            Bucket: bucket,
+            Key: multipartKey,
+            UploadId: uploadId,
+          }),
+        )
+        .catch(() => undefined);
+    }
+    if (deleteMarkerVersionId) {
+      await deleteVersion(client, bucket, key, deleteMarkerVersionId).catch(() => undefined);
+    }
+    for (const versionId of versionIds) {
+      await deleteVersion(client, bucket, key, versionId).catch(() => undefined);
+    }
+    client.destroy();
+  }
+}
+
+async function createTosClient(env: NodeJS.ProcessEnv): Promise<S3Client> {
+  const endpoint = new URL(required(env, "TOS_ENDPOINT"));
+  if (endpoint.protocol !== "https:") {
+    throw new Error("TOS_ENDPOINT must use HTTPS");
+  }
+  const accessKeyId = await readSecret(env, "TOS_ACCESS_KEY_ID", "TOS_ACCESS_KEY_ID_FILE");
+  const secretAccessKey = await readSecret(
+    env,
+    "TOS_SECRET_ACCESS_KEY",
+    "TOS_SECRET_ACCESS_KEY_FILE",
+  );
+  return new S3Client({
+    credentials: { accessKeyId, secretAccessKey },
+    endpoint: endpoint.toString(),
+    forcePathStyle: parseBoolean(env["TOS_FORCE_PATH_STYLE"] ?? "false"),
+    region: required(env, "TOS_REGION"),
+    requestChecksumCalculation: "WHEN_REQUIRED",
+    responseChecksumValidation: "WHEN_REQUIRED",
+  });
+}
+
+async function expectOutsidePrefixDenied(client: S3Client, bucket: string): Promise<void> {
+  try {
+    await client.send(
+      new ListObjectsV2Command({
+        Bucket: bucket,
+        MaxKeys: 1,
+        Prefix: `violet-iam-deny-probe-${randomUUID()}/`,
+      }),
+    );
+  } catch (error) {
+    if (isAccessDenied(error)) {
+      return;
+    }
+    throw error;
+  }
+  throw new Error("TOS IAM unexpectedly permits listing outside the violet prefix");
+}
+
+function isAccessDenied(error: unknown): boolean {
+  if (!isRecord(error)) {
+    return false;
+  }
+  const metadata = isRecord(error["$metadata"]) ? error["$metadata"] : undefined;
+  return (
+    error["name"] === "AccessDenied" ||
+    error["Code"] === "AccessDenied" ||
+    metadata?.["httpStatusCode"] === 403
+  );
+}
+
+async function deleteVersion(
+  client: S3Client,
+  bucket: string,
+  key: string,
+  versionId: string,
+): Promise<void> {
+  await client.send(
+    new DeleteObjectCommand({
+      Bucket: bucket,
+      Key: key,
+      VersionId: versionId,
+    }),
+  );
 }
 
 export function buildBackupObjectKey(prefix: string, createdAt: string, filename: string): string {
@@ -214,6 +415,10 @@ function parseBoolean(value: string): boolean {
     return false;
   }
   throw new Error("TOS_FORCE_PATH_STYLE must be true or false");
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }
 
 function compactTimestamp(value: Date): string {
