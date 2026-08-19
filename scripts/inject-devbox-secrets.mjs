@@ -38,6 +38,8 @@ const secrets = {
     : {}),
 };
 
+await prepareRemoteDirectory(target, `${dataDirectory}/config`, "755", false);
+await prepareRemoteDirectory(target, "/dev/shm/violet", "700", true);
 for (const [name, value] of Object.entries(configuration)) {
   await writeRemoteFile(target, `${dataDirectory}/config`, "755", name, value);
 }
@@ -82,23 +84,16 @@ function writeRemoteFile(targetHost, directory, directoryMode, name, value) {
   }
 
   return new Promise((resolve, reject) => {
-    const sshArguments = [];
-    const knownHostsFile = process.env.VIOLET_DEVBOX_KNOWN_HOSTS_FILE;
-    if (knownHostsFile) {
-      sshArguments.push(
-        "-o",
-        `UserKnownHostsFile=${knownHostsFile}`,
-        "-o",
-        "StrictHostKeyChecking=yes",
-      );
-    }
-    sshArguments.push(
-      targetHost,
-      `set -eu; umask 077; directory=${shellQuote(directory)}; mkdir -p "$directory"; chmod ${directoryMode} "$directory"; temporary=$(mktemp "$directory/${name}.XXXXXX"); trap 'rm -f "$temporary"' EXIT; cat > "$temporary"; chmod 0444 "$temporary"; mv -f "$temporary" "$directory/${name}"; trap - EXIT`,
+    const child = spawn(
+      "ssh",
+      sshArguments(
+        targetHost,
+        `set -eu; umask 077; directory=${shellQuote(directory)}; mkdir -p "$directory"; chmod ${directoryMode} "$directory"; temporary=$(mktemp "$directory/${name}.XXXXXX"); trap 'rm -f "$temporary"' EXIT; cat > "$temporary"; chmod 0444 "$temporary"; mv -f "$temporary" "$directory/${name}"; trap - EXIT`,
+      ),
+      {
+        stdio: ["pipe", "inherit", "inherit"],
+      },
     );
-    const child = spawn("ssh", sshArguments, {
-      stdio: ["pipe", "inherit", "inherit"],
-    });
     child.stdin.end(value);
     child.once("error", reject);
     child.once("exit", (code) => {
@@ -109,6 +104,45 @@ function writeRemoteFile(targetHost, directory, directoryMode, name, value) {
       }
     });
   });
+}
+
+function prepareRemoteDirectory(targetHost, directory, directoryMode, removeChildDirectories) {
+  const cleanup = removeChildDirectories
+    ? 'for child in "$directory"/*; do if [ -d "$child" ]; then sudo -n rm -rf -- "$child"; fi; done'
+    : ":";
+  return new Promise((resolve, reject) => {
+    const child = spawn(
+      "ssh",
+      sshArguments(
+        targetHost,
+        `set -eu; directory=${shellQuote(directory)}; sudo -n install -d -m ${directoryMode} -o "$(id -u)" -g "$(id -g)" "$directory"; ${cleanup}`,
+      ),
+      { stdio: "inherit" },
+    );
+    child.once("error", reject);
+    child.once("exit", (code) => {
+      if (code === 0) {
+        resolve();
+      } else {
+        reject(new Error(`failed to prepare ${directory}`));
+      }
+    });
+  });
+}
+
+function sshArguments(targetHost, command) {
+  const arguments_ = [];
+  const knownHostsFile = process.env.VIOLET_DEVBOX_KNOWN_HOSTS_FILE;
+  if (knownHostsFile) {
+    arguments_.push(
+      "-o",
+      `UserKnownHostsFile=${knownHostsFile}`,
+      "-o",
+      "StrictHostKeyChecking=yes",
+    );
+  }
+  arguments_.push(targetHost, command);
+  return arguments_;
 }
 
 function shellQuote(value) {
