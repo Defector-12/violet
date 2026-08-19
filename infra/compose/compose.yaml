@@ -1,6 +1,42 @@
 name: violet
 
 services:
+  backup:
+    profiles:
+      - operations
+    build:
+      context: ../..
+      dockerfile: services/backup/Dockerfile
+    command: ["encrypt-upload"]
+    user: ${VIOLET_BACKUP_UID:-1000}:${VIOLET_BACKUP_GID:-1000}
+    environment:
+      TOS_BUCKET: ${TOS_BUCKET:-vio}
+      TOS_ENDPOINT: ${TOS_ENDPOINT:-https://tos-s3-cn-beijing.volces.com}
+      TOS_FORCE_PATH_STYLE: ${TOS_FORCE_PATH_STYLE:-false}
+      TOS_PREFIX: ${TOS_PREFIX:-violet}
+      TOS_REGION: ${TOS_REGION:-cn-beijing}
+      VIOLET_BACKUP_OUTPUT_DIR: /var/lib/violet/backups
+      VIOLET_BACKUP_PUBLIC_KEY_FILE: /run/violet-secrets/backup_public_key
+      VIOLET_BACKUP_UPLOAD: "false"
+    networks:
+      - egress
+    volumes:
+      - ${VIOLET_DATA_DIR:-/data00/violet}/backups:/var/lib/violet/backups
+      - ${VIOLET_RUNTIME_SECRETS_DIR:-/dev/shm/violet}/backup_public_key:/run/violet-secrets/backup_public_key:ro
+
+  backup-upload:
+    profiles:
+      - operations
+    extends:
+      service: backup
+    environment:
+      TOS_ACCESS_KEY_ID_FILE: /run/violet-secrets/tos_access_key_id
+      TOS_SECRET_ACCESS_KEY_FILE: /run/violet-secrets/tos_secret_access_key
+      VIOLET_BACKUP_UPLOAD: "true"
+    volumes:
+      - ${VIOLET_RUNTIME_SECRETS_DIR:-/dev/shm/violet}/tos_access_key_id:/run/violet-secrets/tos_access_key_id:ro
+      - ${VIOLET_RUNTIME_SECRETS_DIR:-/dev/shm/violet}/tos_secret_access_key:/run/violet-secrets/tos_secret_access_key:ro
+
   postgres:
     image: pgvector/pgvector:0.8.1-pg17-bookworm
     restart: unless-stopped

@@ -4,12 +4,17 @@ import { readFile } from "node:fs/promises";
 
 const target = process.argv[2];
 if (!target) {
-  throw new Error("Usage: pnpm env:inject-devbox <user@host>");
+  throw new Error("Usage: pnpm env:inject-devbox <user@host> [--include-tos]");
+}
+const includeTos = process.argv.slice(3).includes("--include-tos");
+if (process.argv.slice(3).some((argument) => argument !== "--include-tos")) {
+  throw new Error("Unknown argument");
 }
 
 const env = parseEnv(await readFile(".env", "utf8"));
 const databasePassword = required(env, "VIOLET_DATABASE_PASSWORD");
 const secrets = {
+  backup_public_key: required(env, "VIOLET_BACKUP_PUBLIC_KEY"),
   content_key: required(env, "VIOLET_CONTENT_KEY"),
   database_url: `postgresql://violet:${encodeURIComponent(databasePassword)}@postgres:5432/violet`,
   deepseek_api_key: required(env, "DEEPSEEK_API_KEY"),
@@ -18,6 +23,12 @@ const secrets = {
     .digest("hex"),
   grafana_admin_password: required(env, "VIOLET_GRAFANA_ADMIN_PASSWORD"),
   postgres_password: databasePassword,
+  ...(includeTos
+    ? {
+        tos_access_key_id: required(env, "TOS_ACCESS_KEY_ID"),
+        tos_secret_access_key: required(env, "TOS_SECRET_ACCESS_KEY"),
+      }
+    : {}),
 };
 
 for (const [name, value] of Object.entries(secrets)) {
