@@ -101,7 +101,12 @@ export function buildCoreApp(options: CoreAppOptions): FastifyInstance {
     }
 
     const abortController = new AbortController();
-    request.raw.once("close", () => abortController.abort());
+    request.raw.once("aborted", () => abortController.abort());
+    reply.raw.once("close", () => {
+      if (!reply.raw.writableFinished) {
+        abortController.abort();
+      }
+    });
     const stream = Readable.from(
       serializeEvents(options.chatService.stream(request.body, abortController.signal)),
     );

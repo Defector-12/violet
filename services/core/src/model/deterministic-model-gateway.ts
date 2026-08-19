@@ -1,7 +1,8 @@
 import type { ModelGateway, ModelRequest, ModelStreamEvent } from "@violet/domain";
 
 export class DeterministicModelGateway implements ModelGateway {
-  async *stream(request: ModelRequest): AsyncIterable<ModelStreamEvent> {
+  async *stream(request: ModelRequest, signal?: AbortSignal): AsyncIterable<ModelStreamEvent> {
+    signal?.throwIfAborted();
     const lastUserMessage = request.messages.findLast((message) => message.role === "user");
     const content = lastUserMessage?.content ?? "";
     const response = `Violet test response: ${content}`;
