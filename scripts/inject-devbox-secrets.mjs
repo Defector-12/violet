@@ -39,10 +39,10 @@ const secrets = {
 };
 
 for (const [name, value] of Object.entries(configuration)) {
-  await writeRemoteFile(target, `${dataDirectory}/config`, name, value);
+  await writeRemoteFile(target, `${dataDirectory}/config`, "755", name, value);
 }
 for (const [name, value] of Object.entries(secrets)) {
-  await writeRemoteFile(target, "/dev/shm/violet", name, value);
+  await writeRemoteFile(target, "/dev/shm/violet", "700", name, value);
 }
 
 process.stdout.write(
@@ -73,9 +73,12 @@ function required(values, name) {
   return value;
 }
 
-function writeRemoteFile(targetHost, directory, name, value) {
+function writeRemoteFile(targetHost, directory, directoryMode, name, value) {
   if (!/^[a-z0-9_]+$/.test(name)) {
     throw new Error("invalid remote secret name");
+  }
+  if (directoryMode !== "700" && directoryMode !== "755") {
+    throw new Error("invalid remote directory mode");
   }
 
   return new Promise((resolve, reject) => {
@@ -91,7 +94,7 @@ function writeRemoteFile(targetHost, directory, name, value) {
     }
     sshArguments.push(
       targetHost,
-      `set -eu; umask 077; directory=${shellQuote(directory)}; mkdir -p "$directory"; chmod 700 "$directory"; temporary=$(mktemp "$directory/${name}.XXXXXX"); trap 'rm -f "$temporary"' EXIT; cat > "$temporary"; chmod 0444 "$temporary"; mv -f "$temporary" "$directory/${name}"; trap - EXIT`,
+      `set -eu; umask 077; directory=${shellQuote(directory)}; mkdir -p "$directory"; chmod ${directoryMode} "$directory"; temporary=$(mktemp "$directory/${name}.XXXXXX"); trap 'rm -f "$temporary"' EXIT; cat > "$temporary"; chmod 0444 "$temporary"; mv -f "$temporary" "$directory/${name}"; trap - EXIT`,
     );
     const child = spawn("ssh", sshArguments, {
       stdio: ["pipe", "inherit", "inherit"],

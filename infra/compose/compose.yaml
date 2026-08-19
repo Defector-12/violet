@@ -73,6 +73,7 @@ services:
       - ${VIOLET_RUNTIME_SECRETS_DIR:-/dev/shm/violet}/database_url:/run/violet-secrets/database_url:ro
 
   core:
+    image: violet-core
     build:
       context: ../..
       dockerfile: services/core/Dockerfile
@@ -123,6 +124,7 @@ services:
   core-sealed:
     profiles:
       - sealed
+    image: violet-core
     build:
       context: ../..
       dockerfile: services/core/Dockerfile

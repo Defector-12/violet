@@ -6,18 +6,25 @@ data_dir=${VIOLET_DATA_DIR:-/data00/violet}
 runtime_secrets_dir=${VIOLET_RUNTIME_SECRETS_DIR:-/dev/shm/violet}
 
 if docker info >/dev/null 2>&1; then
-  docker_command=docker
+  use_sudo=false
 elif sudo -n docker info >/dev/null 2>&1; then
-  docker_command='sudo -n docker'
+  use_sudo=true
 else
   printf 'Docker is unavailable without interactive elevation\n' >&2
   exit 1
 fi
 
 run_compose() {
-  VIOLET_DATA_DIR="$data_dir" \
-  VIOLET_RUNTIME_SECRETS_DIR="$runtime_secrets_dir" \
-    $docker_command compose -f "$compose_file" "$@"
+  if [ "$use_sudo" = true ]; then
+    sudo -n env \
+      VIOLET_DATA_DIR="$data_dir" \
+      VIOLET_RUNTIME_SECRETS_DIR="$runtime_secrets_dir" \
+      docker compose -f "$compose_file" "$@"
+  else
+    VIOLET_DATA_DIR="$data_dir" \
+    VIOLET_RUNTIME_SECRETS_DIR="$runtime_secrets_dir" \
+      docker compose -f "$compose_file" "$@"
+  fi
 }
 
 mode=${1:-auto}
