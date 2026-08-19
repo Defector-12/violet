@@ -85,6 +85,7 @@ services:
       VIOLET_CONTENT_KEY_FILE: /run/violet-secrets/content_key
       VIOLET_CONTENT_KEY_VERSION: content-v1
       VIOLET_DATABASE_URL_FILE: /run/violet-secrets/database_url
+      VIOLET_DEVICE_TOKEN_EXPIRES_AT_FILE: /run/violet-secrets/device_token_expires_at
       VIOLET_DEVICE_TOKEN_SHA256_FILE: /run/violet-secrets/device_token_sha256
       VIOLET_HOST: 0.0.0.0
       VIOLET_MODEL_API_KEY_FILE: /run/violet-secrets/deepseek_api_key
@@ -117,6 +118,7 @@ services:
       - ${VIOLET_RUNTIME_SECRETS_DIR:-/dev/shm/violet}/content_key:/run/violet-secrets/content_key:ro
       - ${VIOLET_RUNTIME_SECRETS_DIR:-/dev/shm/violet}/database_url:/run/violet-secrets/database_url:ro
       - ${VIOLET_RUNTIME_SECRETS_DIR:-/dev/shm/violet}/deepseek_api_key:/run/violet-secrets/deepseek_api_key:ro
+      - ${VIOLET_RUNTIME_SECRETS_DIR:-/dev/shm/violet}/device_token_expires_at:/run/violet-secrets/device_token_expires_at:ro
       - ${VIOLET_RUNTIME_SECRETS_DIR:-/dev/shm/violet}/device_token_sha256:/run/violet-secrets/device_token_sha256:ro
 
   otel-collector:

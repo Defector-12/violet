@@ -42,7 +42,10 @@ const modelGateway: ModelGateway =
       })
     : new DeterministicModelGateway();
 const app = buildCoreApp({
-  authenticator: new DeviceAuthenticator(config.deviceTokenHash),
+  authenticator: new DeviceAuthenticator({
+    expectedHashHex: config.deviceTokenHash,
+    expiresAt: config.deviceTokenExpiresAt,
+  }),
   chatService: new ChatService({
     generateId: randomUUID,
     ledger,

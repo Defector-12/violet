@@ -75,7 +75,10 @@ async function startCore(sealed: boolean): Promise<{
   readonly client: VioletClient;
 }> {
   const app = buildCoreApp({
-    authenticator: new DeviceAuthenticator(hashDeviceToken(deviceToken)),
+    authenticator: new DeviceAuthenticator({
+      expectedHashHex: hashDeviceToken(deviceToken),
+      expiresAt: new Date("2100-01-01T00:00:00.000Z"),
+    }),
     chatService: new ChatService({
       generateId: randomUUID,
       ledger: new InMemoryConversationLedger(),

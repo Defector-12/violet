@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { loadCoreRuntimeConfig } from "./config.js";
 
 const tokenHash = "a".repeat(64);
+const tokenExpiresAt = "2100-01-01T00:00:00.000Z";
 const temporaryDirectories: string[] = [];
 
 afterEach(() => {
@@ -17,6 +18,7 @@ afterEach(() => {
 describe("loadCoreRuntimeConfig", () => {
   it("starts sealed without database or model credentials", () => {
     const config = loadCoreRuntimeConfig({
+      VIOLET_DEVICE_TOKEN_EXPIRES_AT: tokenExpiresAt,
       VIOLET_DEVICE_TOKEN_SHA256: tokenHash,
       VIOLET_MODEL_PROVIDER: "deepseek",
     });
@@ -31,9 +33,19 @@ describe("loadCoreRuntimeConfig", () => {
     expect(() =>
       loadCoreRuntimeConfig({
         VIOLET_CONTENT_KEY_FILE: contentKeyFile,
+        VIOLET_DEVICE_TOKEN_EXPIRES_AT: tokenExpiresAt,
         VIOLET_DEVICE_TOKEN_SHA256: tokenHash,
       }),
     ).toThrow("VIOLET_DATABASE_URL");
+  });
+
+  it("rejects a non-canonical device token expiration", () => {
+    expect(() =>
+      loadCoreRuntimeConfig({
+        VIOLET_DEVICE_TOKEN_EXPIRES_AT: "2100-01-01",
+        VIOLET_DEVICE_TOKEN_SHA256: tokenHash,
+      }),
+    ).toThrow("ISO 8601 UTC timestamp");
   });
 
   it("loads DeepSeek only after unsealing", () => {
@@ -42,6 +54,7 @@ describe("loadCoreRuntimeConfig", () => {
     const config = loadCoreRuntimeConfig({
       VIOLET_CONTENT_KEY_FILE: contentKeyFile,
       VIOLET_DATABASE_URL: "postgresql://violet:test@localhost/violet",
+      VIOLET_DEVICE_TOKEN_EXPIRES_AT: tokenExpiresAt,
       VIOLET_DEVICE_TOKEN_SHA256: tokenHash,
       VIOLET_MODEL_API_KEY_FILE: modelKeyFile,
       VIOLET_MODEL_PROVIDER: "deepseek",

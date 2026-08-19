@@ -11,6 +11,7 @@ const generated = {
   VIOLET_CONTENT_KEY: randomBytes(32).toString("base64"),
   VIOLET_DATABASE_PASSWORD: randomBytes(32).toString("base64url"),
   VIOLET_DEVICE_TOKEN: randomBytes(32).toString("base64url"),
+  VIOLET_DEVICE_TOKEN_EXPIRES_AT: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString(),
   VIOLET_GRAFANA_ADMIN_PASSWORD: randomBytes(24).toString("base64url"),
 };
 const changed = [];

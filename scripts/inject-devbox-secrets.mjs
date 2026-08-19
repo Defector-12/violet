@@ -18,6 +18,7 @@ const secrets = {
   content_key: required(env, "VIOLET_CONTENT_KEY"),
   database_url: `postgresql://violet:${encodeURIComponent(databasePassword)}@postgres:5432/violet`,
   deepseek_api_key: required(env, "DEEPSEEK_API_KEY"),
+  device_token_expires_at: required(env, "VIOLET_DEVICE_TOKEN_EXPIRES_AT"),
   device_token_sha256: createHash("sha256")
     .update(required(env, "VIOLET_DEVICE_TOKEN"), "utf8")
     .digest("hex"),
@@ -76,7 +77,7 @@ function writeRemoteSecret(targetHost, name, value) {
         "-o",
         `UserKnownHostsFile=${knownHostsFile}`,
         "-o",
-        "StrictHostKeyChecking=no",
+        "StrictHostKeyChecking=yes",
       );
     }
     sshArguments.push(

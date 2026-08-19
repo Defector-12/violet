@@ -4,6 +4,7 @@ export interface CoreRuntimeConfig {
   readonly contentKey: Buffer | null;
   readonly contentKeyVersion: string;
   readonly databaseUrl: string | undefined;
+  readonly deviceTokenExpiresAt: Date;
   readonly deviceTokenHash: string;
   readonly host: string;
   readonly model:
@@ -25,6 +26,14 @@ export function loadCoreRuntimeConfig(env: NodeJS.ProcessEnv): CoreRuntimeConfig
   const deviceTokenHash =
     env["VIOLET_DEVICE_TOKEN_SHA256"]?.trim() ??
     readSecretFile(required(env, "VIOLET_DEVICE_TOKEN_SHA256_FILE"), "device token hash");
+  const deviceTokenExpiresAt = parseTimestamp(
+    env["VIOLET_DEVICE_TOKEN_EXPIRES_AT"]?.trim() ??
+      readSecretFile(
+        required(env, "VIOLET_DEVICE_TOKEN_EXPIRES_AT_FILE"),
+        "device token expiration",
+      ),
+    "device token expiration",
+  );
   const contentKeyFile = env["VIOLET_CONTENT_KEY_FILE"];
   const contentKey = contentKeyFile ? loadContentKeyFile(contentKeyFile) : null;
   const databaseUrl =
@@ -39,6 +48,7 @@ export function loadCoreRuntimeConfig(env: NodeJS.ProcessEnv): CoreRuntimeConfig
     contentKey,
     contentKeyVersion: env["VIOLET_CONTENT_KEY_VERSION"] ?? "content-v1",
     databaseUrl,
+    deviceTokenExpiresAt,
     deviceTokenHash,
     host: env["VIOLET_HOST"] ?? "127.0.0.1",
     model,
@@ -107,4 +117,12 @@ function readSecretFile(path: string, label: string): string {
 
 function readOptionalSecretFile(path: string | undefined): string | undefined {
   return path ? readSecretFile(path, "database URL") : undefined;
+}
+
+function parseTimestamp(value: string, label: string): Date {
+  const timestamp = new Date(value);
+  if (Number.isNaN(timestamp.valueOf()) || timestamp.toISOString() !== value) {
+    throw new Error(`${label} must be an ISO 8601 UTC timestamp`);
+  }
+  return timestamp;
 }
