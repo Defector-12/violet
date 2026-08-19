@@ -77,7 +77,7 @@ services:
     build:
       context: ../..
       dockerfile: services/core/Dockerfile
-    restart: on-failure:5
+    restart: "no"
     environment:
       DEEPSEEK_BASE_URL: https://api.deepseek.com
       DEEPSEEK_MODEL: deepseek-v4-flash

@@ -30,6 +30,30 @@ run_compose() {
   fi
 }
 
+run_docker() {
+  if [ "$use_sudo" = true ]; then
+    sudo -n docker "$@"
+  else
+    docker "$@"
+  fi
+}
+
+wait_until_healthy() {
+  service=$1
+  container_id=$(run_compose --profile sealed ps -q "$service")
+  if [ -z "$container_id" ]; then
+    printf 'Container for %s was not created\n' "$service" >&2
+    exit 1
+  fi
+  for attempt in $(seq 1 30); do
+    status=$(run_docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$container_id")
+    [ "$status" = healthy ] && return
+    sleep 2
+  done
+  printf '%s did not become healthy\n' "$service" >&2
+  exit 1
+}
+
 mode=${1:-auto}
 if [ "$mode" = auto ]; then
   if
@@ -45,8 +69,10 @@ fi
 
 case "$mode" in
   ready)
-    run_compose --profile sealed stop core-sealed >/dev/null 2>&1 || true
-    run_compose --profile sealed create core-sealed
+    run_compose stop core >/dev/null 2>&1 || true
+    run_compose --profile sealed up -d --no-deps core-sealed
+    wait_until_healthy core-sealed
+    run_compose --profile sealed stop core-sealed
     run_compose up -d core
     ;;
   sealed)
