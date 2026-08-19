@@ -4,6 +4,7 @@ set -eu
 compose_file=${VIOLET_COMPOSE_FILE:-infra/compose/compose.yaml}
 data_dir=${VIOLET_DATA_DIR:-/data00/violet}
 runtime_secrets_dir=${VIOLET_RUNTIME_SECRETS_DIR:-/dev/shm/violet}
+version=${VIOLET_VERSION:-0.1.0-dev}
 
 if docker info >/dev/null 2>&1; then
   use_sudo=false
@@ -19,10 +20,12 @@ run_compose() {
     sudo -n env \
       VIOLET_DATA_DIR="$data_dir" \
       VIOLET_RUNTIME_SECRETS_DIR="$runtime_secrets_dir" \
+      VIOLET_VERSION="$version" \
       docker compose -f "$compose_file" "$@"
   else
     VIOLET_DATA_DIR="$data_dir" \
     VIOLET_RUNTIME_SECRETS_DIR="$runtime_secrets_dir" \
+    VIOLET_VERSION="$version" \
       docker compose -f "$compose_file" "$@"
   fi
 }
