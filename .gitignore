@@ -1,0 +1,15 @@
+.env
+.env.*
+!.env.example
+
+node_modules/
+dist/
+coverage/
+.DS_Store
+.swiftpm/
+.build/
+.swift-home/
+.swift-tmp/
+
+*.log
+*.tsbuildinfo

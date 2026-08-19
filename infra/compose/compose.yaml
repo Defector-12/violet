@@ -1,0 +1,115 @@
+name: violet
+
+services:
+  postgres:
+    image: pgvector/pgvector:0.8.1-pg17-bookworm
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: violet
+      POSTGRES_PASSWORD_FILE: /run/violet-secrets/postgres_password
+      POSTGRES_USER: violet
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U violet -d violet"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks:
+      - core
+    volumes:
+      - ${VIOLET_DATA_DIR:-/data00/violet}/postgres:/var/lib/postgresql/data
+      - ${VIOLET_RUNTIME_SECRETS_DIR:-/dev/shm/violet}/postgres_password:/run/violet-secrets/postgres_password:ro
+
+  migrate:
+    build:
+      context: ../..
+      dockerfile: services/core/Dockerfile
+    command: ["node", "dist/storage/migrate.js"]
+    restart: "no"
+    environment:
+      VIOLET_DATABASE_URL_FILE: /run/violet-secrets/database_url
+      VIOLET_MIGRATIONS_DIR: /opt/violet-core/migrations
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - core
+    volumes:
+      - ${VIOLET_RUNTIME_SECRETS_DIR:-/dev/shm/violet}/database_url:/run/violet-secrets/database_url:ro
+
+  core:
+    build:
+      context: ../..
+      dockerfile: services/core/Dockerfile
+    restart: unless-stopped
+    environment:
+      DEEPSEEK_BASE_URL: https://api.deepseek.com
+      DEEPSEEK_MODEL: deepseek-v4-flash
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      OTEL_SERVICE_NAME: violet-core
+      VIOLET_CONTENT_KEY_FILE: /run/violet-secrets/content_key
+      VIOLET_CONTENT_KEY_VERSION: content-v1
+      VIOLET_DATABASE_URL_FILE: /run/violet-secrets/database_url
+      VIOLET_DEVICE_TOKEN_SHA256_FILE: /run/violet-secrets/device_token_sha256
+      VIOLET_HOST: 0.0.0.0
+      VIOLET_MODEL_API_KEY_FILE: /run/violet-secrets/deepseek_api_key
+      VIOLET_MODEL_PROVIDER: deepseek
+      VIOLET_PORT: 4310
+      VIOLET_VERSION: ${VIOLET_VERSION:-0.1.0-dev}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      otel-collector:
+        condition: service_started
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:4310/v1/health/live').then(r=>{if(!r.ok)process.exit(1)})",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+    networks:
+      - core
+      - egress
+      - observability
+    ports:
+      - 127.0.0.1:${VIOLET_CORE_PORT:-4310}:4310
+    volumes:
+      - ${VIOLET_RUNTIME_SECRETS_DIR:-/dev/shm/violet}/content_key:/run/violet-secrets/content_key:ro
+      - ${VIOLET_RUNTIME_SECRETS_DIR:-/dev/shm/violet}/database_url:/run/violet-secrets/database_url:ro
+      - ${VIOLET_RUNTIME_SECRETS_DIR:-/dev/shm/violet}/deepseek_api_key:/run/violet-secrets/deepseek_api_key:ro
+      - ${VIOLET_RUNTIME_SECRETS_DIR:-/dev/shm/violet}/device_token_sha256:/run/violet-secrets/device_token_sha256:ro
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.158.0
+    restart: unless-stopped
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    networks:
+      - observability
+    volumes:
+      - ../observability/otel-collector.yaml:/etc/otelcol-contrib/config.yaml:ro
+
+  lgtm:
+    image: grafana/otel-lgtm:0.30.1
+    restart: unless-stopped
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_SECURITY_ADMIN_PASSWORD__FILE: /run/violet-secrets/grafana_admin_password
+      GF_SECURITY_ADMIN_USER: violet-admin
+    networks:
+      - observability
+    ports:
+      - 127.0.0.1:${VIOLET_GRAFANA_PORT:-3300}:3000
+    volumes:
+      - ${VIOLET_DATA_DIR:-/data00/violet}/lgtm:/data
+      - ${VIOLET_RUNTIME_SECRETS_DIR:-/dev/shm/violet}/grafana_admin_password:/run/violet-secrets/grafana_admin_password:ro
+
+networks:
+  core:
+    internal: true
+  egress:
+  observability:
+    internal: true

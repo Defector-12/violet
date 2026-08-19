@@ -1,0 +1,33 @@
+{
+  "name": "@violet/protocol",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./openapi": "./openapi/v1.yaml",
+    "./schemas/*": "./schemas/*"
+  },
+  "files": [
+    "dist",
+    "openapi",
+    "schemas"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "clean": "rm -rf dist tsconfig.tsbuildinfo",
+    "generate": "openapi-typescript openapi/v1.yaml -o src/generated/api.ts && REDOCLY_TELEMETRY=off redocly bundle openapi/v1.yaml --output ../../apps/macos/Sources/VioletProtocolClient/openapi.yaml",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "ajv": "8.20.0",
+    "ajv-formats": "3.0.1"
+  },
+  "devDependencies": {
+    "@redocly/cli": "2.46.1",
+    "openapi-typescript": "7.13.0"
+  }
+}

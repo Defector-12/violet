@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://violet.local/schemas/v1/health.schema.json",
+  "title": "Health",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["service", "status", "time", "version"],
+  "properties": {
+    "service": {
+      "const": "violet-core"
+    },
+    "status": {
+      "const": "ok"
+    },
+    "time": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "version": {
+      "type": "string",
+      "minLength": 1
+    }
+  }
+}

@@ -97,11 +97,11 @@ Violet/
   - Policy
 - 建立 PostgreSQL 迁移、事件表、身份表和最小对话存储。
 - 对话、事件和身份内容在写入 PostgreSQL 前使用应用层信封加密。
-- 建立模型供应商 Port；供应商确定前使用永久保留的确定性测试适配器验证协议和集成，真实对话交付前接入用户选择并授权的一个文字模型适配器。供应商不可用时明确失败，不自动切换。
+- 建立模型供应商 Port；永久保留确定性测试适配器，并接入用户选择和授权的 DeepSeek `deepseek-v4-flash` 文字模型适配器。供应商不可用时明确失败，不自动切换。
 - 建立 Docker Compose：Core、PostgreSQL、OpenTelemetry Collector 和 Grafana LGTM。
 - 在 Devbox 部署，同一份 Compose 可在空白 Linux 环境启动。
 - Core 监听容器内部接口，但 Devbox 宿主机只在 `127.0.0.1` 发布端口，Mac 只通过 SSH 隧道访问；PostgreSQL 只存在于容器内部网络。
-- Mac 生成设备令牌并保存到 Keychain；Core 只保存令牌哈希。
+- 开发期由 Mac 生成设备令牌并保存到权限为 `0600`、被 Git 强制忽略的本地 `.env`；Core 只获得令牌哈希。原生 Mac App 建立后迁移到 Keychain。
 - 内容密钥、模型 API Key 和 TOS 凭证由 Mac 注入 Devbox 临时内存文件系统，只读挂载给对应进程，不写入 Git、镜像、数据库、日志或备份。
 - Devbox 重启后 Core 进入 `sealed` 状态，重新获得 Mac 密钥注入前不得读取或处理个人内容。
 - 使用火山引擎 TOS 私有普通桶保存信封加密后的 PostgreSQL 备份；同时在 Mac 保留一份加密备份。
@@ -386,10 +386,10 @@ CI 必须验证协议兼容、TypeScript、Swift、数据库迁移、容器构�
 
 ### 4.5 第一阶段依赖与授权
 
-- 内部集成远端和 GitHub 可迁移镜像已经就绪。协议、目录、领域边界和确定性集成测试可以先行；完成 1A 真实对话闭环前必须提供一个选择并授权的文字模型 API，1C 开始前再提供多模态模型。
+- 内部集成远端、GitHub 可迁移镜像和 DeepSeek `deepseek-v4-flash` 文字模型 API 已经就绪；1C 开始前再提供多模态模型。
 - Devbox SSH、Docker 和必要网络能力。
 - PostgreSQL。
-- 火山引擎 TOS 账号、私有普通桶、地域、Endpoint 和最小权限 IAM 子账号在 1A 备份切片开始前提供；创建桶和产生费用前单独确认。
+- 个人火山引擎 TOS 私有普通桶、北京地域 Endpoint、版本控制、SSE-TOS、生命周期和最小权限 IAM 用户已经建立；首次真实备份测试前轮换已经暴露的 TOS Secret。
 - macOS 麦克风、屏幕录制和 Accessibility 权限。
 - Mac 本地签名能力；正式分发前再决定 Apple Developer 账号。
 - 正式发布、付费资源、外部身份和高风险权限仍按委托契约单独审批。
