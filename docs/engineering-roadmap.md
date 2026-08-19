@@ -82,6 +82,10 @@ Violet/
 
 通过 Mac 上的 TypeScript 开发客户端与 Devbox 上的 Violet 进行连续文字对话；服务重启后身份和对话事件仍然存在。该版本已经是可使用的云端 Violet 种子，不依赖后续 Mac UI 才能工作。
 
+**当前证据**
+
+截至 2026-08-19，代码、Devbox 部署、20 轮真实 DeepSeek 对话、40 条加密事件恢复、Core/PostgreSQL 重启、缺钥 sealed 回退、Token 到期拒绝、LGTM 白名单、Mac 加密备份和无网络空库恢复均已通过。TOS 真实上传仍等待旧 Secret 轮换；整台共享 Devbox 的物理重启等待用户确认对同机无关服务的短时中断。
+
 **建设内容**
 
 - Git 仓库已在 Mac 初始化，内部 `bits` 与 GitHub `origin` 保存相同的 `main` 提交；Devbox 在 `bits` 上使用短分支和 MR 进入受保护主分支，合并后的确定提交同步到 GitHub 可迁移镜像，Mac 与 Devbox 使用独立克隆。
@@ -101,10 +105,10 @@ Violet/
 - 建立 Docker Compose：Core、PostgreSQL、OpenTelemetry Collector 和 Grafana LGTM。
 - 在 Devbox 部署，同一份 Compose 可在空白 Linux 环境启动。
 - Core 监听容器内部接口，但 Devbox 宿主机只在 `127.0.0.1` 发布端口，Mac 只通过 SSH 隧道访问；PostgreSQL 只存在于容器内部网络。
-- 开发期由 Mac 生成设备令牌并保存到权限为 `0600`、被 Git 强制忽略的本地 `.env`；Core 只获得令牌哈希。原生 Mac App 建立后迁移到 Keychain。
+- 开发期由 Mac 生成设备令牌并保存到权限为 `0600`、被 Git 强制忽略的本地 `.env`；Core 只获得令牌哈希和到期时间，认证时必须执行到期检查。原生 Mac App 建立后迁移到 Keychain。
 - 内容密钥、模型 API Key 和 TOS 凭证由 Mac 注入 Devbox 临时内存文件系统，只读挂载给对应进程，不写入 Git、镜像、数据库、日志或备份。
-- Devbox 重启后 Core 进入 `sealed` 状态，重新获得 Mac 密钥注入前不得读取或处理个人内容。
-- 使用火山引擎 TOS 私有普通桶保存信封加密后的 PostgreSQL 备份；同时在 Mac 保留一份加密备份。
+- ready Core 只从 `/dev/shm` 读取运行秘密；独立 sealed 回退 Core 只读取不可逆 Token 哈希和到期时间。Devbox 重启后重新获得 Mac 密钥注入前不得读取或处理个人内容。
+- 使用 Mac 私钥对应的 X25519 公钥、HKDF-SHA256 和 AES-256-GCM 流式加密 PostgreSQL custom dump，再保存到火山引擎 TOS 私有普通桶；同时在 Mac 保留一份加密备份。
 - 建立结构化日志、请求 ID、事件 ID、健康检查和错误分类。OpenTelemetry Collector 通过字段白名单和脱敏后写入 LGTM。
 - 建立用户运维视图和 Violet 只读诊断 Port；后者只返回与当前目标相关的脱敏运行证据。
 

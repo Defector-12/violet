@@ -4,11 +4,11 @@
 
 ## 1. 当前状态
 
-- Release 1A 已进入实现。当前特性分支已经建立 pnpm workspace、JSON Schema/OpenAPI 协议、TypeScript SDK、Swift 生成客户端边界、模块化 Core、`dev-cli`、PostgreSQL 迁移、应用层信封加密、DeepSeek Adapter、Docker Compose 和可观测配置。
+- Release 1A 已进入交付收尾。当前特性分支已经建立并验证 pnpm workspace、JSON Schema/OpenAPI 协议、TypeScript SDK、Swift 生成客户端边界、模块化 Core、`dev-cli`、PostgreSQL 迁移、应用层信封加密、DeepSeek Adapter、Docker Compose、可观测配置和加密备份恢复。
 - 已完成现有阅读工具 Sprinkle 的只读评估。Sprinkle 是 WXT、React、TypeScript 构建的浏览器扩展，可复用其页面提取、文字与图片选择、区域框选和浏览器内交互能力，但不能作为 Violet 本体。
 - 当前可使用一台公司 Devbox 作为临时云环境：32 核 CPU、128G 内存、120G 系统盘、500G 数据盘、veLinux 1.0。它足以支撑第一阶段的后端、数据库、Worker、沙箱和测试。
 - Violet 是单用户、云端智能优先、Mac 先行的绿地项目。
-- 本地 `pnpm check` 已覆盖格式、类型、构建和单元测试；Devbox 部署、真实模型纵向验证、TOS 备份和恢复验收仍在进行。
+- 本地 `pnpm check` 已覆盖格式、类型、构建和 27 个单元测试；Devbox 部署、真实模型 20 轮纵向验证、加密备份和空库恢复已经通过，TOS 真实上传仍等待旧凭证轮换。
 
 ## 2. 架构目标
 
@@ -350,12 +350,12 @@ Devbox
 ```
 
 - Core 可监听容器内部接口，但 Docker 只在 Devbox 宿主机 `127.0.0.1` 发布端口；Mac 只通过 SSH 隧道访问，不向公网或办公网直接暴露 Violet 端口。
-- 开发期由 Mac 生成设备令牌并保存在权限为 `0600` 且被 Git 忽略的本地 `.env`；Core 仅获得令牌哈希。原生 Mac App 建立后迁移到 Keychain。
+- 开发期由 Mac 生成设备令牌并保存在权限为 `0600` 且被 Git 忽略的本地 `.env`；Core 仅获得令牌哈希和到期时间，并在每次认证时执行到期检查。原生 Mac App 建立后迁移到 Keychain。
 - 对话、事件和记忆在写入 PostgreSQL 前进行应用层加密。
 - 内容密钥和模型 API Key 由 Mac 注入 Devbox 的临时内存文件系统，以只读方式挂载给 Core，不进入 Git、数据库、日志、镜像或备份。
-- Devbox 重启后进入 `sealed` 状态，只有 Mac 重新注入密钥后才能恢复处理个人内容。
+- ready Core 使用 `/dev/shm` 中的运行秘密；独立的 sealed 回退 Core 只读取持久化的 Token 哈希和到期时间。运行秘密消失或 Devbox 重启后只有 sealed 回退容器可启动并拒绝内容访问，Mac 重新注入后再切换回 ready Core。
 - 模型供应商不可用时保留任务状态并明确失败，不自动切换到未经用户授权的供应商。
-- PostgreSQL 备份使用 Mac 持有私钥对应的恢复公钥加密后上传 TOS，并在 Mac 保留一份加密备份。
+- PostgreSQL custom dump 使用 Mac 持有 X25519 私钥对应的恢复公钥、HKDF-SHA256 和 AES-256-GCM 流式加密后上传 TOS，并在 Mac 保留一份加密备份；Devbox 不获得恢复私钥。
 - Git 提交历史是唯一代码事实源；内部 `bits` 承担 Devbox 开发、短分支和受保护 `main` 集成，GitHub `origin` 保存同提交的外部可迁移镜像。Mac 与 Devbox 使用独立工作副本，Devbox 只部署已同步到两个远端的确定 commit 或镜像，不从未提交工作区部署。
 
 ### 14.2 TOS 边界
@@ -431,7 +431,7 @@ Sprinkle 不扩建为 Violet 本体，而演化为浏览器结构化感官：
 - 模型自评与真实能力之间的偏差，需要通过独立测试和证据门禁控制。
 - 第一版成本、延迟、离线降级和服务故障恢复策略尚需设计。
 - Mac 到 Devbox 的第一阶段连接锁定为 SSH 隧道；非公司网络下是否可达仍需验证。
-- 内部集成远端、GitHub 可迁移镜像、DeepSeek 模型配置和个人火山引擎 TOS 桶已经就绪。当前 TOS Secret 曾被编辑器上下文暴露，首次真实 TOS 测试前必须轮换。
+- 内部集成远端、GitHub 可迁移镜像、DeepSeek 模型配置和个人火山引擎 TOS 桶已经就绪。当前 TOS Secret 曾被编辑器上下文暴露，尚未用于真实请求，首次真实 TOS 测试前必须轮换。
 
 ## 19. 下一步
 
