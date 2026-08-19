@@ -6,6 +6,7 @@ node_modules/
 dist/
 coverage/
 .DS_Store
+.local-backups/
 .swiftpm/
 .build/
 .swift-home/

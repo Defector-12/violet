@@ -11,4 +11,13 @@ if [ -z "${VIOLET_BACKUP_PRIVATE_KEY:-}" ]; then
   exit 64
 fi
 
-exec pnpm --filter @violet/backup-service exec node dist/main.js decrypt "$1" "$2"
+case "$1" in
+  /*) input_path=$1 ;;
+  *) input_path=$PWD/$1 ;;
+esac
+case "$2" in
+  /*) output_path=$2 ;;
+  *) output_path=$PWD/$2 ;;
+esac
+
+exec pnpm --filter @violet/backup-service exec node dist/main.js decrypt "$input_path" "$output_path"
