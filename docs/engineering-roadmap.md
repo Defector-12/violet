@@ -84,7 +84,7 @@ Violet/
 
 **当前证据**
 
-截至 2026-08-19，代码、Devbox 部署、20 轮真实 DeepSeek 对话、40 条加密事件恢复、Core/PostgreSQL 重启、缺钥 sealed 回退、两次整台 Devbox 物理重启、Token 到期拒绝、LGTM 白名单、Mac 加密备份和无网络空库恢复均已通过。TOS 真实上传仍等待再次轮换被 IDE 上下文暴露且从未使用的新 Secret。
+截至 2026-08-19，代码、Devbox 部署、20 轮真实 DeepSeek 对话、40 条加密事件恢复、Core/PostgreSQL 重启、缺钥 sealed 回退、两次整台 Devbox 物理重启、Token 到期拒绝、LGTM 白名单、Mac 加密备份、TOS 最小权限与版本清理、真实上传下载和无网络空库恢复均已通过。
 
 **建设内容**
 
@@ -393,7 +393,7 @@ CI 必须验证协议兼容、TypeScript、Swift、数据库迁移、容器构�
 - 内部集成远端、GitHub 可迁移镜像和 DeepSeek `deepseek-v4-flash` 文字模型 API 已经就绪；1C 开始前再提供多模态模型。
 - Devbox SSH、Docker 和必要网络能力。
 - PostgreSQL。
-- 个人火山引擎 TOS 私有普通桶、北京地域 Endpoint、版本控制、SSE-TOS、生命周期和最小权限 IAM 用户已经建立；首次真实备份测试前轮换已经暴露的 TOS Secret。
+- 个人火山引擎 TOS 私有普通桶、北京地域 Endpoint、版本控制、SSE-TOS、生命周期和最小权限 IAM 用户已经建立；暴露凭证已轮换，真实备份与恢复验证已通过。
 - macOS 麦克风、屏幕录制和 Accessibility 权限。
 - Mac 本地签名能力；正式分发前再决定 Apple Developer 账号。
 - 正式发布、付费资源、外部身份和高风险权限仍按委托契约单独审批。
