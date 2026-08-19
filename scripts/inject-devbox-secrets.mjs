@@ -10,18 +10,24 @@ const includeTos = process.argv.slice(3).includes("--include-tos");
 if (process.argv.slice(3).some((argument) => argument !== "--include-tos")) {
   throw new Error("Unknown argument");
 }
+const dataDirectory = process.env.VIOLET_DEVBOX_DATA_DIR ?? "/data00/violet";
+if (!/^\/[A-Za-z0-9._/-]+$/.test(dataDirectory) || dataDirectory.split("/").includes("..")) {
+  throw new Error("VIOLET_DEVBOX_DATA_DIR must be an absolute path without parent traversal");
+}
 
 const env = parseEnv(await readFile(".env", "utf8"));
 const databasePassword = required(env, "VIOLET_DATABASE_PASSWORD");
+const configuration = {
+  device_token_expires_at: required(env, "VIOLET_DEVICE_TOKEN_EXPIRES_AT"),
+  device_token_sha256: createHash("sha256")
+    .update(required(env, "VIOLET_DEVICE_TOKEN"), "utf8")
+    .digest("hex"),
+};
 const secrets = {
   backup_public_key: required(env, "VIOLET_BACKUP_PUBLIC_KEY"),
   content_key: required(env, "VIOLET_CONTENT_KEY"),
   database_url: `postgresql://violet:${encodeURIComponent(databasePassword)}@postgres:5432/violet`,
   deepseek_api_key: required(env, "DEEPSEEK_API_KEY"),
-  device_token_expires_at: required(env, "VIOLET_DEVICE_TOKEN_EXPIRES_AT"),
-  device_token_sha256: createHash("sha256")
-    .update(required(env, "VIOLET_DEVICE_TOKEN"), "utf8")
-    .digest("hex"),
   grafana_admin_password: required(env, "VIOLET_GRAFANA_ADMIN_PASSWORD"),
   postgres_password: databasePassword,
   ...(includeTos
@@ -32,12 +38,15 @@ const secrets = {
     : {}),
 };
 
+for (const [name, value] of Object.entries(configuration)) {
+  await writeRemoteFile(target, `${dataDirectory}/config`, name, value);
+}
 for (const [name, value] of Object.entries(secrets)) {
-  await writeRemoteSecret(target, name, value);
+  await writeRemoteFile(target, "/dev/shm/violet", name, value);
 }
 
 process.stdout.write(
-  `Injected ${Object.keys(secrets).join(", ")} into the Devbox memory filesystem.\n`,
+  `Injected ${Object.keys(configuration).join(", ")} into persistent non-secret configuration and ${Object.keys(secrets).join(", ")} into the Devbox memory filesystem.\n`,
 );
 
 function parseEnv(content) {
@@ -64,7 +73,7 @@ function required(values, name) {
   return value;
 }
 
-function writeRemoteSecret(targetHost, name, value) {
+function writeRemoteFile(targetHost, directory, name, value) {
   if (!/^[a-z0-9_]+$/.test(name)) {
     throw new Error("invalid remote secret name");
   }
@@ -82,7 +91,7 @@ function writeRemoteSecret(targetHost, name, value) {
     }
     sshArguments.push(
       targetHost,
-      `set -eu; umask 077; directory=/dev/shm/violet; mkdir -p "$directory"; chmod 700 "$directory"; temporary=$(mktemp "$directory/${name}.XXXXXX"); trap 'rm -f "$temporary"' EXIT; cat > "$temporary"; chmod 0444 "$temporary"; mv -f "$temporary" "$directory/${name}"; trap - EXIT`,
+      `set -eu; umask 077; directory=${shellQuote(directory)}; mkdir -p "$directory"; chmod 700 "$directory"; temporary=$(mktemp "$directory/${name}.XXXXXX"); trap 'rm -f "$temporary"' EXIT; cat > "$temporary"; chmod 0444 "$temporary"; mv -f "$temporary" "$directory/${name}"; trap - EXIT`,
     );
     const child = spawn("ssh", sshArguments, {
       stdio: ["pipe", "inherit", "inherit"],
@@ -97,4 +106,8 @@ function writeRemoteSecret(targetHost, name, value) {
       }
     });
   });
+}
+
+function shellQuote(value) {
+  return `'${value.replaceAll("'", "'\\''")}'`;
 }
