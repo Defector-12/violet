@@ -84,7 +84,7 @@ Violet/
 
 **当前证据**
 
-截至 2026-08-19，代码、Devbox 部署、20 轮真实 DeepSeek 对话、40 条加密事件恢复、Core/PostgreSQL 重启、缺钥 sealed 回退、Token 到期拒绝、LGTM 白名单、Mac 加密备份和无网络空库恢复均已通过。TOS 真实上传仍等待旧 Secret 轮换；整台共享 Devbox 的物理重启等待用户确认对同机无关服务的短时中断。
+截至 2026-08-19，代码、Devbox 部署、20 轮真实 DeepSeek 对话、40 条加密事件恢复、Core/PostgreSQL 重启、缺钥 sealed 回退、两次整台 Devbox 物理重启、Token 到期拒绝、LGTM 白名单、Mac 加密备份和无网络空库恢复均已通过。TOS 真实上传仍等待再次轮换被 IDE 上下文暴露且从未使用的新 Secret。
 
 **建设内容**
 
