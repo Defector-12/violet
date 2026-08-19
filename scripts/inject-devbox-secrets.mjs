@@ -58,16 +58,23 @@ function writeRemoteSecret(targetHost, name, value) {
   }
 
   return new Promise((resolve, reject) => {
-    const child = spawn(
-      "ssh",
-      [
-        targetHost,
-        `umask 077; mkdir -p /dev/shm/violet; chmod 700 /dev/shm/violet; cat > /dev/shm/violet/${name}; chmod 0444 /dev/shm/violet/${name}`,
-      ],
-      {
-        stdio: ["pipe", "inherit", "inherit"],
-      },
+    const sshArguments = [];
+    const knownHostsFile = process.env.VIOLET_DEVBOX_KNOWN_HOSTS_FILE;
+    if (knownHostsFile) {
+      sshArguments.push(
+        "-o",
+        `UserKnownHostsFile=${knownHostsFile}`,
+        "-o",
+        "StrictHostKeyChecking=no",
+      );
+    }
+    sshArguments.push(
+      targetHost,
+      `set -eu; umask 077; directory=/dev/shm/violet; mkdir -p "$directory"; chmod 700 "$directory"; temporary=$(mktemp "$directory/${name}.XXXXXX"); trap 'rm -f "$temporary"' EXIT; cat > "$temporary"; chmod 0444 "$temporary"; mv -f "$temporary" "$directory/${name}"; trap - EXIT`,
     );
+    const child = spawn("ssh", sshArguments, {
+      stdio: ["pipe", "inherit", "inherit"],
+    });
     child.stdin.end(value);
     child.once("error", reject);
     child.once("exit", (code) => {
