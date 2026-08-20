@@ -16,3 +16,15 @@ export type {
   ModelRequest,
   ModelStreamEvent,
 } from "./model-gateway.js";
+export type {
+  RealtimeAudioFormat,
+  RealtimeCapabilities,
+  RealtimeConversation,
+  RealtimeConversationInput,
+  RealtimeConversationOutput,
+  RealtimeConversationPort,
+  RealtimeModality,
+  RealtimeRuntimeKind,
+  RealtimeSessionConfiguration,
+  RealtimeVoiceKind,
+} from "./realtime-conversation.js";

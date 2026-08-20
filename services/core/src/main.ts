@@ -10,6 +10,7 @@ import { InMemoryConversationLedger } from "./conversation/in-memory-conversatio
 import { buildCoreApp } from "./http/app.js";
 import { DeepSeekModelGateway } from "./model/deepseek-model-gateway.js";
 import { DeterministicModelGateway } from "./model/deterministic-model-gateway.js";
+import { DeterministicRealtimeConversationPort } from "./realtime/deterministic-realtime-conversation.js";
 import { PostgresConversationLedger } from "./storage/postgres-conversation-ledger.js";
 
 const config = loadCoreRuntimeConfig(process.env);
@@ -51,6 +52,10 @@ const app = buildCoreApp({
     ledger,
     modelGateway,
   }),
+  realtimeConversationPort: new DeterministicRealtimeConversationPort({
+    generateId: randomUUID,
+  }),
+  realtimeLedger: ledger,
   sealed: !config.contentKey,
   version: config.version,
 });

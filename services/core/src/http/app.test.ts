@@ -1,11 +1,14 @@
 import { randomUUID } from "node:crypto";
+import type { RealtimeServerEvent } from "@violet/protocol";
 import { VioletClient } from "@violet/sdk";
 import { afterEach, describe, expect, it } from "vitest";
+import type { RawData, WebSocket } from "ws";
 
 import { DeviceAuthenticator, hashDeviceToken } from "../auth/device-authenticator.js";
 import { ChatService } from "../conversation/chat-service.js";
 import { InMemoryConversationLedger } from "../conversation/in-memory-conversation-ledger.js";
 import { DeterministicModelGateway } from "../model/deterministic-model-gateway.js";
+import { DeterministicRealtimeConversationPort } from "../realtime/deterministic-realtime-conversation.js";
 import { buildCoreApp } from "./app.js";
 
 const deviceToken = "test-device-token-that-is-at-least-32-characters";
@@ -68,12 +71,115 @@ describe("Core HTTP API", () => {
       type: "delta",
     });
   });
+
+  it("rejects realtime upgrades without authentication or while sealed", async () => {
+    const ready = await startCore(false);
+    const sealed = await startCore(true);
+
+    await expect(ready.app.injectWS("/v1/realtime")).rejects.toThrow(
+      "Unexpected server response: 401",
+    );
+    await expect(
+      sealed.app.injectWS("/v1/realtime", {
+        headers: { authorization: `Bearer ${deviceToken}` },
+      }),
+    ).rejects.toThrow("Unexpected server response: 423");
+  });
+
+  it("runs a deterministic provider-neutral realtime session", async () => {
+    const { app } = await startCore(false);
+    const socket = await app.injectWS("/v1/realtime", {
+      headers: { authorization: `Bearer ${deviceToken}` },
+    });
+    const sessionId = randomUUID();
+    const turnId = randomUUID();
+
+    const readyEvents = receiveEvents(socket, 1);
+    socket.send(
+      JSON.stringify({
+        configuration: {
+          inputModalities: ["text"],
+          outputModalities: ["text"],
+          protocolVersion: "1",
+        },
+        eventId: randomUUID(),
+        sequence: 1,
+        sessionId,
+        type: "session.configure",
+      }),
+    );
+    await expect(readyEvents).resolves.toMatchObject([
+      {
+        capabilities: {
+          inputModalities: ["text"],
+          outputModalities: ["text"],
+          runtimeKind: "deterministic",
+        },
+        sequence: 1,
+        sessionId,
+        type: "session.ready",
+      },
+    ]);
+
+    const responseEvents = receiveEvents(socket, 3);
+    socket.send(
+      JSON.stringify({
+        eventId: randomUUID(),
+        sequence: 2,
+        sessionId,
+        text: "Hello",
+        turnId,
+        type: "input.text",
+      }),
+    );
+    const response = await responseEvents;
+
+    expect(response.map((event) => event.type)).toEqual([
+      "response.started",
+      "response.text",
+      "response.completed",
+    ]);
+    expect(response[1]).toMatchObject({
+      text: "Violet realtime test response: Hello",
+      turnId,
+      type: "response.text",
+    });
+    socket.terminate();
+  });
+
+  it("closes a realtime connection on unknown protocol events", async () => {
+    const { app } = await startCore(false);
+    const socket = await app.injectWS("/v1/realtime", {
+      headers: { authorization: `Bearer ${deviceToken}` },
+    });
+    const closed = new Promise<{ code: number; reason: string }>((resolve) => {
+      socket.once("close", (code, reason) => {
+        resolve({ code, reason: reason.toString() });
+      });
+    });
+
+    socket.send(
+      JSON.stringify({
+        eventId: randomUUID(),
+        sequence: 1,
+        sessionId: randomUUID(),
+        type: "provider.magic",
+      }),
+    );
+
+    await expect(closed).resolves.toEqual({
+      code: 1003,
+      reason: "INVALID_REALTIME_EVENT",
+    });
+  });
 });
 
 async function startCore(sealed: boolean): Promise<{
+  readonly app: ReturnType<typeof buildCoreApp>;
   readonly baseUrl: string;
   readonly client: VioletClient;
 }> {
+  const ledger = new InMemoryConversationLedger();
   const app = buildCoreApp({
     authenticator: new DeviceAuthenticator({
       expectedHashHex: hashDeviceToken(deviceToken),
@@ -81,9 +187,13 @@ async function startCore(sealed: boolean): Promise<{
     }),
     chatService: new ChatService({
       generateId: randomUUID,
-      ledger: new InMemoryConversationLedger(),
+      ledger,
       modelGateway: new DeterministicModelGateway(),
     }),
+    realtimeConversationPort: new DeterministicRealtimeConversationPort({
+      generateId: randomUUID,
+    }),
+    realtimeLedger: ledger,
     sealed,
     version: "test",
   });
@@ -91,7 +201,32 @@ async function startCore(sealed: boolean): Promise<{
   const baseUrl = await app.listen({ host: "127.0.0.1", port: 0 });
 
   return {
+    app,
     baseUrl,
     client: new VioletClient({ baseUrl, deviceToken }),
   };
+}
+
+function receiveEvents(socket: WebSocket, count: number): Promise<RealtimeServerEvent[]> {
+  return new Promise((resolve, reject) => {
+    const events: RealtimeServerEvent[] = [];
+    const onError = (error: Error) => {
+      cleanup();
+      reject(error);
+    };
+    const onMessage = (data: RawData) => {
+      events.push(JSON.parse(data.toString()) as RealtimeServerEvent);
+      if (events.length === count) {
+        cleanup();
+        resolve(events);
+      }
+    };
+    const cleanup = () => {
+      socket.off("error", onError);
+      socket.off("message", onMessage);
+    };
+
+    socket.on("error", onError);
+    socket.on("message", onMessage);
+  });
 }

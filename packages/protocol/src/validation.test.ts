@@ -1,7 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
 
-import { assertChatRequest, assertChatStreamEvent, ProtocolValidationError } from "./index.js";
+import {
+  assertChatRequest,
+  assertChatStreamEvent,
+  assertRealtimeClientEvent,
+  assertRealtimeServerEvent,
+  ProtocolValidationError,
+} from "./index.js";
 
 describe("protocol validation", () => {
   it("accepts a valid chat request", () => {
@@ -41,5 +47,67 @@ describe("protocol validation", () => {
     for (const event of events) {
       expect(() => assertChatStreamEvent(event)).not.toThrow();
     }
+  });
+
+  it("accepts provider-neutral realtime events", () => {
+    const sessionId = randomUUID();
+    const turnId = randomUUID();
+    const responseId = randomUUID();
+
+    expect(() =>
+      assertRealtimeClientEvent({
+        configuration: {
+          inputModalities: ["audio", "text"],
+          outputModalities: ["audio", "text"],
+          protocolVersion: "1",
+        },
+        eventId: randomUUID(),
+        sequence: 1,
+        sessionId,
+        type: "session.configure",
+      }),
+    ).not.toThrow();
+    expect(() =>
+      assertRealtimeClientEvent({
+        eventId: randomUUID(),
+        sequence: 2,
+        sessionId,
+        text: "Hello",
+        turnId,
+        type: "input.text",
+      }),
+    ).not.toThrow();
+    expect(() =>
+      assertRealtimeServerEvent({
+        eventId: randomUUID(),
+        responseId,
+        sequence: 1,
+        sessionId,
+        turnId,
+        type: "response.completed",
+        usage: { inputTokens: 1, outputTokens: 1 },
+      }),
+    ).not.toThrow();
+  });
+
+  it("rejects unknown realtime events and invalid sequence numbers", () => {
+    const sessionId = randomUUID();
+
+    expect(() =>
+      assertRealtimeClientEvent({
+        eventId: randomUUID(),
+        sequence: 1,
+        sessionId,
+        type: "provider.magic",
+      }),
+    ).toThrow(ProtocolValidationError);
+    expect(() =>
+      assertRealtimeClientEvent({
+        eventId: randomUUID(),
+        sequence: 0,
+        sessionId,
+        type: "session.close",
+      }),
+    ).toThrow(ProtocolValidationError);
   });
 });
