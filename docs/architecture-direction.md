@@ -471,7 +471,7 @@ Sprinkle 不扩建为 Violet 本体，而演化为浏览器结构化感官：
 - 模型自评与真实能力之间的偏差，需要通过独立测试和证据门禁控制。
 - 第一版成本、延迟、离线降级和服务故障恢复策略尚需设计。
 - Mac 到 Devbox 的第一阶段连接锁定为 SSH 隧道；非公司网络下是否可达仍需验证。
-- Devbox 运行秘密存在于 `/dev/shm/violet` 时，运行期命令必须使用项目 direct SSH 路径；实测 `bytedcli devbox ssh` 的会话清理会移除该目录，导致后续重建只能 sealed。bytedcli 仍可用于秘密注入前或 sealed 状态的只读检查。
+- Devbox 的 systemd-logind 默认 `RemoveIPC=yes`；若目标用户没有 linger，最后一个登录会话结束时会删除该用户在 `/dev/shm` 中的运行秘密，导致后续重建只能 sealed。注入脚本必须先启用并验证目标用户 linger，再写入 `/dev/shm/violet`。
 - 内部集成远端、GitHub 可迁移镜像、DeepSeek 模型配置和个人火山引擎 TOS 桶已经就绪。两次暴露的 TOS Secret 均未使用；第二次轮换后的凭证已完成真实最小权限、版本清理、加密上传下载和恢复验证。
 
 ## 19. 下一步

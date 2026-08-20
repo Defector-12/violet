@@ -38,6 +38,7 @@ const secrets = {
     : {}),
 };
 
+await ensureRemoteUserLinger(target);
 await prepareRemoteDirectory(target, `${dataDirectory}/config`, "755", false);
 await prepareRemoteDirectory(target, "/dev/shm/violet", "700", true);
 for (const [name, value] of Object.entries(configuration)) {
@@ -125,6 +126,27 @@ function prepareRemoteDirectory(targetHost, directory, directoryMode, removeChil
         resolve();
       } else {
         reject(new Error(`failed to prepare ${directory}`));
+      }
+    });
+  });
+}
+
+function ensureRemoteUserLinger(targetHost) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(
+      "ssh",
+      sshArguments(
+        targetHost,
+        'set -eu; user=$(id -un); sudo -n loginctl enable-linger "$user"; test "$(loginctl show-user "$user" -p Linger --value)" = yes',
+      ),
+      { stdio: "inherit" },
+    );
+    child.once("error", reject);
+    child.once("exit", (code) => {
+      if (code === 0) {
+        resolve();
+      } else {
+        reject(new Error("failed to enable remote user linger"));
       }
     });
   });
