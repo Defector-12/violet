@@ -149,10 +149,474 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/error.schema'
+  /v1/realtime:
+    get:
+      operationId: connectRealtimeSession
+      summary: Upgrade to a provider-neutral bidirectional realtime session.
+      security:
+        - deviceToken: []
+      responses:
+        '101':
+          description: WebSocket protocol upgrade accepted.
+          x-websocket-client-event:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            $id: https://violet.local/schemas/v1/realtime-client-event.schema.json
+            title: RealtimeClientEvent
+            oneOf:
+              - type: object
+                additionalProperties: false
+                required:
+                  - configuration
+                  - eventId
+                  - sequence
+                  - sessionId
+                  - type
+                properties:
+                  configuration:
+                    type: object
+                    additionalProperties: false
+                    required:
+                      - inputModalities
+                      - outputModalities
+                      - protocolVersion
+                    properties:
+                      inputAudio:
+                        $ref: '#/components/schemas/audioFormat'
+                      inputModalities:
+                        $ref: '#/components/schemas/modalities'
+                      language:
+                        type: string
+                        minLength: 2
+                        maxLength: 35
+                      outputAudio:
+                        $ref: '#/components/schemas/audioFormat'
+                      outputModalities:
+                        $ref: '#/components/schemas/modalities'
+                      protocolVersion:
+                        const: '1'
+                      voice:
+                        type: string
+                        minLength: 1
+                        maxLength: 128
+                  eventId:
+                    $ref: '#/components/schemas/uuid'
+                  sequence:
+                    $ref: '#/components/schemas/sequence'
+                  sessionId:
+                    $ref: '#/components/schemas/uuid'
+                  type:
+                    const: session.configure
+              - type: object
+                additionalProperties: false
+                required:
+                  - eventId
+                  - sequence
+                  - sessionId
+                  - text
+                  - turnId
+                  - type
+                properties:
+                  eventId:
+                    $ref: '#/components/schemas/uuid'
+                  sequence:
+                    $ref: '#/components/schemas/sequence'
+                  sessionId:
+                    $ref: '#/components/schemas/uuid'
+                  text:
+                    type: string
+                    minLength: 1
+                    maxLength: 65536
+                  turnId:
+                    $ref: '#/components/schemas/uuid'
+                  type:
+                    const: input.text
+              - type: object
+                additionalProperties: false
+                required:
+                  - audio
+                  - eventId
+                  - sequence
+                  - sessionId
+                  - turnId
+                  - type
+                properties:
+                  audio:
+                    type: string
+                    minLength: 4
+                    maxLength: 131072
+                    pattern: ^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$
+                  eventId:
+                    $ref: '#/components/schemas/uuid'
+                  sequence:
+                    $ref: '#/components/schemas/sequence'
+                  sessionId:
+                    $ref: '#/components/schemas/uuid'
+                  turnId:
+                    $ref: '#/components/schemas/uuid'
+                  type:
+                    const: input.audio
+              - type: object
+                additionalProperties: false
+                required:
+                  - eventId
+                  - sequence
+                  - sessionId
+                  - turnId
+                  - type
+                properties:
+                  eventId:
+                    $ref: '#/components/schemas/uuid'
+                  sequence:
+                    $ref: '#/components/schemas/sequence'
+                  sessionId:
+                    $ref: '#/components/schemas/uuid'
+                  turnId:
+                    $ref: '#/components/schemas/uuid'
+                  type:
+                    const: input.commit
+              - type: object
+                additionalProperties: false
+                required:
+                  - eventId
+                  - responseId
+                  - sequence
+                  - sessionId
+                  - type
+                properties:
+                  eventId:
+                    $ref: '#/components/schemas/uuid'
+                  responseId:
+                    $ref: '#/components/schemas/uuid'
+                  sequence:
+                    $ref: '#/components/schemas/sequence'
+                  sessionId:
+                    $ref: '#/components/schemas/uuid'
+                  type:
+                    const: response.cancel
+              - type: object
+                additionalProperties: false
+                required:
+                  - eventId
+                  - sequence
+                  - sessionId
+                  - type
+                properties:
+                  eventId:
+                    $ref: '#/components/schemas/uuid'
+                  sequence:
+                    $ref: '#/components/schemas/sequence'
+                  sessionId:
+                    $ref: '#/components/schemas/uuid'
+                  type:
+                    const: session.close
+            $defs:
+              audioFormat:
+                type: object
+                additionalProperties: false
+                required:
+                  - channels
+                  - encoding
+                  - sampleRate
+                properties:
+                  channels:
+                    const: 1
+                  encoding:
+                    const: pcm_s16le
+                  sampleRate:
+                    type: integer
+                    enum:
+                      - 16000
+                      - 24000
+                      - 48000
+              modalities:
+                type: array
+                minItems: 1
+                maxItems: 2
+                uniqueItems: true
+                items:
+                  type: string
+                  enum:
+                    - audio
+                    - text
+              sequence:
+                type: integer
+                minimum: 1
+              uuid:
+                type: string
+                format: uuid
+          x-websocket-server-event:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            $id: https://violet.local/schemas/v1/realtime-server-event.schema.json
+            title: RealtimeServerEvent
+            oneOf:
+              - type: object
+                additionalProperties: false
+                required:
+                  - capabilities
+                  - eventId
+                  - sequence
+                  - sessionId
+                  - type
+                properties:
+                  capabilities:
+                    type: object
+                    additionalProperties: false
+                    required:
+                      - inputModalities
+                      - interruption
+                      - outputModalities
+                      - runtimeKind
+                      - transcription
+                      - voiceKind
+                    properties:
+                      inputModalities:
+                        $ref: '#/components/schemas/modalities'
+                      interruption:
+                        type: boolean
+                      outputModalities:
+                        $ref: '#/components/schemas/modalities'
+                      runtimeKind:
+                        type: string
+                        enum:
+                          - deterministic
+                          - integrated
+                          - pipeline
+                      transcription:
+                        type: boolean
+                      voiceKind:
+                        type: string
+                        enum:
+                          - clone
+                          - none
+                          - parametric
+                          - preset
+                  eventId:
+                    $ref: '#/components/schemas/uuid'
+                  sequence:
+                    $ref: '#/components/schemas/sequence'
+                  sessionId:
+                    $ref: '#/components/schemas/uuid'
+                  type:
+                    const: session.ready
+              - type: object
+                additionalProperties: false
+                required:
+                  - eventId
+                  - final
+                  - sequence
+                  - sessionId
+                  - text
+                  - turnId
+                  - type
+                properties:
+                  eventId:
+                    $ref: '#/components/schemas/uuid'
+                  final:
+                    type: boolean
+                  sequence:
+                    $ref: '#/components/schemas/sequence'
+                  sessionId:
+                    $ref: '#/components/schemas/uuid'
+                  text:
+                    type: string
+                    minLength: 1
+                  turnId:
+                    $ref: '#/components/schemas/uuid'
+                  type:
+                    const: input.transcript
+              - type: object
+                additionalProperties: false
+                required:
+                  - eventId
+                  - responseId
+                  - sequence
+                  - sessionId
+                  - turnId
+                  - type
+                properties:
+                  eventId:
+                    $ref: '#/components/schemas/uuid'
+                  responseId:
+                    $ref: '#/components/schemas/uuid'
+                  sequence:
+                    $ref: '#/components/schemas/sequence'
+                  sessionId:
+                    $ref: '#/components/schemas/uuid'
+                  turnId:
+                    $ref: '#/components/schemas/uuid'
+                  type:
+                    const: response.started
+              - type: object
+                additionalProperties: false
+                required:
+                  - eventId
+                  - responseId
+                  - sequence
+                  - sessionId
+                  - text
+                  - turnId
+                  - type
+                properties:
+                  eventId:
+                    $ref: '#/components/schemas/uuid'
+                  responseId:
+                    $ref: '#/components/schemas/uuid'
+                  sequence:
+                    $ref: '#/components/schemas/sequence'
+                  sessionId:
+                    $ref: '#/components/schemas/uuid'
+                  text:
+                    type: string
+                    minLength: 1
+                  turnId:
+                    $ref: '#/components/schemas/uuid'
+                  type:
+                    const: response.text
+              - type: object
+                additionalProperties: false
+                required:
+                  - audio
+                  - eventId
+                  - responseId
+                  - sequence
+                  - sessionId
+                  - turnId
+                  - type
+                properties:
+                  audio:
+                    type: string
+                    minLength: 4
+                    maxLength: 131072
+                    pattern: ^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$
+                  eventId:
+                    $ref: '#/components/schemas/uuid'
+                  responseId:
+                    $ref: '#/components/schemas/uuid'
+                  sequence:
+                    $ref: '#/components/schemas/sequence'
+                  sessionId:
+                    $ref: '#/components/schemas/uuid'
+                  turnId:
+                    $ref: '#/components/schemas/uuid'
+                  type:
+                    const: response.audio
+              - type: object
+                additionalProperties: false
+                required:
+                  - eventId
+                  - responseId
+                  - sequence
+                  - sessionId
+                  - turnId
+                  - type
+                  - usage
+                properties:
+                  eventId:
+                    $ref: '#/components/schemas/uuid'
+                  responseId:
+                    $ref: '#/components/schemas/uuid'
+                  sequence:
+                    $ref: '#/components/schemas/sequence'
+                  sessionId:
+                    $ref: '#/components/schemas/uuid'
+                  turnId:
+                    $ref: '#/components/schemas/uuid'
+                  type:
+                    const: response.completed
+                  usage:
+                    $ref: '#/components/schemas/usage'
+              - type: object
+                additionalProperties: false
+                required:
+                  - eventId
+                  - responseId
+                  - sequence
+                  - sessionId
+                  - type
+                properties:
+                  eventId:
+                    $ref: '#/components/schemas/uuid'
+                  responseId:
+                    $ref: '#/components/schemas/uuid'
+                  sequence:
+                    $ref: '#/components/schemas/sequence'
+                  sessionId:
+                    $ref: '#/components/schemas/uuid'
+                  type:
+                    const: response.cancelled
+              - type: object
+                additionalProperties: false
+                required:
+                  - code
+                  - eventId
+                  - message
+                  - retryable
+                  - sequence
+                  - sessionId
+                  - type
+                properties:
+                  code:
+                    type: string
+                    pattern: ^[A-Z][A-Z0-9_]+$
+                  eventId:
+                    $ref: '#/components/schemas/uuid'
+                  message:
+                    type: string
+                    minLength: 1
+                  retryable:
+                    type: boolean
+                  sequence:
+                    $ref: '#/components/schemas/sequence'
+                  sessionId:
+                    $ref: '#/components/schemas/uuid'
+                  type:
+                    const: error
+            $defs:
+              modalities:
+                type: array
+                minItems: 1
+                maxItems: 2
+                uniqueItems: true
+                items:
+                  type: string
+                  enum:
+                    - audio
+                    - text
+              sequence:
+                type: integer
+                minimum: 1
+              usage:
+                type: object
+                additionalProperties: false
+                required:
+                  - inputTokens
+                  - outputTokens
+                properties:
+                  inputTokens:
+                    type: integer
+                    minimum: 0
+                  outputTokens:
+                    type: integer
+                    minimum: 0
+              uuid:
+                type: string
+                format: uuid
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '423':
+          description: Core is sealed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/error.schema'
 components:
   schemas:
     ChatStreamEvent:
       $ref: '#/components/schemas/chat-stream-event.schema'
+    RealtimeClientEvent:
+      $ref: '#/components/schemas/realtime-client-event.schema'
+    RealtimeServerEvent:
+      $ref: '#/components/schemas/realtime-server-event.schema'
     health.schema:
       $schema: https://json-schema.org/draft/2020-12/schema
       $id: https://violet.local/schemas/v1/health.schema.json
@@ -333,6 +797,496 @@ components:
               format: uuid
             type:
               const: error
+    audioFormat:
+      type: object
+      additionalProperties: false
+      required:
+        - channels
+        - encoding
+        - sampleRate
+      properties:
+        channels:
+          const: 1
+        encoding:
+          const: pcm_s16le
+        sampleRate:
+          type: integer
+          enum:
+            - 16000
+            - 24000
+            - 48000
+    modalities:
+      type: array
+      minItems: 1
+      maxItems: 2
+      uniqueItems: true
+      items:
+        type: string
+        enum:
+          - audio
+          - text
+    uuid:
+      type: string
+      format: uuid
+    sequence:
+      type: integer
+      minimum: 1
+    realtime-client-event.schema:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      $id: https://violet.local/schemas/v1/realtime-client-event.schema.json
+      title: RealtimeClientEvent
+      oneOf:
+        - type: object
+          additionalProperties: false
+          required:
+            - configuration
+            - eventId
+            - sequence
+            - sessionId
+            - type
+          properties:
+            configuration:
+              type: object
+              additionalProperties: false
+              required:
+                - inputModalities
+                - outputModalities
+                - protocolVersion
+              properties:
+                inputAudio:
+                  $ref: '#/components/schemas/audioFormat'
+                inputModalities:
+                  $ref: '#/components/schemas/modalities'
+                language:
+                  type: string
+                  minLength: 2
+                  maxLength: 35
+                outputAudio:
+                  $ref: '#/components/schemas/audioFormat'
+                outputModalities:
+                  $ref: '#/components/schemas/modalities'
+                protocolVersion:
+                  const: '1'
+                voice:
+                  type: string
+                  minLength: 1
+                  maxLength: 128
+            eventId:
+              $ref: '#/components/schemas/uuid'
+            sequence:
+              $ref: '#/components/schemas/sequence'
+            sessionId:
+              $ref: '#/components/schemas/uuid'
+            type:
+              const: session.configure
+        - type: object
+          additionalProperties: false
+          required:
+            - eventId
+            - sequence
+            - sessionId
+            - text
+            - turnId
+            - type
+          properties:
+            eventId:
+              $ref: '#/components/schemas/uuid'
+            sequence:
+              $ref: '#/components/schemas/sequence'
+            sessionId:
+              $ref: '#/components/schemas/uuid'
+            text:
+              type: string
+              minLength: 1
+              maxLength: 65536
+            turnId:
+              $ref: '#/components/schemas/uuid'
+            type:
+              const: input.text
+        - type: object
+          additionalProperties: false
+          required:
+            - audio
+            - eventId
+            - sequence
+            - sessionId
+            - turnId
+            - type
+          properties:
+            audio:
+              type: string
+              minLength: 4
+              maxLength: 131072
+              pattern: ^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$
+            eventId:
+              $ref: '#/components/schemas/uuid'
+            sequence:
+              $ref: '#/components/schemas/sequence'
+            sessionId:
+              $ref: '#/components/schemas/uuid'
+            turnId:
+              $ref: '#/components/schemas/uuid'
+            type:
+              const: input.audio
+        - type: object
+          additionalProperties: false
+          required:
+            - eventId
+            - sequence
+            - sessionId
+            - turnId
+            - type
+          properties:
+            eventId:
+              $ref: '#/components/schemas/uuid'
+            sequence:
+              $ref: '#/components/schemas/sequence'
+            sessionId:
+              $ref: '#/components/schemas/uuid'
+            turnId:
+              $ref: '#/components/schemas/uuid'
+            type:
+              const: input.commit
+        - type: object
+          additionalProperties: false
+          required:
+            - eventId
+            - responseId
+            - sequence
+            - sessionId
+            - type
+          properties:
+            eventId:
+              $ref: '#/components/schemas/uuid'
+            responseId:
+              $ref: '#/components/schemas/uuid'
+            sequence:
+              $ref: '#/components/schemas/sequence'
+            sessionId:
+              $ref: '#/components/schemas/uuid'
+            type:
+              const: response.cancel
+        - type: object
+          additionalProperties: false
+          required:
+            - eventId
+            - sequence
+            - sessionId
+            - type
+          properties:
+            eventId:
+              $ref: '#/components/schemas/uuid'
+            sequence:
+              $ref: '#/components/schemas/sequence'
+            sessionId:
+              $ref: '#/components/schemas/uuid'
+            type:
+              const: session.close
+      $defs:
+        audioFormat:
+          type: object
+          additionalProperties: false
+          required:
+            - channels
+            - encoding
+            - sampleRate
+          properties:
+            channels:
+              const: 1
+            encoding:
+              const: pcm_s16le
+            sampleRate:
+              type: integer
+              enum:
+                - 16000
+                - 24000
+                - 48000
+        modalities:
+          type: array
+          minItems: 1
+          maxItems: 2
+          uniqueItems: true
+          items:
+            type: string
+            enum:
+              - audio
+              - text
+        sequence:
+          type: integer
+          minimum: 1
+        uuid:
+          type: string
+          format: uuid
+    usage:
+      type: object
+      additionalProperties: false
+      required:
+        - inputTokens
+        - outputTokens
+      properties:
+        inputTokens:
+          type: integer
+          minimum: 0
+        outputTokens:
+          type: integer
+          minimum: 0
+    realtime-server-event.schema:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      $id: https://violet.local/schemas/v1/realtime-server-event.schema.json
+      title: RealtimeServerEvent
+      oneOf:
+        - type: object
+          additionalProperties: false
+          required:
+            - capabilities
+            - eventId
+            - sequence
+            - sessionId
+            - type
+          properties:
+            capabilities:
+              type: object
+              additionalProperties: false
+              required:
+                - inputModalities
+                - interruption
+                - outputModalities
+                - runtimeKind
+                - transcription
+                - voiceKind
+              properties:
+                inputModalities:
+                  $ref: '#/components/schemas/modalities'
+                interruption:
+                  type: boolean
+                outputModalities:
+                  $ref: '#/components/schemas/modalities'
+                runtimeKind:
+                  type: string
+                  enum:
+                    - deterministic
+                    - integrated
+                    - pipeline
+                transcription:
+                  type: boolean
+                voiceKind:
+                  type: string
+                  enum:
+                    - clone
+                    - none
+                    - parametric
+                    - preset
+            eventId:
+              $ref: '#/components/schemas/uuid'
+            sequence:
+              $ref: '#/components/schemas/sequence'
+            sessionId:
+              $ref: '#/components/schemas/uuid'
+            type:
+              const: session.ready
+        - type: object
+          additionalProperties: false
+          required:
+            - eventId
+            - final
+            - sequence
+            - sessionId
+            - text
+            - turnId
+            - type
+          properties:
+            eventId:
+              $ref: '#/components/schemas/uuid'
+            final:
+              type: boolean
+            sequence:
+              $ref: '#/components/schemas/sequence'
+            sessionId:
+              $ref: '#/components/schemas/uuid'
+            text:
+              type: string
+              minLength: 1
+            turnId:
+              $ref: '#/components/schemas/uuid'
+            type:
+              const: input.transcript
+        - type: object
+          additionalProperties: false
+          required:
+            - eventId
+            - responseId
+            - sequence
+            - sessionId
+            - turnId
+            - type
+          properties:
+            eventId:
+              $ref: '#/components/schemas/uuid'
+            responseId:
+              $ref: '#/components/schemas/uuid'
+            sequence:
+              $ref: '#/components/schemas/sequence'
+            sessionId:
+              $ref: '#/components/schemas/uuid'
+            turnId:
+              $ref: '#/components/schemas/uuid'
+            type:
+              const: response.started
+        - type: object
+          additionalProperties: false
+          required:
+            - eventId
+            - responseId
+            - sequence
+            - sessionId
+            - text
+            - turnId
+            - type
+          properties:
+            eventId:
+              $ref: '#/components/schemas/uuid'
+            responseId:
+              $ref: '#/components/schemas/uuid'
+            sequence:
+              $ref: '#/components/schemas/sequence'
+            sessionId:
+              $ref: '#/components/schemas/uuid'
+            text:
+              type: string
+              minLength: 1
+            turnId:
+              $ref: '#/components/schemas/uuid'
+            type:
+              const: response.text
+        - type: object
+          additionalProperties: false
+          required:
+            - audio
+            - eventId
+            - responseId
+            - sequence
+            - sessionId
+            - turnId
+            - type
+          properties:
+            audio:
+              type: string
+              minLength: 4
+              maxLength: 131072
+              pattern: ^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$
+            eventId:
+              $ref: '#/components/schemas/uuid'
+            responseId:
+              $ref: '#/components/schemas/uuid'
+            sequence:
+              $ref: '#/components/schemas/sequence'
+            sessionId:
+              $ref: '#/components/schemas/uuid'
+            turnId:
+              $ref: '#/components/schemas/uuid'
+            type:
+              const: response.audio
+        - type: object
+          additionalProperties: false
+          required:
+            - eventId
+            - responseId
+            - sequence
+            - sessionId
+            - turnId
+            - type
+            - usage
+          properties:
+            eventId:
+              $ref: '#/components/schemas/uuid'
+            responseId:
+              $ref: '#/components/schemas/uuid'
+            sequence:
+              $ref: '#/components/schemas/sequence'
+            sessionId:
+              $ref: '#/components/schemas/uuid'
+            turnId:
+              $ref: '#/components/schemas/uuid'
+            type:
+              const: response.completed
+            usage:
+              $ref: '#/components/schemas/usage'
+        - type: object
+          additionalProperties: false
+          required:
+            - eventId
+            - responseId
+            - sequence
+            - sessionId
+            - type
+          properties:
+            eventId:
+              $ref: '#/components/schemas/uuid'
+            responseId:
+              $ref: '#/components/schemas/uuid'
+            sequence:
+              $ref: '#/components/schemas/sequence'
+            sessionId:
+              $ref: '#/components/schemas/uuid'
+            type:
+              const: response.cancelled
+        - type: object
+          additionalProperties: false
+          required:
+            - code
+            - eventId
+            - message
+            - retryable
+            - sequence
+            - sessionId
+            - type
+          properties:
+            code:
+              type: string
+              pattern: ^[A-Z][A-Z0-9_]+$
+            eventId:
+              $ref: '#/components/schemas/uuid'
+            message:
+              type: string
+              minLength: 1
+            retryable:
+              type: boolean
+            sequence:
+              $ref: '#/components/schemas/sequence'
+            sessionId:
+              $ref: '#/components/schemas/uuid'
+            type:
+              const: error
+      $defs:
+        modalities:
+          type: array
+          minItems: 1
+          maxItems: 2
+          uniqueItems: true
+          items:
+            type: string
+            enum:
+              - audio
+              - text
+        sequence:
+          type: integer
+          minimum: 1
+        usage:
+          type: object
+          additionalProperties: false
+          required:
+            - inputTokens
+            - outputTokens
+          properties:
+            inputTokens:
+              type: integer
+              minimum: 0
+            outputTokens:
+              type: integer
+              minimum: 0
+        uuid:
+          type: string
+          format: uuid
   securitySchemes:
     deviceToken:
       type: http

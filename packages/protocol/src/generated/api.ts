@@ -55,11 +55,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/realtime": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Upgrade to a provider-neutral bidirectional realtime session. */
+        get: operations["connectRealtimeSession"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
         ChatStreamEvent: components["schemas"]["chat-stream-event.schema"];
+        RealtimeClientEvent: components["schemas"]["realtime-client-event.schema"];
+        RealtimeServerEvent: components["schemas"]["realtime-server-event.schema"];
         /** Health */
         "health.schema": {
             /** @constant */
@@ -133,6 +152,180 @@ export interface components {
             /** @constant */
             type: "error";
         };
+        audioFormat: {
+            /** @constant */
+            channels: 1;
+            /** @constant */
+            encoding: "pcm_s16le";
+            /** @enum {integer} */
+            sampleRate: 16000 | 24000 | 48000;
+        };
+        modalities: ("audio" | "text")[];
+        /** Format: uuid */
+        uuid: string;
+        sequence: number;
+        /** RealtimeClientEvent */
+        "realtime-client-event.schema": {
+            $defs: {
+                audioFormat: {
+                    /** @constant */
+                    channels: 1;
+                    /** @constant */
+                    encoding: "pcm_s16le";
+                    /** @enum {integer} */
+                    sampleRate: 16000 | 24000 | 48000;
+                };
+                modalities: ("audio" | "text")[];
+                sequence: number;
+                /** Format: uuid */
+                uuid: string;
+            };
+        } & ({
+            configuration: {
+                inputAudio?: components["schemas"]["audioFormat"];
+                inputModalities: components["schemas"]["modalities"];
+                language?: string;
+                outputAudio?: components["schemas"]["audioFormat"];
+                outputModalities: components["schemas"]["modalities"];
+                /** @constant */
+                protocolVersion: "1";
+                voice?: string;
+            };
+            eventId: components["schemas"]["uuid"];
+            sequence: components["schemas"]["sequence"];
+            sessionId: components["schemas"]["uuid"];
+            /** @constant */
+            type: "session.configure";
+        } | {
+            eventId: components["schemas"]["uuid"];
+            sequence: components["schemas"]["sequence"];
+            sessionId: components["schemas"]["uuid"];
+            text: string;
+            turnId: components["schemas"]["uuid"];
+            /** @constant */
+            type: "input.text";
+        } | {
+            audio: string;
+            eventId: components["schemas"]["uuid"];
+            sequence: components["schemas"]["sequence"];
+            sessionId: components["schemas"]["uuid"];
+            turnId: components["schemas"]["uuid"];
+            /** @constant */
+            type: "input.audio";
+        } | {
+            eventId: components["schemas"]["uuid"];
+            sequence: components["schemas"]["sequence"];
+            sessionId: components["schemas"]["uuid"];
+            turnId: components["schemas"]["uuid"];
+            /** @constant */
+            type: "input.commit";
+        } | {
+            eventId: components["schemas"]["uuid"];
+            responseId: components["schemas"]["uuid"];
+            sequence: components["schemas"]["sequence"];
+            sessionId: components["schemas"]["uuid"];
+            /** @constant */
+            type: "response.cancel";
+        } | {
+            eventId: components["schemas"]["uuid"];
+            sequence: components["schemas"]["sequence"];
+            sessionId: components["schemas"]["uuid"];
+            /** @constant */
+            type: "session.close";
+        });
+        usage: {
+            inputTokens: number;
+            outputTokens: number;
+        };
+        /** RealtimeServerEvent */
+        "realtime-server-event.schema": {
+            $defs: {
+                modalities: ("audio" | "text")[];
+                sequence: number;
+                usage: {
+                    inputTokens: number;
+                    outputTokens: number;
+                };
+                /** Format: uuid */
+                uuid: string;
+            };
+        } & ({
+            capabilities: {
+                inputModalities: components["schemas"]["modalities"];
+                interruption: boolean;
+                outputModalities: components["schemas"]["modalities"];
+                /** @enum {string} */
+                runtimeKind: "deterministic" | "integrated" | "pipeline";
+                transcription: boolean;
+                /** @enum {string} */
+                voiceKind: "clone" | "none" | "parametric" | "preset";
+            };
+            eventId: components["schemas"]["uuid"];
+            sequence: components["schemas"]["sequence"];
+            sessionId: components["schemas"]["uuid"];
+            /** @constant */
+            type: "session.ready";
+        } | {
+            eventId: components["schemas"]["uuid"];
+            final: boolean;
+            sequence: components["schemas"]["sequence"];
+            sessionId: components["schemas"]["uuid"];
+            text: string;
+            turnId: components["schemas"]["uuid"];
+            /** @constant */
+            type: "input.transcript";
+        } | {
+            eventId: components["schemas"]["uuid"];
+            responseId: components["schemas"]["uuid"];
+            sequence: components["schemas"]["sequence"];
+            sessionId: components["schemas"]["uuid"];
+            turnId: components["schemas"]["uuid"];
+            /** @constant */
+            type: "response.started";
+        } | {
+            eventId: components["schemas"]["uuid"];
+            responseId: components["schemas"]["uuid"];
+            sequence: components["schemas"]["sequence"];
+            sessionId: components["schemas"]["uuid"];
+            text: string;
+            turnId: components["schemas"]["uuid"];
+            /** @constant */
+            type: "response.text";
+        } | {
+            audio: string;
+            eventId: components["schemas"]["uuid"];
+            responseId: components["schemas"]["uuid"];
+            sequence: components["schemas"]["sequence"];
+            sessionId: components["schemas"]["uuid"];
+            turnId: components["schemas"]["uuid"];
+            /** @constant */
+            type: "response.audio";
+        } | {
+            eventId: components["schemas"]["uuid"];
+            responseId: components["schemas"]["uuid"];
+            sequence: components["schemas"]["sequence"];
+            sessionId: components["schemas"]["uuid"];
+            turnId: components["schemas"]["uuid"];
+            /** @constant */
+            type: "response.completed";
+            usage: components["schemas"]["usage"];
+        } | {
+            eventId: components["schemas"]["uuid"];
+            responseId: components["schemas"]["uuid"];
+            sequence: components["schemas"]["sequence"];
+            sessionId: components["schemas"]["uuid"];
+            /** @constant */
+            type: "response.cancelled";
+        } | {
+            code: string;
+            eventId: components["schemas"]["uuid"];
+            message: string;
+            retryable: boolean;
+            sequence: components["schemas"]["sequence"];
+            sessionId: components["schemas"]["uuid"];
+            /** @constant */
+            type: "error";
+        });
     };
     responses: {
         /** @description Device token is missing or invalid. */
@@ -214,6 +407,34 @@ export interface operations {
                 content: {
                     "application/x-ndjson": string;
                 };
+            };
+            401: components["responses"]["Unauthorized"];
+            /** @description Core is sealed. */
+            423: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["error.schema"];
+                };
+            };
+        };
+    };
+    connectRealtimeSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description WebSocket protocol upgrade accepted. */
+            101: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             401: components["responses"]["Unauthorized"];
             /** @description Core is sealed. */

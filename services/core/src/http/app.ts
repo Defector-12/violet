@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { Readable } from "node:stream";
+import websocket from "@fastify/websocket";
+import type { ConversationLedger, RealtimeConversationPort } from "@violet/domain";
 import { evaluateContentAccess } from "@violet/policy";
 import {
   type ApiError,
@@ -13,12 +15,15 @@ import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
 
 import type { DeviceAuthenticator } from "../auth/device-authenticator.js";
 import type { ChatService } from "../conversation/chat-service.js";
+import { handleRealtimeWebSocket } from "../realtime/realtime-websocket.js";
 import { recordHttpRequest } from "../telemetry-signals.js";
 
 export interface CoreAppOptions {
   readonly authenticator: DeviceAuthenticator;
   readonly chatService: ChatService;
   readonly now?: () => Date;
+  readonly realtimeConversationPort: RealtimeConversationPort;
+  readonly realtimeLedger: ConversationLedger;
   readonly sealed: boolean;
   readonly version: string;
 }
@@ -26,6 +31,11 @@ export interface CoreAppOptions {
 export function buildCoreApp(options: CoreAppOptions): FastifyInstance {
   const app = Fastify({
     logger: false,
+  });
+  app.register(websocket, {
+    options: {
+      maxPayload: 150000,
+    },
   });
   const now = options.now ?? (() => new Date());
 
@@ -111,6 +121,40 @@ export function buildCoreApp(options: CoreAppOptions): FastifyInstance {
       serializeEvents(options.chatService.stream(request.body, abortController.signal)),
     );
     return reply.type("application/x-ndjson").send(stream);
+  });
+
+  app.register(async (realtimeRoutes) => {
+    realtimeRoutes.get(
+      "/v1/realtime",
+      {
+        preValidation: async (request, reply) => {
+          const access = evaluateContentAccess({
+            authenticated: isAuthenticated(request, options.authenticator),
+            sealed: options.sealed,
+          });
+          if (!access.allowed) {
+            await reply.code(access.status).send(
+              apiError(request, {
+                code: access.code,
+                message:
+                  access.code === "CORE_SEALED"
+                    ? "Violet Core is sealed"
+                    : "A valid device token is required",
+                retryable: access.retryable,
+              }),
+            );
+          }
+        },
+        websocket: true,
+      },
+      (socket) => {
+        handleRealtimeWebSocket(socket, {
+          conversationPort: options.realtimeConversationPort,
+          generateId: randomUUID,
+          ledger: options.realtimeLedger,
+        });
+      },
+    );
   });
 
   return app;

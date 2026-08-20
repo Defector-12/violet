@@ -61,10 +61,35 @@ paths:
             application/json:
               schema:
                 $ref: ../schemas/v1/error.schema.json
+  /v1/realtime:
+    get:
+      operationId: connectRealtimeSession
+      summary: Upgrade to a provider-neutral bidirectional realtime session.
+      security:
+        - deviceToken: []
+      responses:
+        "101":
+          description: WebSocket protocol upgrade accepted.
+          x-websocket-client-event:
+            $ref: ../schemas/v1/realtime-client-event.schema.json
+          x-websocket-server-event:
+            $ref: ../schemas/v1/realtime-server-event.schema.json
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "423":
+          description: Core is sealed.
+          content:
+            application/json:
+              schema:
+                $ref: ../schemas/v1/error.schema.json
 components:
   schemas:
     ChatStreamEvent:
       $ref: ../schemas/v1/chat-stream-event.schema.json
+    RealtimeClientEvent:
+      $ref: ../schemas/v1/realtime-client-event.schema.json
+    RealtimeServerEvent:
+      $ref: ../schemas/v1/realtime-server-event.schema.json
   securitySchemes:
     deviceToken:
       type: http

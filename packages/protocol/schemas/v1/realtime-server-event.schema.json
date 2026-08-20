@@ -1,0 +1,289 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://violet.local/schemas/v1/realtime-server-event.schema.json",
+  "title": "RealtimeServerEvent",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["capabilities", "eventId", "sequence", "sessionId", "type"],
+      "properties": {
+        "capabilities": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "inputModalities",
+            "interruption",
+            "outputModalities",
+            "runtimeKind",
+            "transcription",
+            "voiceKind"
+          ],
+          "properties": {
+            "inputModalities": {
+              "$ref": "#/$defs/modalities"
+            },
+            "interruption": {
+              "type": "boolean"
+            },
+            "outputModalities": {
+              "$ref": "#/$defs/modalities"
+            },
+            "runtimeKind": {
+              "type": "string",
+              "enum": ["deterministic", "integrated", "pipeline"]
+            },
+            "transcription": {
+              "type": "boolean"
+            },
+            "voiceKind": {
+              "type": "string",
+              "enum": ["clone", "none", "parametric", "preset"]
+            }
+          }
+        },
+        "eventId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "sequence": {
+          "$ref": "#/$defs/sequence"
+        },
+        "sessionId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "type": {
+          "const": "session.ready"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["eventId", "final", "sequence", "sessionId", "text", "turnId", "type"],
+      "properties": {
+        "eventId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "final": {
+          "type": "boolean"
+        },
+        "sequence": {
+          "$ref": "#/$defs/sequence"
+        },
+        "sessionId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1
+        },
+        "turnId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "type": {
+          "const": "input.transcript"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["eventId", "responseId", "sequence", "sessionId", "turnId", "type"],
+      "properties": {
+        "eventId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "responseId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "sequence": {
+          "$ref": "#/$defs/sequence"
+        },
+        "sessionId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "turnId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "type": {
+          "const": "response.started"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["eventId", "responseId", "sequence", "sessionId", "text", "turnId", "type"],
+      "properties": {
+        "eventId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "responseId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "sequence": {
+          "$ref": "#/$defs/sequence"
+        },
+        "sessionId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1
+        },
+        "turnId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "type": {
+          "const": "response.text"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["audio", "eventId", "responseId", "sequence", "sessionId", "turnId", "type"],
+      "properties": {
+        "audio": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 131072,
+          "pattern": "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$"
+        },
+        "eventId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "responseId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "sequence": {
+          "$ref": "#/$defs/sequence"
+        },
+        "sessionId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "turnId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "type": {
+          "const": "response.audio"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["eventId", "responseId", "sequence", "sessionId", "turnId", "type", "usage"],
+      "properties": {
+        "eventId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "responseId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "sequence": {
+          "$ref": "#/$defs/sequence"
+        },
+        "sessionId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "turnId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "type": {
+          "const": "response.completed"
+        },
+        "usage": {
+          "$ref": "#/$defs/usage"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["eventId", "responseId", "sequence", "sessionId", "type"],
+      "properties": {
+        "eventId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "responseId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "sequence": {
+          "$ref": "#/$defs/sequence"
+        },
+        "sessionId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "type": {
+          "const": "response.cancelled"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "eventId", "message", "retryable", "sequence", "sessionId", "type"],
+      "properties": {
+        "code": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9_]+$"
+        },
+        "eventId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1
+        },
+        "retryable": {
+          "type": "boolean"
+        },
+        "sequence": {
+          "$ref": "#/$defs/sequence"
+        },
+        "sessionId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "type": {
+          "const": "error"
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "modalities": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 2,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "enum": ["audio", "text"]
+      }
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "usage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["inputTokens", "outputTokens"],
+      "properties": {
+        "inputTokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "outputTokens": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "uuid": {
+      "type": "string",
+      "format": "uuid"
+    }
+  }
+}

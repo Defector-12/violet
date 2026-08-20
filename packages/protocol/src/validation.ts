@@ -7,8 +7,21 @@ import chatStreamEventSchema from "../schemas/v1/chat-stream-event.schema.json" 
 };
 import errorSchema from "../schemas/v1/error.schema.json" with { type: "json" };
 import healthSchema from "../schemas/v1/health.schema.json" with { type: "json" };
+import realtimeClientEventSchema from "../schemas/v1/realtime-client-event.schema.json" with {
+  type: "json",
+};
+import realtimeServerEventSchema from "../schemas/v1/realtime-server-event.schema.json" with {
+  type: "json",
+};
 import statusSchema from "../schemas/v1/status.schema.json" with { type: "json" };
-import type { ChatRequest, ChatStreamEvent, CoreStatus, Health } from "./types.js";
+import type {
+  ChatRequest,
+  ChatStreamEvent,
+  CoreStatus,
+  Health,
+  RealtimeClientEvent,
+  RealtimeServerEvent,
+} from "./types.js";
 
 const ajv = new Ajv2020({
   allErrors: true,
@@ -22,6 +35,8 @@ const chatRequestValidator = ajv.compile<ChatRequest>(chatRequestSchema);
 const chatStreamEventValidator = ajv.compile<ChatStreamEvent>(chatStreamEventSchema);
 const coreStatusValidator = ajv.compile<CoreStatus>(statusSchema);
 const healthValidator = ajv.compile<Health>(healthSchema);
+const realtimeClientEventValidator = ajv.compile<RealtimeClientEvent>(realtimeClientEventSchema);
+const realtimeServerEventValidator = ajv.compile<RealtimeServerEvent>(realtimeServerEventSchema);
 
 export class ProtocolValidationError extends Error {
   readonly validationErrors: readonly ErrorObject[];
@@ -57,4 +72,12 @@ export function assertCoreStatus(value: unknown): asserts value is CoreStatus {
 
 export function assertHealth(value: unknown): asserts value is Health {
   assertValid("Health", healthValidator, value);
+}
+
+export function assertRealtimeClientEvent(value: unknown): asserts value is RealtimeClientEvent {
+  assertValid("RealtimeClientEvent", realtimeClientEventValidator, value);
+}
+
+export function assertRealtimeServerEvent(value: unknown): asserts value is RealtimeServerEvent {
+  assertValid("RealtimeServerEvent", realtimeServerEventValidator, value);
 }

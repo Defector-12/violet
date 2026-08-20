@@ -141,6 +141,12 @@ Violet/
 
 在 Mac 上通过全局快捷键或点击唤出 Violet，立即得到“我在”“嗯哼”等本地短回执，并可以使用文字和语音与云端同一 Violet 对话。关闭浮层只结束在场，不结束已建立的后台任务。
 
+**当前实现证据**
+
+截至 2026-08-20，首个纵向切片已完成本地实现：`RealtimeSession v1` 协议、Core WebSocket 认证与 sealed 门禁、确定性实时 Adapter、最终用户/助手事件落账、Swift 原生菜单栏 App、Keychain 读取与 stdin 迁移工具、可选 SSH 隧道、文字流式 UI、全局快捷键、睡眠与锁屏停止、`AudioIOPort` 和隔离测试 Adapter。TypeScript 11 个测试文件共 37 个测试、Swift 6 个测试通过，ad-hoc 签名 `.app` 构建与签名校验通过。
+
+该证据不代表 Release 1B 已完成：App 尚未在用户桌面真实启动；麦克风、快捷键、锁屏、睡眠和视觉体验尚未进入用户批准的验收窗口；真实 Pipeline 与端到端实时模型尚未评估或选型。
+
 **建设内容**
 
 - `apps/macos` 使用 Swift、SwiftUI 和 AppKit。
