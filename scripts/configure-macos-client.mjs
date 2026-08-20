@@ -4,7 +4,10 @@ import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
-const host = process.argv[2]?.trim();
+const host = process.argv
+  .slice(2)
+  .find((argument) => argument !== "--")
+  ?.trim();
 if (!host || !/^[A-Za-z0-9._-]+$/.test(host)) {
   throw new Error("Usage: configure-macos-client.mjs <ssh-host>");
 }
