@@ -139,8 +139,14 @@ public final class PresenceModel: ObservableObject {
 }
 
 private func userFacingMessage(_ error: Error) -> String {
-  if let localized = error as? LocalizedError, let description = localized.errorDescription {
-    return description
+  switch error {
+  case let error as DeviceTokenError:
+    return error.errorDescription ?? "The Violet device token is unavailable."
+  case let error as VioletCoreClientError:
+    return error.errorDescription ?? "Violet Core is offline."
+  case let error as RealtimeSessionClientError:
+    return error.errorDescription ?? "The realtime session is unavailable."
+  default:
+    return "Violet Core is offline."
   }
-  return "Violet is offline."
 }

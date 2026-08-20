@@ -158,6 +158,16 @@ struct PresenceModelTests {
     #expect(forwarder.startCount == 1)
     #expect(forwarder.stopCount == 1)
   }
+
+  @Test
+  @MainActor
+  func hidesUnknownTransportDetailsFromOfflineStatus() async {
+    let model = PresenceModel(client: FailingCoreClient())
+
+    await model.refresh()
+
+    #expect(model.connectionState == .offline(message: "Violet Core is offline."))
+  }
 }
 
 private struct FakeCoreClient: VioletCoreClientPort {
@@ -177,6 +187,21 @@ private struct FakeCoreClient: VioletCoreClientPort {
         continuation.yield(delta)
       }
       continuation.finish()
+    }
+  }
+}
+
+private struct FailingCoreClient: VioletCoreClientPort {
+  func status() async throws -> VioletCoreStatus {
+    throw URLError(.cannotConnectToHost)
+  }
+
+  func streamChat(
+    message: String,
+    requestId: UUID
+  ) -> AsyncThrowingStream<String, Error> {
+    AsyncThrowingStream { continuation in
+      continuation.finish(throwing: URLError(.cannotConnectToHost))
     }
   }
 }
