@@ -5,11 +5,11 @@
 ## 1. 当前状态
 
 - Release 1A 已完成交付。当前 `main` 已包含 pnpm workspace、JSON Schema/OpenAPI 协议、TypeScript SDK、Swift 生成客户端边界、模块化 Core、`dev-cli`、PostgreSQL 迁移、应用层信封加密、DeepSeek Adapter、Docker Compose、可观测配置和加密备份恢复。
-- Release 1B 已开始实现。当前功能分支已建立 `RealtimeSession v1` JSON Schema、Core WebSocket 接入、`RealtimeConversationPort`、确定性实时 Adapter、最终事件落账，以及可构建的原生菜单栏 App、Keychain、可选 SSH 隧道、全局快捷键、系统生命周期和 `AudioIOPort` 边界；真实 App 交互验收与语音运行时选型尚未执行。
+- Release 1B 已开始实现并合并首个纵向切片。Devbox 已部署提交 `639a6cf` 的 Core 候选，`RealtimeSession v1`、WebSocket、`RealtimeConversationPort`、确定性实时 Adapter 和最终事件落账可用；原生菜单栏 App、Keychain、可选 SSH 隧道、全局快捷键、系统生命周期和 `AudioIOPort` 边界已经构建，无音频测试模式 UI 验收通过。正常模式文字连接、真实系统/音频验收与语音运行时选型尚未执行。
 - 已完成现有阅读工具 Sprinkle 的只读评估。Sprinkle 是 WXT、React、TypeScript 构建的浏览器扩展，可复用其页面提取、文字与图片选择、区域框选和浏览器内交互能力，但不能作为 Violet 本体。
 - 当前可使用一台公司 Devbox 作为临时云环境：32 核 CPU、128G 内存、120G 系统盘、500G 数据盘、veLinux 1.0。它足以支撑第一阶段的后端、数据库、Worker、沙箱和测试。
 - Violet 是单用户、云端智能优先、Mac 先行的绿地项目。
-- 本地 `pnpm check` 已覆盖格式、类型、构建和 27 个单元测试；Devbox 部署、真实模型 20 轮纵向验证、两次物理重启、加密备份、TOS 上传下载和空库恢复已经通过。
+- 本地 `pnpm check` 已覆盖格式、类型、构建和 37 个单元测试，Swift 7 个测试通过；Release 1A 的真实模型 20 轮纵向验证、两次物理重启、加密备份、TOS 上传下载和空库恢复已经通过，Release 1B Core 的 ready/sealed、认证、Realtime 握手、事件不变和遥测白名单验证通过。
 
 ## 2. 架构目标
 
@@ -471,8 +471,9 @@ Sprinkle 不扩建为 Violet 本体，而演化为浏览器结构化感官：
 - 模型自评与真实能力之间的偏差，需要通过独立测试和证据门禁控制。
 - 第一版成本、延迟、离线降级和服务故障恢复策略尚需设计。
 - Mac 到 Devbox 的第一阶段连接锁定为 SSH 隧道；非公司网络下是否可达仍需验证。
+- Devbox 运行秘密存在于 `/dev/shm/violet` 时，运行期命令必须使用项目 direct SSH 路径；实测 `bytedcli devbox ssh` 的会话清理会移除该目录，导致后续重建只能 sealed。bytedcli 仍可用于秘密注入前或 sealed 状态的只读检查。
 - 内部集成远端、GitHub 可迁移镜像、DeepSeek 模型配置和个人火山引擎 TOS 桶已经就绪。两次暴露的 TOS Secret 均未使用；第二次轮换后的凭证已完成真实最小权限、版本清理、加密上传下载和恢复验证。
 
 ## 19. 下一步
 
-按《工程路线》执行第一阶段。Release 1A 基座已经完成；下一步先建立供应商无关的 `RealtimeSession`、`RealtimeConversationPort` 和 `AudioIOPort`，再完成 Mac 原生在场与至少一种真实实时语音运行时，之后继续全局感知、统一记忆、持久任务、工具执行和端到端验收闭环。
+按《工程路线》执行第一阶段。Release 1A 基座和 Release 1B 首个 Core/Mac 候选切片已经完成；下一步验证 Mac App 正常模式的自动 SSH 隧道与文字连接，再完成真实系统/音频验收和至少一种真实语音运行时，之后继续全局感知、统一记忆、持久任务、工具执行和端到端验收闭环。
