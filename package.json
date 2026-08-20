@@ -17,6 +17,10 @@
     "env:inject-devbox": "node scripts/inject-devbox-secrets.mjs",
     "format": "biome check --write .",
     "generate": "pnpm --filter @violet/protocol generate",
+    "macos:app": "./scripts/build-macos-app.sh debug",
+    "macos:configure": "node scripts/configure-macos-client.mjs",
+    "macos:migrate-token": "./scripts/migrate-device-token-to-keychain.sh",
+    "macos:test": "TMPDIR=\"$PWD/apps/macos/.swift-tmp\" swift test --package-path apps/macos --disable-index-store -j 4",
     "test": "vitest run",
     "typecheck": "pnpm -r build && pnpm -r typecheck"
   },
