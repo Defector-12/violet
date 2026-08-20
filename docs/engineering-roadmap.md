@@ -143,7 +143,7 @@ Violet/
 
 **当前实现证据**
 
-截至 2026-08-20，首个纵向切片已完成本地实现：`RealtimeSession v1` 协议、Core WebSocket 认证与 sealed 门禁、确定性实时 Adapter、最终用户/助手事件落账、Swift 原生菜单栏 App、Keychain 读取与 stdin 迁移工具、可选 SSH 隧道、文字流式 UI、全局快捷键、睡眠与锁屏停止、`AudioIOPort` 和隔离测试 Adapter。TypeScript 11 个测试文件共 37 个测试、Swift 6 个测试通过，ad-hoc 签名 `.app` 构建与签名校验通过。
+截至 2026-08-20，首个纵向切片已完成本地实现：`RealtimeSession v1` 协议、Core WebSocket 认证与 sealed 门禁、确定性实时 Adapter、最终用户/助手事件落账、Swift 原生菜单栏 App、Keychain 读取与 stdin 迁移工具、可选 SSH 隧道、文字流式 UI、全局快捷键、睡眠与锁屏停止、`AudioIOPort` 和隔离测试 Adapter。TypeScript 11 个测试文件共 37 个测试、Swift 7 个测试通过，ad-hoc 签名 `.app` 构建与签名校验通过；Keychain、本地 SSH 配置以及菜单栏、浮层、刷新、退出和离线状态的无音频 UI 验收通过。
 
 该证据不代表 Release 1B 已完成：App 尚未在用户桌面真实启动；麦克风、快捷键、锁屏、睡眠和视觉体验尚未进入用户批准的验收窗口；真实 Pipeline 与端到端实时模型尚未评估或选型。
 
