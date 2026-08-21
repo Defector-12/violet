@@ -60,7 +60,10 @@ let package = Package(
         ),
         .testTarget(
             name: "VioletMacCoreTests",
-            dependencies: ["VioletMacCore"]
+            dependencies: [
+                "VioletMacCore",
+                "VioletProtocolClient",
+            ]
         )
     ]
 )

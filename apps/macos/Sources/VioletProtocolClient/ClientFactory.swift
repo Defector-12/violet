@@ -7,6 +7,7 @@ public enum VioletProtocolClientFactory {
   public static func make(serverURL: URL, deviceToken: String? = nil) -> Client {
     Client(
       serverURL: serverURL,
+      configuration: .init(dateTranscoder: .iso8601WithFractionalSeconds),
       transport: URLSessionTransport(),
       middlewares: deviceToken.map { [BearerTokenMiddleware(token: $0)] } ?? []
     )
