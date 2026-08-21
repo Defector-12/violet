@@ -5,11 +5,11 @@
 ## 1. 当前状态
 
 - Release 1A 已完成交付。当前 `main` 已包含 pnpm workspace、JSON Schema/OpenAPI 协议、TypeScript SDK、Swift 生成客户端边界、模块化 Core、`dev-cli`、PostgreSQL 迁移、应用层信封加密、DeepSeek Adapter、Docker Compose、可观测配置和加密备份恢复。
-- Release 1B 已开始实现并合并首个纵向切片。Devbox 已部署提交 `639a6cf` 的 Core 候选，`RealtimeSession v1`、WebSocket、`RealtimeConversationPort`、确定性实时 Adapter 和最终事件落账可用；原生菜单栏 App、Keychain、可选 SSH 隧道、全局快捷键、系统生命周期和 `AudioIOPort` 边界已经构建，无音频测试模式 UI 验收通过。正常模式文字连接、真实系统/音频验收与语音运行时选型尚未执行。
+- Release 1B 已开始实现并合并首个纵向切片。Devbox 已部署提交 `639a6cf` 的 Core 候选，`RealtimeSession v1`、WebSocket、`RealtimeConversationPort`、确定性实时 Adapter 和最终事件落账可用；原生菜单栏 App、Keychain、可选 SSH 隧道、全局快捷键、系统生命周期和 `AudioIOPort` 边界已经构建。正常模式的自动 SSH 隧道、Keychain 鉴权、真实 DeepSeek 文字流、全局快捷键、SSH 子进程重连、显示器睡眠、锁屏和整机睡眠恢复已经通过验收；生产 UI 尚未调用 `AudioIOPort.startCapture()`，真实麦克风停止、语音会话和语音运行时选型仍未完成。
 - 已完成现有阅读工具 Sprinkle 的只读评估。Sprinkle 是 WXT、React、TypeScript 构建的浏览器扩展，可复用其页面提取、文字与图片选择、区域框选和浏览器内交互能力，但不能作为 Violet 本体。
 - 当前可使用一台公司 Devbox 作为临时云环境：32 核 CPU、128G 内存、120G 系统盘、500G 数据盘、veLinux 1.0。它足以支撑第一阶段的后端、数据库、Worker、沙箱和测试。
 - Violet 是单用户、云端智能优先、Mac 先行的绿地项目。
-- 本地 `pnpm check` 已覆盖格式、类型、构建和 37 个单元测试，Swift 7 个测试通过；Release 1A 的真实模型 20 轮纵向验证、两次物理重启、加密备份、TOS 上传下载和空库恢复已经通过，Release 1B Core 的 ready/sealed、认证、Realtime 握手、事件不变和遥测白名单验证通过。
+- 本地 `pnpm check` 已覆盖格式、类型、构建和 37 个单元测试，Swift 8 个测试通过；Release 1A 的真实模型 20 轮纵向验证、两次物理重启、加密备份、TOS 上传下载和空库恢复已经通过，Release 1B Core 的 ready/sealed、认证、Realtime 握手和遥测白名单验证通过。Release 1B 正常模式文字验收后，事件账本由 40 条按预期增加为 42 条用户/助手事件。
 
 ## 2. 架构目标
 
@@ -460,7 +460,7 @@ Sprinkle 不扩建为 Violet 本体，而演化为浏览器结构化感官：
 
 ## 18. 关键风险与待决事项
 
-- Mac 屏幕、麦克风、辅助功能和全局唤醒权限需要实际验证。
+- Mac 全局快捷键、锁屏和睡眠生命周期已经完成一次真实验收；麦克风权限、开始采集、立即停止和后续屏幕感知权限仍需在对应生产路径实现后验证。
 - Pipeline 与端到端实时模型的质量、首包延迟、弱网恢复、回声消除、打断、最终转写和费用需要在同一评估集上实测；不能根据供应商宣传静默选型。
 - 端到端实时模型的预设音色不等于可克隆或任意设计音色；目标音色能力和合法使用边界尚需单独验证。
 - 任意应用中的指向、选区和结构化语义能否稳定融合，需要专项评估。
@@ -476,4 +476,4 @@ Sprinkle 不扩建为 Violet 本体，而演化为浏览器结构化感官：
 
 ## 19. 下一步
 
-按《工程路线》执行第一阶段。Release 1A 基座和 Release 1B 首个 Core/Mac 候选切片已经完成；下一步验证 Mac App 正常模式的自动 SSH 隧道与文字连接，再完成真实系统/音频验收和至少一种真实语音运行时，之后继续全局感知、统一记忆、持久任务、工具执行和端到端验收闭环。
+按《工程路线》执行第一阶段。Release 1A 基座和 Release 1B 首个 Core/Mac 候选切片已经完成，Mac App 正常模式文字连接和非音频系统生命周期验收已经通过；下一步实现可见、用户启动的音频会话入口，并比较至少一个 Pipeline 基线与一个端到端实时候选，完成麦克风、音色、VAD、打断、延迟和故障恢复验收。之后继续全局感知、统一记忆、持久任务、工具执行和端到端验收闭环。
