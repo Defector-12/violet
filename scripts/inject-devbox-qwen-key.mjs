@@ -16,7 +16,9 @@ if (apiKey.length < 16 || /\s/.test(apiKey)) {
 await ensureRemoteUserLinger(target);
 await prepareRemoteDirectory(target);
 await writeRemoteSecret(target, apiKey);
-process.stdout.write("Injected qwen_realtime_api_key into the Devbox memory filesystem.\n");
+process.stdout.write(
+  "Injected qwen_realtime_api_key into the Devbox memory filesystem. Restart or recreate a running Core container before validation so it loads the new key.\n",
+);
 
 async function readHidden(prompt) {
   process.stdout.write(prompt);

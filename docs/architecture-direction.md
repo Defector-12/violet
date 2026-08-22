@@ -5,11 +5,11 @@
 ## 1. 当前状态
 
 - Release 1A 已完成交付。当前 `main` 已包含 pnpm workspace、JSON Schema/OpenAPI 协议、TypeScript SDK、Swift 生成客户端边界、模块化 Core、`dev-cli`、PostgreSQL 迁移、应用层信封加密、DeepSeek Adapter、Docker Compose、可观测配置和加密备份恢复。
-- Release 1B 已开始实现并合并首个纵向切片。Devbox 已部署提交 `639a6cf` 的 Core 候选，`RealtimeSession v1`、WebSocket、`RealtimeConversationPort`、确定性实时 Adapter 和最终事件落账可用；原生菜单栏 App、Keychain、可选 SSH 隧道、全局快捷键、系统生命周期和 `AudioIOPort` 边界已经构建。正常模式的自动 SSH 隧道、Keychain 鉴权、真实 DeepSeek 文字流、全局快捷键、SSH 子进程重连、显示器睡眠、锁屏和整机睡眠恢复已经通过验收。Mac App 已增加用户主动启动的音频会话入口：先协商 Realtime 能力，服务端声明支持音频后才请求麦克风权限并采集，用户停止后发送 `input.commit`；关闭浮层、退出、锁屏或睡眠立即取消。当前 Devbox Adapter 仍只声明文字能力，正常模式已验证安全拒绝且不打开音频设备、不新增事件；真实麦克风、语音回复和运行时选型尚未完成。
+- Release 1B 已开始实现并合并首个纵向切片。`RealtimeSession v1`、WebSocket、`RealtimeConversationPort`、确定性实时 Adapter 和最终事件落账可用；原生菜单栏 App、Keychain、可选 SSH 隧道、全局快捷键、系统生命周期和 `AudioIOPort` 边界已经构建。正常模式的自动 SSH 隧道、Keychain 鉴权、真实 DeepSeek 文字流、全局快捷键、SSH 子进程重连、显示器睡眠、锁屏和整机睡眠恢复已经通过验收。Mac App 已增加用户主动启动的音频会话入口：先协商 Realtime 能力，服务端声明支持音频后才请求麦克风权限并采集，用户停止后发送 `input.commit`；关闭浮层、退出、锁屏或睡眠立即取消。首个支持音频的 `QwenAudioRealtimeAdapter` 已在功能分支实现，Devbox Core 候选已加载该 Adapter；使用北京地域 Workspace、系统音色 `longanqian` 的无麦克风合成 canary 已返回文字和 24kHz PCM 音频。该分支尚未合并，真实麦克风、VAD、打断和完整延迟验收尚未完成。
 - 已完成现有阅读工具 Sprinkle 的只读评估。Sprinkle 是 WXT、React、TypeScript 构建的浏览器扩展，可复用其页面提取、文字与图片选择、区域框选和浏览器内交互能力，但不能作为 Violet 本体。
 - 当前可使用一台公司 Devbox 作为临时云环境：32 核 CPU、128G 内存、120G 系统盘、500G 数据盘、veLinux 1.0。它足以支撑第一阶段的后端、数据库、Worker、沙箱和测试。
 - Violet 是单用户、云端智能优先、Mac 先行的绿地项目。
-- 本地 `pnpm check` 已覆盖格式、类型、构建和 37 个单元测试，Swift 12 个测试通过；Release 1A 的真实模型 20 轮纵向验证、两次物理重启、加密备份、TOS 上传下载和空库恢复已经通过，Release 1B Core 的 ready/sealed、认证、Realtime 握手和遥测白名单验证通过。Release 1B 正常模式文字验收后，事件账本由 40 条按预期增加为 42 条用户/助手事件。
+- 当前 Qwen 功能分支的 `pnpm check:ci` 已覆盖格式、生成物、类型、构建和 42 个测试，Swift 13 个测试通过；Release 1A 的真实模型 20 轮纵向验证、两次物理重启、加密备份、TOS 上传下载和空库恢复已经通过，Release 1B Core 的 ready/sealed、认证、Realtime 握手和遥测白名单验证通过。Release 1B 正常模式文字验收后，事件账本由 40 条按预期增加为 42 条用户/助手事件；Qwen 合成 canary 绕过事件账本，未写入测试对话。
 
 ## 2. 架构目标
 
@@ -460,8 +460,8 @@ Sprinkle 不扩建为 Violet 本体，而演化为浏览器结构化感官：
 
 ## 18. 关键风险与待决事项
 
-- Mac 全局快捷键、锁屏和睡眠生命周期已经完成一次真实验收；麦克风入口、能力门禁和停止状态机已实现，仍需在支持音频的真实运行时接入后验证权限、采集和 1 秒内停止。
-- Pipeline 与端到端实时模型的质量、首包延迟、弱网恢复、回声消除、打断、最终转写和费用需要在同一评估集上实测；不能根据供应商宣传静默选型。
+- Mac 全局快捷键、锁屏和睡眠生命周期已经完成一次真实验收；麦克风入口、能力门禁和停止状态机已实现，Qwen Adapter 已通过无麦克风合成 canary，仍需在用户批准的验收窗口验证权限、采集和 1 秒内停止。
+- Qwen-Audio 3.0 Realtime Plus 是首个端到端实测候选，但尚未成为最终默认运行时。其真实语音质量、首包延迟、弱网恢复、回声消除、VAD、打断、最终转写和费用仍需与 Pipeline 基线在同一评估集上比较。
 - 端到端实时模型的预设音色不等于可克隆或任意设计音色；目标音色能力和合法使用边界尚需单独验证。
 - 任意应用中的指向、选区和结构化语义能否稳定融合，需要专项评估。
 - 记忆的正确写入、相关检索、冲突处理与删除传播尚需专项设计和测试。
@@ -476,4 +476,4 @@ Sprinkle 不扩建为 Violet 本体，而演化为浏览器结构化感官：
 
 ## 19. 下一步
 
-按《工程路线》执行第一阶段。Release 1A 基座和 Release 1B 首个 Core/Mac 候选切片已经完成，Mac App 正常模式文字连接、非音频系统生命周期和用户主动音频会话状态机已经具备；下一步比较至少一个 Pipeline 基线与一个端到端实时候选并接入首个支持音频的 Adapter，完成麦克风、音色、VAD、打断、延迟和故障恢复验收。之后继续全局感知、统一记忆、持久任务、工具执行和端到端验收闭环。
+按《工程路线》执行第一阶段。Release 1A 基座、Release 1B Core/Mac 候选切片和首个 Qwen 音频 Adapter 已经完成，Qwen 无麦克风合成 canary 通过；下一步在用户批准的短时验收窗口完成 Mac 到 Core 的真实麦克风、播放、停止与基础延迟验证，再以同一评估集补 Pipeline 基线以及 VAD、打断、弱网和故障恢复对比。未完成这些门禁前不把 Qwen 设为最终默认运行时，也不标记 Release 1B 完成。之后继续全局感知、统一记忆、持久任务、工具执行和端到端验收闭环。

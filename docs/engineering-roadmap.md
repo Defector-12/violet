@@ -143,13 +143,15 @@ Violet/
 
 **当前实现证据**
 
-截至 2026-08-22，首个纵向切片已完成实现并合并：`RealtimeSession v1` 协议、Core WebSocket 认证与 sealed 门禁、确定性实时 Adapter、最终用户/助手事件落账、Swift 原生菜单栏 App、Keychain 读取与 stdin 迁移工具、可选 SSH 隧道、文字流式 UI、全局快捷键、睡眠与锁屏停止、`AudioIOPort` 和隔离测试 Adapter。TypeScript 11 个测试文件共 37 个测试通过；用户主动音频会话入口、Realtime 音频帧与 commit 流、麦克风能力门禁和生命周期停止状态机已实现，Swift 12 个测试通过。
+截至 2026-08-22，首个纵向切片已完成实现并合并：`RealtimeSession v1` 协议、Core WebSocket 认证与 sealed 门禁、确定性实时 Adapter、最终用户/助手事件落账、Swift 原生菜单栏 App、Keychain 读取与 stdin 迁移工具、可选 SSH 隧道、文字流式 UI、全局快捷键、睡眠与锁屏停止、`AudioIOPort` 和隔离测试 Adapter。用户主动音频会话入口、Realtime 音频帧与 commit 流、麦克风能力门禁和生命周期停止状态机已实现。
 
-Devbox 已部署提交 `639a6cf` 的 Core 候选。ready/sealed、正确与错误认证、Realtime 配置与关闭、未知事件拒绝、回环端口和遥测白名单验证通过；Release 1A 镜像保留为 `rollback-f707f27`，并生成一份未上传外部服务的部署前加密备份。
+基础切片当时在 Devbox 部署提交 `639a6cf` 的 Core 候选。ready/sealed、正确与错误认证、Realtime 配置与关闭、未知事件拒绝、回环端口和遥测白名单验证通过；Release 1A 镜像保留为 `rollback-f707f27`，并生成一份未上传外部服务的部署前加密备份。
 
 正常模式真实验收已经通过自动 SSH 隧道、Keychain 鉴权、`Ready` 状态、DeepSeek 文字流、`Control + Option + Space` 全局快捷键、SSH 子进程自动重连、显示器睡眠、锁屏和整机 46 秒 Deep Idle 后恢复。唯一一条明确标记的测试对话得到预期回复，事件账本由 40 条增加为 42 条，新增顺序为 `user`、`assistant`。验收中发现 Swift OpenAPI 默认日期解码器不能解析 Core 的毫秒 ISO-8601 时间，已改用 fractional-seconds transcoder 并加入固定响应回归测试。
 
-该证据仍不代表 Release 1B 已完成：App 只会在用户点击、Realtime 能力包含音频且麦克风权限通过后调用 `startCapture()`；当前 Devbox 的确定性 Adapter 只声明文字能力，正常模式已验证会显示音频不可用、不开启音频设备且不新增事件。因此真实麦克风开始/立即停止、语音、音色、VAD、打断和延迟尚不能验收；真实 Pipeline 与端到端实时模型也尚未评估或选型。
+首个端到端候选 `QwenAudioRealtimeAdapter` 已在 `feat/qwen-audio-realtime` 实现并部署到 Devbox Core 候选。它使用 Core 中继、北京地域 Workspace、16kHz PCM 输入、24kHz PCM 输出和系统音色 `longanqian`，不向供应商注册工具。无麦克风合成 canary 已返回完整文字与音频，首次音频约 775ms，输入/输出用量为 48/18 tokens；当前功能分支 `pnpm check:ci` 的 42 个测试和 Swift 13 个测试通过。
+
+该证据仍不代表 Release 1B 已完成：Qwen 分支尚未合并，真实麦克风开始/立即停止、最终转写、音色体验、VAD、打断和稳定网络下端到端延迟仍未验收；Pipeline 基线也尚未建立。Qwen 只有在同一评估集通过决策门后才能成为默认运行时。
 
 **建设内容**
 
@@ -430,7 +432,7 @@ CI 必须验证协议兼容、TypeScript、Swift、数据库迁移、容器构�
 ### 4.5 第一阶段依赖与授权
 
 - 内部集成远端、GitHub 可迁移镜像和 DeepSeek `deepseek-v4-flash` 文字模型 API 已经就绪；1C 开始前再提供多模态模型。
-- Release 1B 的真实语音运行时尚未选定。Qwen-Omni-Realtime 是端到端候选之一，Apple 或云端 ASR/TTS 是 Pipeline 候选；通过决策门前不要求提供新供应商密钥，也不得把候选写死为默认实现。
+- Release 1B 已选定 Qwen-Audio 3.0 Realtime Plus 作为首个端到端 canary 候选，并完成真实合成请求；最终默认运行时仍须通过真实麦克风验收并与至少一个 Pipeline 基线比较，不得把当前候选静默升级为最终选型。
 - Devbox SSH、Docker 和必要网络能力。
 - PostgreSQL。
 - 个人火山引擎 TOS 私有普通桶、北京地域 Endpoint、版本控制、SSE-TOS、生命周期和最小权限 IAM 用户已经建立；暴露凭证已轮换，真实备份与恢复验证已通过。
