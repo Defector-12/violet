@@ -26,6 +26,7 @@ public protocol AudioIOPort: AnyObject {
   var isCapturing: Bool { get }
   var isPlaying: Bool { get }
   func play(_ frame: VioletAudioFrame) throws
+  func preparePlayback(format: VioletAudioFormat) throws
   func requestCaptureAccess() async -> Bool
   func startCapture(handler: @escaping @Sendable (VioletAudioFrame) -> Void) throws
   func stopCapture()
@@ -47,6 +48,8 @@ public final class SilentAudioIO: AudioIOPort {
   public func play(_ frame: VioletAudioFrame) {
     playedFrameCount += 1
   }
+
+  public func preparePlayback(format: VioletAudioFormat) {}
 
   public func startCapture(handler: @escaping @Sendable (VioletAudioFrame) -> Void) {
     isCapturing = true
@@ -96,13 +99,6 @@ public final class AVAudioEngineIO: AudioIOPort {
     }
 
     let input = engine.inputNode
-    do {
-      if !input.isVoiceProcessingEnabled {
-        try input.setVoiceProcessingEnabled(true)
-      }
-    } catch {
-      throw AudioIOError.voiceProcessingUnavailable
-    }
     let inputFormat = input.inputFormat(forBus: 0)
     guard
       inputFormat.sampleRate > 0,
@@ -185,14 +181,8 @@ public final class AVAudioEngineIO: AudioIOPort {
       Double(frameCount) / frame.format.sampleRate
     )
 
-    let requiresConnection = playbackFormat != frame.format
-    if requiresConnection {
-      if playbackFormat != nil {
-        player.stop()
-        engine.disconnectNodeOutput(player)
-      }
-      engine.connect(player, to: engine.mainMixerNode, format: format)
-      playbackFormat = frame.format
+    if playbackFormat != frame.format {
+      try preparePlayback(format: frame.format)
     }
     try startEngineIfNeeded()
     player.scheduleBuffer(buffer)
@@ -205,6 +195,31 @@ public final class AVAudioEngineIO: AudioIOPort {
     player.stop()
     playbackEndsAt = nil
     stopEngineIfIdle()
+  }
+
+  public func preparePlayback(format: VioletAudioFormat) throws {
+    guard !engine.isRunning else {
+      if playbackFormat == format {
+        return
+      }
+      throw AudioIOError.playbackFormatChangeWhileRunning
+    }
+    guard
+      format.channels == 1,
+      let audioFormat = AVAudioFormat(
+        commonFormat: .pcmFormatInt16,
+        sampleRate: format.sampleRate,
+        channels: format.channels,
+        interleaved: true
+      )
+    else {
+      throw AudioIOError.unsupportedOutputFormat
+    }
+    if playbackFormat != nil {
+      engine.disconnectNodeOutput(player)
+    }
+    engine.connect(player, to: engine.mainMixerNode, format: audioFormat)
+    playbackFormat = format
   }
 
   private func startEngineIfNeeded() throws {
@@ -222,9 +237,9 @@ public final class AVAudioEngineIO: AudioIOPort {
 
 public enum AudioIOError: Error, Equatable {
   case invalidAudioFrame
+  case playbackFormatChangeWhileRunning
   case unsupportedInputFormat
   case unsupportedOutputFormat
-  case voiceProcessingUnavailable
 }
 
 private func makeCaptureTapHandler(

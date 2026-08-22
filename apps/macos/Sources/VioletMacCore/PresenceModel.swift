@@ -44,6 +44,7 @@ public final class PresenceModel: ObservableObject {
   private let audioIO: any AudioIOPort
   private let client: any VioletCoreClientPort
   private let realtimeClient: (any RealtimeSessionClientPort)?
+  private var activeRealtimeResponseId: UUID?
   private var audioFrameContinuation: AsyncStream<VioletAudioFrame>.Continuation?
   private var audioOutputFormat: VioletAudioFormat?
   private var audioResponseMessageId: UUID?
@@ -51,6 +52,8 @@ public final class PresenceModel: ObservableObject {
   private var audioTask: Task<Void, Never>?
   private var audioTranscriptMessageId: UUID?
   private var chatTask: Task<Void, Never>?
+  private var ignoredRealtimeResponseIds = Set<UUID>()
+  private var localBargeInFrameCount = 0
   private var monitoringTask: Task<Void, Never>?
 
   public init(
@@ -182,6 +185,9 @@ public final class PresenceModel: ObservableObject {
     audioOutputFormat = nil
     audioResponseMessageId = nil
     audioTranscriptMessageId = nil
+    activeRealtimeResponseId = nil
+    ignoredRealtimeResponseIds.removeAll()
+    localBargeInFrameCount = 0
     audioState = .connecting
     audioTask = Task { [weak self, realtimeClient] in
       await realtimeClient.close()
@@ -214,11 +220,18 @@ public final class PresenceModel: ObservableObject {
           )
           return
         }
-        self.audioOutputFormat = VioletAudioFormat(
+        let outputFormat = VioletAudioFormat(
           sampleRate: Double(negotiatedOutput.sampleRate),
           channels: UInt32(negotiatedOutput.channels)
         )
-        guard await self.audioIO.requestCaptureAccess() else {
+        self.audioOutputFormat = outputFormat
+        try self.audioIO.preparePlayback(format: outputFormat)
+        let captureAccessGranted = await self.audioIO.requestCaptureAccess()
+        guard self.audioSessionId == sessionId else {
+          await realtimeClient.close()
+          return
+        }
+        guard captureAccessGranted else {
           await realtimeClient.close()
           guard self.audioSessionId == sessionId else {
             return
@@ -235,8 +248,11 @@ public final class PresenceModel: ObservableObject {
         )
         self.audioFrameContinuation = continuation
         let events = await realtimeClient.streamAudio(frames)
-        try self.audioIO.startCapture { frame in
+        try self.audioIO.startCapture { [weak self] frame in
           continuation.yield(frame)
+          Task { @MainActor [weak self] in
+            self?.observeLocalBargeIn(frame)
+          }
         }
         self.audioState = .listening
 
@@ -283,6 +299,9 @@ public final class PresenceModel: ObservableObject {
     audioIO.stopCapture()
     audioIO.stopPlayback()
     audioOutputFormat = nil
+    activeRealtimeResponseId = nil
+    ignoredRealtimeResponseIds.removeAll()
+    localBargeInFrameCount = 0
     audioState = .idle
     if let realtimeClient {
       Task {
@@ -295,8 +314,12 @@ public final class PresenceModel: ObservableObject {
     guard audioState == .processing || audioIO.isPlaying else {
       return
     }
+    if let activeRealtimeResponseId {
+      ignoredRealtimeResponseIds.insert(activeRealtimeResponseId)
+    }
     audioIO.stopPlayback()
     audioResponseMessageId = nil
+    localBargeInFrameCount = 0
     audioState = .listening
     if let realtimeClient {
       Task {
@@ -318,6 +341,7 @@ public final class PresenceModel: ObservableObject {
       audioIO.stopPlayback()
       audioResponseMessageId = nil
       audioTranscriptMessageId = nil
+      localBargeInFrameCount = 0
       audioState = .listening
     case .speechStopped:
       audioState = .processing
@@ -329,13 +353,17 @@ public final class PresenceModel: ObservableObject {
         audioTranscriptMessageId = message.id
         messages.append(message)
       }
-    case .responseStarted:
+    case .responseStarted(let responseId, _):
+      activeRealtimeResponseId = responseId
       if audioResponseMessageId == nil {
         let message = PresenceMessage(role: .assistant, text: "")
         audioResponseMessageId = message.id
         messages.append(message)
       }
-    case .responseText(_, let text, _):
+    case .responseText(let responseId, let text, _):
+      guard !ignoredRealtimeResponseIds.contains(responseId) else {
+        return
+      }
       if let audioResponseMessageId {
         append(text, to: audioResponseMessageId)
       } else {
@@ -343,7 +371,10 @@ public final class PresenceModel: ObservableObject {
         audioResponseMessageId = message.id
         messages.append(message)
       }
-    case .responseAudio(_, let audio, _):
+    case .responseAudio(let responseId, let audio, _):
+      guard !ignoredRealtimeResponseIds.contains(responseId) else {
+        return
+      }
       guard let audioOutputFormat else {
         throw RealtimeSessionClientError.invalidEvent
       }
@@ -359,11 +390,19 @@ public final class PresenceModel: ObservableObject {
         message: message,
         retryable: retryable
       )
-    case .responseCompleted:
+    case .responseCompleted(let responseId, _):
+      ignoredRealtimeResponseIds.remove(responseId)
+      if activeRealtimeResponseId == responseId {
+        activeRealtimeResponseId = nil
+      }
       audioResponseMessageId = nil
       audioTranscriptMessageId = nil
       audioState = .listening
-    case .responseCancelled:
+    case .responseCancelled(let responseId):
+      ignoredRealtimeResponseIds.remove(responseId)
+      if activeRealtimeResponseId == responseId {
+        activeRealtimeResponseId = nil
+      }
       audioResponseMessageId = nil
       audioState = .listening
     case .ready:
@@ -378,8 +417,32 @@ public final class PresenceModel: ObservableObject {
     audioFrameContinuation = nil
     audioSessionId = nil
     audioOutputFormat = nil
+    activeRealtimeResponseId = nil
+    ignoredRealtimeResponseIds.removeAll()
+    localBargeInFrameCount = 0
     audioTask = nil
     audioState = state
+  }
+
+  private func observeLocalBargeIn(_ frame: VioletAudioFrame) {
+    guard audioSessionId != nil, audioIO.isPlaying else {
+      localBargeInFrameCount = 0
+      return
+    }
+    let peak = frame.data.withUnsafeBytes { rawBuffer in
+      rawBuffer.bindMemory(to: Int16.self).reduce(0) { current, sample in
+        max(current, abs(Int(sample)))
+      }
+    }
+    if peak >= 1_500 {
+      localBargeInFrameCount += 1
+    } else {
+      localBargeInFrameCount = 0
+    }
+    guard localBargeInFrameCount >= 2 else {
+      return
+    }
+    interruptAudioResponse()
   }
 
   private func append(_ delta: String, to responseId: UUID) {

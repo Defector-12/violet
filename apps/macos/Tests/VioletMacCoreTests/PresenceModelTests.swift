@@ -165,6 +165,7 @@ struct PresenceModelTests {
     #expect(await realtime.receivedFrames() == [inputFrame])
     #expect(audio.captureAccessRequestCount == 1)
     #expect(audio.startCaptureCount == 1)
+    #expect(audio.preparedPlaybackFormats == [VioletAudioFormat(sampleRate: 24_000)])
     #expect(audio.playedFrames.map(\.data) == [outputAudio])
     #expect(audio.playedFrames.map(\.format) == [VioletAudioFormat(sampleRate: 24_000)])
     #expect(model.messages.map(\.text) == ["Hello Violet", "Hello"])
@@ -260,6 +261,44 @@ struct PresenceModelTests {
 
   @Test
   @MainActor
+  func localSpeechInterruptsPlaybackWithoutWaitingForServerVad() async throws {
+    let turnId = UUID()
+    let responseId = UUID()
+    let audio = FakeAudioIO()
+    let realtime = FakeRealtimeSessionClient(
+      capabilities: audioCapabilities,
+      events: [
+        .speechStarted(turnId: turnId),
+        .speechStopped(turnId: turnId),
+        .responseStarted(responseId: responseId, turnId: turnId),
+        .responseAudio(responseId: responseId, audio: Data([0, 0]), turnId: turnId),
+      ]
+    )
+    let model = PresenceModel(
+      client: FakeCoreClient(statusValue: .init(state: .ready, version: "test")),
+      audioIO: audio,
+      realtimeClient: realtime
+    )
+    let voicedFrame = VioletAudioFrame(
+      data: Data([0xD0, 0x07, 0xD0, 0x07]),
+      format: VioletAudioFormat(sampleRate: 16_000)
+    )
+    await model.refresh()
+    model.startAudioSession()
+    try await waitUntil { model.audioState == .processing && audio.isPlaying }
+
+    audio.emit(voicedFrame)
+    audio.emit(voicedFrame)
+    try await Task.sleep(for: .milliseconds(30))
+
+    #expect(model.audioState == .listening)
+    #expect(!audio.isPlaying)
+    #expect(await realtime.cancelResponseCount == 1)
+    model.cancelAudioSession()
+  }
+
+  @Test
+  @MainActor
   func refusesCaptureWhenNegotiatedAudioFormatIsUnsupported() async throws {
     let audio = FakeAudioIO()
     let realtime = FakeRealtimeSessionClient(
@@ -310,6 +349,27 @@ struct PresenceModelTests {
     #expect(model.audioState == .idle)
     #expect(!audio.isCapturing)
     #expect(audio.stopCaptureCount >= 1)
+  }
+
+  @Test
+  @MainActor
+  func cancellingWhileCaptureAccessIsPendingDoesNotStartCapture() async throws {
+    let audio = FakeAudioIO(captureAccessDelay: .milliseconds(100))
+    let realtime = FakeRealtimeSessionClient(capabilities: audioCapabilities)
+    let model = PresenceModel(
+      client: FakeCoreClient(statusValue: .init(state: .ready, version: "test")),
+      audioIO: audio,
+      realtimeClient: realtime
+    )
+    await model.refresh()
+    model.startAudioSession()
+    try await waitUntil { audio.captureAccessRequestCount == 1 }
+
+    model.cancelAudioSession()
+    try await Task.sleep(for: .milliseconds(120))
+
+    #expect(model.audioState == .idle)
+    #expect(audio.startCaptureCount == 0)
   }
 
   @Test
@@ -469,16 +529,22 @@ private struct FailingCoreClient: VioletCoreClientPort {
 private final class FakeAudioIO: AudioIOPort {
   private var captureHandler: (@Sendable (VioletAudioFrame) -> Void)?
   let captureAccessGranted: Bool
+  let captureAccessDelay: Duration?
   private(set) var captureAccessRequestCount = 0
   private(set) var isCapturing = false
   private(set) var isPlaying = false
   private(set) var playedFrames: [VioletAudioFrame] = []
+  private(set) var preparedPlaybackFormats: [VioletAudioFormat] = []
   private(set) var startCaptureCount = 0
   private(set) var stopCaptureCount = 0
   private(set) var stopPlaybackCount = 0
 
-  init(captureAccessGranted: Bool = true) {
+  init(
+    captureAccessGranted: Bool = true,
+    captureAccessDelay: Duration? = nil
+  ) {
     self.captureAccessGranted = captureAccessGranted
+    self.captureAccessDelay = captureAccessDelay
   }
 
   func emit(_ frame: VioletAudioFrame) {
@@ -494,8 +560,15 @@ private final class FakeAudioIO: AudioIOPort {
     playedFrames.append(frame)
   }
 
+  func preparePlayback(format: VioletAudioFormat) {
+    preparedPlaybackFormats.append(format)
+  }
+
   func requestCaptureAccess() async -> Bool {
     captureAccessRequestCount += 1
+    if let captureAccessDelay {
+      try? await Task.sleep(for: captureAccessDelay)
+    }
     return captureAccessGranted
   }
 
