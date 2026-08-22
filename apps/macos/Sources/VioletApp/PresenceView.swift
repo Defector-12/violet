@@ -149,9 +149,9 @@ struct PresenceView: View {
   private var audioButtonHelp: String {
     switch model.audioState {
     case .connecting, .processing:
-      "Cancel audio session"
+      "Stop voice conversation"
     case .listening:
-      "Stop listening"
+      "Stop voice conversation"
     case .failed, .idle, .unavailable:
       "Start audio session"
     }
@@ -179,7 +179,7 @@ struct PresenceView: View {
     case .listening:
       "Listening"
     case .processing:
-      "Responding"
+      "Responding · listening"
     }
   }
 

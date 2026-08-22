@@ -17,6 +17,7 @@
             "outputModalities",
             "runtimeKind",
             "transcription",
+            "turnDetection",
             "voiceKind"
           ],
           "properties": {
@@ -42,6 +43,10 @@
             "transcription": {
               "type": "boolean"
             },
+            "turnDetection": {
+              "type": "string",
+              "enum": ["manual", "server_vad", "smart_turn"]
+            },
             "voiceKind": {
               "type": "string",
               "enum": ["clone", "none", "parametric", "preset"]
@@ -59,6 +64,50 @@
         },
         "type": {
           "const": "session.ready"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["eventId", "sequence", "sessionId", "turnId", "type"],
+      "properties": {
+        "eventId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "sequence": {
+          "$ref": "#/$defs/sequence"
+        },
+        "sessionId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "turnId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "type": {
+          "const": "input.speech.started"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["eventId", "sequence", "sessionId", "turnId", "type"],
+      "properties": {
+        "eventId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "sequence": {
+          "$ref": "#/$defs/sequence"
+        },
+        "sessionId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "turnId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "type": {
+          "const": "input.speech.stopped"
         }
       }
     },

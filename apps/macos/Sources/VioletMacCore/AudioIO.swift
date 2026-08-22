@@ -90,6 +90,13 @@ public final class AVAudioEngineIO: AudioIOPort {
     }
 
     let input = engine.inputNode
+    do {
+      if !input.isVoiceProcessingEnabled {
+        try input.setVoiceProcessingEnabled(true)
+      }
+    } catch {
+      throw AudioIOError.voiceProcessingUnavailable
+    }
     let inputFormat = input.inputFormat(forBus: 0)
     guard
       inputFormat.sampleRate > 0,
@@ -205,6 +212,7 @@ public enum AudioIOError: Error, Equatable {
   case invalidAudioFrame
   case unsupportedInputFormat
   case unsupportedOutputFormat
+  case voiceProcessingUnavailable
 }
 
 private func makeCaptureTapHandler(

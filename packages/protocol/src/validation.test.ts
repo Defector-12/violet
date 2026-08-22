@@ -95,6 +95,7 @@ describe("protocol validation", () => {
           outputModalities: ["audio", "text"],
           runtimeKind: "integrated",
           transcription: true,
+          turnDetection: "smart_turn",
           voiceKind: "preset",
         },
         eventId: randomUUID(),
@@ -106,8 +107,17 @@ describe("protocol validation", () => {
     expect(() =>
       assertRealtimeServerEvent({
         eventId: randomUUID(),
-        responseId,
         sequence: 2,
+        sessionId,
+        turnId,
+        type: "input.speech.started",
+      }),
+    ).not.toThrow();
+    expect(() =>
+      assertRealtimeServerEvent({
+        eventId: randomUUID(),
+        responseId,
+        sequence: 3,
         sessionId,
         turnId,
         type: "response.completed",

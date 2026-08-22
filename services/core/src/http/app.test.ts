@@ -1,4 +1,9 @@
 import { randomUUID } from "node:crypto";
+import type {
+  RealtimeConversationInput,
+  RealtimeConversationOutput,
+  RealtimeConversationPort,
+} from "@violet/domain";
 import type { RealtimeServerEvent } from "@violet/protocol";
 import { VioletClient } from "@violet/sdk";
 import { afterEach, describe, expect, it } from "vitest";
@@ -147,6 +152,88 @@ describe("Core HTTP API", () => {
     socket.terminate();
   });
 
+  it("accepts cancellation while the provider output stream is still active", async () => {
+    const outputQueue = new TestRealtimeOutputQueue();
+    const receivedInputs: RealtimeConversationInput[] = [];
+    const realtimeConversationPort: RealtimeConversationPort = {
+      async open() {
+        return {
+          capabilities: {
+            inputModalities: ["text"],
+            interruption: true,
+            outputModalities: ["text"],
+            runtimeKind: "deterministic",
+            transcription: false,
+            turnDetection: "manual",
+            voiceKind: "none",
+          },
+          async close() {
+            outputQueue.close();
+          },
+          outputs: (signal) => outputQueue.events(signal),
+          async send(input) {
+            receivedInputs.push(input);
+            if (input.type === "text") {
+              outputQueue.push({
+                responseId: "00000000-0000-4000-8000-000000000001",
+                turnId: input.turnId,
+                type: "response-started",
+              });
+            }
+          },
+        };
+      },
+    };
+    const { app } = await startCore(false, realtimeConversationPort);
+    const socket = await app.injectWS("/v1/realtime", {
+      headers: { authorization: `Bearer ${deviceToken}` },
+    });
+    const sessionId = randomUUID();
+    const turnId = randomUUID();
+
+    const readyEvent = receiveEvents(socket, 1);
+    socket.send(
+      JSON.stringify({
+        configuration: {
+          inputModalities: ["text"],
+          outputModalities: ["text"],
+          protocolVersion: "1",
+        },
+        eventId: randomUUID(),
+        sequence: 1,
+        sessionId,
+        type: "session.configure",
+      }),
+    );
+    await readyEvent;
+
+    const responseStarted = receiveEvents(socket, 1);
+    socket.send(
+      JSON.stringify({
+        eventId: randomUUID(),
+        sequence: 2,
+        sessionId,
+        text: "Start",
+        turnId,
+        type: "input.text",
+      }),
+    );
+    await responseStarted;
+    socket.send(
+      JSON.stringify({
+        eventId: randomUUID(),
+        responseId: "00000000-0000-4000-8000-000000000001",
+        sequence: 3,
+        sessionId,
+        type: "response.cancel",
+      }),
+    );
+
+    await waitUntil(() => receivedInputs.some((input) => input.type === "cancel"));
+    expect(receivedInputs.map((input) => input.type)).toEqual(["text", "cancel"]);
+    socket.terminate();
+  });
+
   it("closes a realtime connection on unknown protocol events", async () => {
     const { app } = await startCore(false);
     const socket = await app.injectWS("/v1/realtime", {
@@ -174,7 +261,12 @@ describe("Core HTTP API", () => {
   });
 });
 
-async function startCore(sealed: boolean): Promise<{
+async function startCore(
+  sealed: boolean,
+  realtimeConversationPort: RealtimeConversationPort = new DeterministicRealtimeConversationPort({
+    generateId: randomUUID,
+  }),
+): Promise<{
   readonly app: ReturnType<typeof buildCoreApp>;
   readonly baseUrl: string;
   readonly client: VioletClient;
@@ -190,9 +282,7 @@ async function startCore(sealed: boolean): Promise<{
       ledger,
       modelGateway: new DeterministicModelGateway(),
     }),
-    realtimeConversationPort: new DeterministicRealtimeConversationPort({
-      generateId: randomUUID,
-    }),
+    realtimeConversationPort,
     realtimeLedger: ledger,
     sealed,
     version: "test",
@@ -205,6 +295,66 @@ async function startCore(sealed: boolean): Promise<{
     baseUrl,
     client: new VioletClient({ baseUrl, deviceToken }),
   };
+}
+
+class TestRealtimeOutputQueue {
+  readonly #values: RealtimeConversationOutput[] = [];
+  readonly #waiters: Array<(value: RealtimeConversationOutput | undefined) => void> = [];
+  #closed = false;
+
+  close(): void {
+    this.#closed = true;
+    for (const waiter of this.#waiters.splice(0)) {
+      waiter(undefined);
+    }
+  }
+
+  async *events(signal?: AbortSignal): AsyncIterable<RealtimeConversationOutput> {
+    while (!this.#closed && !signal?.aborted) {
+      const value = this.#values.shift() ?? (await this.#next(signal));
+      if (!value) {
+        return;
+      }
+      yield value;
+    }
+  }
+
+  push(value: RealtimeConversationOutput): void {
+    const waiter = this.#waiters.shift();
+    if (waiter) {
+      waiter(value);
+    } else {
+      this.#values.push(value);
+    }
+  }
+
+  #next(signal?: AbortSignal): Promise<RealtimeConversationOutput | undefined> {
+    return new Promise((resolve) => {
+      const waiter = (value: RealtimeConversationOutput | undefined) => {
+        signal?.removeEventListener("abort", onAbort);
+        resolve(value);
+      };
+      const onAbort = () => {
+        const index = this.#waiters.indexOf(waiter);
+        if (index >= 0) {
+          this.#waiters.splice(index, 1);
+        }
+        waiter(undefined);
+      };
+      this.#waiters.push(waiter);
+      signal?.addEventListener("abort", onAbort, { once: true });
+    });
+  }
+}
+
+async function waitUntil(condition: () => boolean): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (condition()) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error("Condition was not met");
 }
 
 function receiveEvents(socket: WebSocket, count: number): Promise<RealtimeServerEvent[]> {

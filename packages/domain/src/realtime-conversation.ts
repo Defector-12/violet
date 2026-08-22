@@ -1,5 +1,6 @@
 export type RealtimeModality = "audio" | "text";
 export type RealtimeRuntimeKind = "deterministic" | "integrated" | "pipeline";
+export type RealtimeTurnDetection = "manual" | "server_vad" | "smart_turn";
 export type RealtimeVoiceKind = "clone" | "none" | "parametric" | "preset";
 
 export interface RealtimeAudioFormat {
@@ -9,12 +10,19 @@ export interface RealtimeAudioFormat {
 }
 
 export interface RealtimeSessionConfiguration {
+  readonly history?: readonly RealtimeHistoryMessage[];
   readonly inputAudio?: RealtimeAudioFormat;
   readonly inputModalities: readonly RealtimeModality[];
   readonly language?: string;
   readonly outputAudio?: RealtimeAudioFormat;
   readonly outputModalities: readonly RealtimeModality[];
+  readonly turnDetection?: RealtimeTurnDetection;
   readonly voice?: string;
+}
+
+export interface RealtimeHistoryMessage {
+  readonly content: string;
+  readonly role: "assistant" | "user";
 }
 
 export interface RealtimeCapabilities {
@@ -25,6 +33,7 @@ export interface RealtimeCapabilities {
   readonly outputModalities: readonly RealtimeModality[];
   readonly runtimeKind: RealtimeRuntimeKind;
   readonly transcription: boolean;
+  readonly turnDetection: RealtimeTurnDetection;
   readonly voiceKind: RealtimeVoiceKind;
 }
 
@@ -49,6 +58,14 @@ export type RealtimeConversationInput =
     };
 
 export type RealtimeConversationOutput =
+  | {
+      readonly turnId: string;
+      readonly type: "speech-started";
+    }
+  | {
+      readonly turnId: string;
+      readonly type: "speech-stopped";
+    }
   | {
       readonly final: boolean;
       readonly text: string;
@@ -93,10 +110,8 @@ export type RealtimeConversationOutput =
 export interface RealtimeConversation {
   readonly capabilities: RealtimeCapabilities;
   close(): Promise<void>;
-  send(
-    input: RealtimeConversationInput,
-    signal?: AbortSignal,
-  ): AsyncIterable<RealtimeConversationOutput>;
+  outputs(signal?: AbortSignal): AsyncIterable<RealtimeConversationOutput>;
+  send(input: RealtimeConversationInput, signal?: AbortSignal): Promise<void>;
 }
 
 export interface RealtimeConversationPort {

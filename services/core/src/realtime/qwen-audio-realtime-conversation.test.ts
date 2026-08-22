@@ -65,6 +65,7 @@ describe("QwenAudioRealtimeConversationPort", () => {
       outputModalities: ["audio", "text"],
       runtimeKind: "integrated",
       transcription: true,
+      turnDetection: "manual",
       voiceKind: "preset",
     });
   });
@@ -116,21 +117,17 @@ describe("QwenAudioRealtimeConversationPort", () => {
     });
     const conversation = await port.open(configuration());
 
-    expect(
-      await collect(
-        conversation.send({
-          audio: Uint8Array.from([4, 5, 6, 7]),
-          turnId: "turn-1",
-          type: "audio",
-        }),
-      ),
-    ).toEqual([]);
-    const output = await collect(
-      conversation.send({
-        turnId: "turn-1",
-        type: "commit",
-      }),
-    );
+    await conversation.send({
+      audio: Uint8Array.from([4, 5, 6, 7]),
+      turnId: "turn-1",
+      type: "audio",
+    });
+    await conversation.send({
+      turnId: "turn-1",
+      type: "commit",
+    });
+    const outputPromise = take(conversation.outputs(), 6);
+    const output = await outputPromise;
 
     expect(transport.sent.slice(1)).toEqual([
       {
@@ -178,6 +175,107 @@ describe("QwenAudioRealtimeConversationPort", () => {
         type: "response-completed",
       },
     ]);
+  });
+
+  it("keeps a smart-turn session open, seeds history, and cancels on barge-in", async () => {
+    const transport = new FakeTransport([
+      { type: "session.created" },
+      { type: "session.updated" },
+      { type: "input_audio_buffer.speech_started" },
+      { type: "input_audio_buffer.speech_stopped" },
+      {
+        transcript: "First turn",
+        type: "conversation.item.input_audio_transcription.completed",
+      },
+      {
+        response: { id: "resp-qwen-1", status: "in_progress" },
+        type: "response.created",
+      },
+      {
+        delta: "First answer",
+        response_id: "resp-qwen-1",
+        type: "response.audio_transcript.delta",
+      },
+      {
+        delta: Buffer.from([1, 2]).toString("base64"),
+        response_id: "resp-qwen-1",
+        type: "response.audio.delta",
+      },
+      { type: "input_audio_buffer.speech_started" },
+      {
+        response: { id: "resp-qwen-1", status: "cancelled" },
+        type: "response.done",
+      },
+    ]);
+    let id = 0;
+    const port = new QwenAudioRealtimeConversationPort({
+      apiKey: "test-qwen-api-key",
+      createTransport: () => transport,
+      generateId: () => `id-${++id}`,
+      model: "qwen-audio-3.0-realtime-plus",
+      voice: "longanqian",
+      workspaceId: "ws-jvh4fvlcktrjvtbj",
+    });
+    const conversation = await port.open({
+      ...configuration(),
+      history: [
+        { content: "Earlier question", role: "user" },
+        { content: "Earlier answer", role: "assistant" },
+      ],
+      turnDetection: "smart_turn",
+    });
+    const outputPromise = take(conversation.outputs(), 8);
+
+    await conversation.send({
+      audio: Uint8Array.from([4, 5, 6, 7]),
+      turnId: "continuous-stream",
+      type: "audio",
+    });
+    const output = await outputPromise;
+
+    expect(conversation.capabilities).toMatchObject({
+      interruption: true,
+      turnDetection: "smart_turn",
+    });
+    expect(transport.sent[0]).toMatchObject({
+      session: {
+        turn_detection: { type: "smart_turn" },
+      },
+      type: "session.update",
+    });
+    expect(transport.sent.slice(1, 3)).toEqual([
+      {
+        item: {
+          content: [{ text: "Earlier question", type: "input_text" }],
+          role: "user",
+          type: "message",
+        },
+        type: "conversation.item.create",
+      },
+      {
+        item: {
+          content: [{ text: "Earlier answer", type: "output_text" }],
+          role: "assistant",
+          type: "message",
+        },
+        type: "conversation.item.create",
+      },
+    ]);
+    expect(output.map((event) => event.type)).toEqual([
+      "speech-started",
+      "speech-stopped",
+      "transcript",
+      "response-started",
+      "response-text",
+      "response-audio",
+      "speech-started",
+      "response-cancelled",
+    ]);
+    expect(output[0]).toMatchObject({ turnId: "id-1" });
+    expect(output[2]).toMatchObject({ text: "First turn", turnId: "id-1" });
+    expect(output[3]).toMatchObject({ responseId: "id-2", turnId: "id-1" });
+    expect(output[6]).toMatchObject({ turnId: "id-3" });
+    expect(transport.sent).toContainEqual({ type: "response.cancel" });
   });
 
   it("rejects an output format that Qwen cannot produce", async () => {
@@ -255,10 +353,13 @@ function configuration() {
   };
 }
 
-async function collect<T>(events: AsyncIterable<T>): Promise<T[]> {
+async function take<T>(events: AsyncIterable<T>, count: number): Promise<T[]> {
   const collected = [];
   for await (const event of events) {
     collected.push(event);
+    if (collected.length === count) {
+      break;
+    }
   }
   return collected;
 }

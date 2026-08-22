@@ -33,6 +33,10 @@
             "protocolVersion": {
               "const": "1"
             },
+            "turnDetection": {
+              "type": "string",
+              "enum": ["manual", "server_vad", "smart_turn"]
+            },
             "voice": {
               "type": "string",
               "minLength": 1,

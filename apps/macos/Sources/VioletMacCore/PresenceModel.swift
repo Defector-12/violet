@@ -155,9 +155,7 @@ public final class PresenceModel: ObservableObject {
     switch audioState {
     case .idle, .failed, .unavailable:
       startAudioSession()
-    case .listening:
-      finishAudioInput()
-    case .connecting, .processing:
+    case .connecting, .listening, .processing:
       cancelAudioSession()
     }
   }
@@ -269,13 +267,7 @@ public final class PresenceModel: ObservableObject {
   }
 
   public func finishAudioInput() {
-    guard case .listening = audioState else {
-      return
-    }
-    audioIO.stopCapture()
-    audioFrameContinuation?.finish()
-    audioFrameContinuation = nil
-    audioState = .processing
+    cancelAudioSession()
   }
 
   public func cancelAudioSession() {
@@ -304,6 +296,13 @@ public final class PresenceModel: ObservableObject {
 
   private func handleAudioEvent(_ event: RealtimeServerEvent) throws {
     switch event {
+    case .speechStarted:
+      audioIO.stopPlayback()
+      audioResponseMessageId = nil
+      audioTranscriptMessageId = nil
+      audioState = .listening
+    case .speechStopped:
+      audioState = .processing
     case .transcript(let text, _, _):
       if let audioTranscriptMessageId {
         replaceMessage(audioTranscriptMessageId, with: text)
@@ -342,13 +341,21 @@ public final class PresenceModel: ObservableObject {
         message: message,
         retryable: retryable
       )
-    case .ready, .responseCancelled, .responseCompleted:
+    case .responseCompleted:
+      audioResponseMessageId = nil
+      audioTranscriptMessageId = nil
+      audioState = .listening
+    case .responseCancelled:
+      audioResponseMessageId = nil
+      audioState = .listening
+    case .ready:
       break
     }
   }
 
   private func finishAudioSession(state: PresenceAudioState) {
     audioIO.stopCapture()
+    audioIO.stopPlayback()
     audioFrameContinuation?.finish()
     audioFrameContinuation = nil
     audioSessionId = nil

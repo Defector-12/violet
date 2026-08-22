@@ -24,6 +24,7 @@ public struct RealtimeCapabilities: Codable, Equatable, Sendable {
   public let outputModalities: [String]
   public let runtimeKind: String
   public let transcription: Bool
+  public let turnDetection: String?
   public let voiceKind: String
 
   public init(
@@ -34,6 +35,7 @@ public struct RealtimeCapabilities: Codable, Equatable, Sendable {
     outputModalities: [String],
     runtimeKind: String,
     transcription: Bool,
+    turnDetection: String? = nil,
     voiceKind: String
   ) {
     self.inputAudio = inputAudio
@@ -43,12 +45,15 @@ public struct RealtimeCapabilities: Codable, Equatable, Sendable {
     self.outputModalities = outputModalities
     self.runtimeKind = runtimeKind
     self.transcription = transcription
+    self.turnDetection = turnDetection
     self.voiceKind = voiceKind
   }
 }
 
 public enum RealtimeServerEvent: Equatable, Sendable {
   case ready(RealtimeCapabilities)
+  case speechStarted(turnId: UUID)
+  case speechStopped(turnId: UUID)
   case transcript(text: String, final: Bool, turnId: UUID)
   case responseStarted(responseId: UUID, turnId: UUID)
   case responseText(responseId: UUID, text: String, turnId: UUID)
@@ -138,7 +143,8 @@ public actor URLSessionRealtimeClient: RealtimeSessionClientPort {
             inputModalities: ["audio", "text"],
             outputAudio: .init(sampleRate: 24_000),
             outputModalities: ["audio", "text"],
-            protocolVersion: "1"
+            protocolVersion: "1",
+            turnDetection: "smart_turn"
           ),
           eventId: UUID(),
           sequence: nextClientSequence(),
@@ -230,7 +236,23 @@ public actor URLSessionRealtimeClient: RealtimeSessionClientPort {
       turnActive = false
     }
 
-    let turnId = UUID()
+    let streamId = UUID()
+    try await withThrowingTaskGroup(of: Void.self) { group in
+      group.addTask {
+        try await self.sendAudioFrames(frames, streamId: streamId)
+      }
+      group.addTask {
+        try await self.receiveAudioEvents(continuation)
+      }
+      try await group.next()
+      group.cancelAll()
+    }
+  }
+
+  private func sendAudioFrames(
+    _ frames: AsyncStream<VioletAudioFrame>,
+    streamId: UUID
+  ) async throws {
     for await frame in frames {
       try Task.checkCancellation()
       guard
@@ -245,48 +267,27 @@ public actor URLSessionRealtimeClient: RealtimeSessionClientPort {
           eventId: UUID(),
           sequence: nextClientSequence(),
           sessionId: sessionId,
-          turnId: turnId,
+          turnId: streamId,
           type: "input.audio"
         )
       )
     }
+  }
 
-    try Task.checkCancellation()
-    try await send(
-      CommitInputEvent(
-        eventId: UUID(),
-        sequence: nextClientSequence(),
-        sessionId: sessionId,
-        turnId: turnId,
-        type: "input.commit"
-      )
-    )
-
+  private func receiveAudioEvents(
+    _ continuation: AsyncThrowingStream<RealtimeServerEvent, Error>.Continuation
+  ) async throws {
     while !Task.isCancelled {
       let event = try await receive()
       switch event {
-      case .transcript(_, _, let responseTurnId),
-        .responseStarted(_, let responseTurnId),
-        .responseText(_, _, let responseTurnId),
-        .responseAudio(_, _, let responseTurnId):
-        guard responseTurnId == turnId else {
-          throw RealtimeSessionClientError.invalidEvent
-        }
-        if case .responseStarted(let responseId, _) = event {
-          activeResponseId = responseId
-        }
+      case .responseStarted(let responseId, _):
+        activeResponseId = responseId
         continuation.yield(event)
-      case .responseCompleted(_, let responseTurnId):
-        guard responseTurnId == turnId else {
-          throw RealtimeSessionClientError.invalidEvent
-        }
+      case .responseCompleted, .responseCancelled:
+        activeResponseId = nil
         continuation.yield(event)
-        continuation.finish()
-        return
-      case .responseCancelled:
+      case .speechStarted, .speechStopped, .transcript, .responseText, .responseAudio:
         continuation.yield(event)
-        continuation.finish()
-        return
       case .error(let code, let message, let retryable):
         throw RealtimeSessionClientError.server(
           code: code,
@@ -350,7 +351,8 @@ public actor URLSessionRealtimeClient: RealtimeSessionClientPort {
           message: message,
           retryable: retryable
         )
-      case .ready, .responseAudio, .responseCancelled, .transcript:
+      case .ready, .responseAudio, .responseCancelled, .speechStarted, .speechStopped,
+        .transcript:
         continue
       }
     }
@@ -423,6 +425,7 @@ private struct ConfigureEvent: Encodable {
     let outputAudio: RealtimeAudioFormatEvent
     let outputModalities: [String]
     let protocolVersion: String
+    let turnDetection: String
   }
 
   let configuration: Configuration
@@ -495,6 +498,10 @@ private struct TranscriptEvent: Decodable {
   let turnId: UUID
 }
 
+private struct TurnEvent: Decodable {
+  let turnId: UUID
+}
+
 private struct ResponseEvent: Decodable {
   let audio: String?
   let responseId: UUID
@@ -514,6 +521,10 @@ func decodeRealtimeServerEvent(_ data: Data) throws -> RealtimeServerEvent {
   switch envelope.type {
   case "session.ready":
     return .ready(try decoder.decode(ReadyEvent.self, from: data).capabilities)
+  case "input.speech.started":
+    return .speechStarted(turnId: try decoder.decode(TurnEvent.self, from: data).turnId)
+  case "input.speech.stopped":
+    return .speechStopped(turnId: try decoder.decode(TurnEvent.self, from: data).turnId)
   case "input.transcript":
     let event = try decoder.decode(TranscriptEvent.self, from: data)
     return .transcript(text: event.text, final: event.final, turnId: event.turnId)

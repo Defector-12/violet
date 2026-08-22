@@ -23,8 +23,10 @@ export type {
   RealtimeConversationInput,
   RealtimeConversationOutput,
   RealtimeConversationPort,
+  RealtimeHistoryMessage,
   RealtimeModality,
   RealtimeRuntimeKind,
   RealtimeSessionConfiguration,
+  RealtimeTurnDetection,
   RealtimeVoiceKind,
 } from "./realtime-conversation.js";

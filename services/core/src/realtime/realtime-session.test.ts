@@ -23,7 +23,8 @@ describe("RealtimeSession", () => {
         type: "session.configure",
       }),
     );
-    const response = await collect(
+    const responsePromise = take(session.outputs(), 3);
+    const immediate = await collect(
       session.handle({
         eventId: randomUUID(),
         sequence: 2,
@@ -33,6 +34,7 @@ describe("RealtimeSession", () => {
         type: "input.text",
       }),
     );
+    const response = await responsePromise;
 
     expect(ready).toMatchObject([
       {
@@ -51,6 +53,7 @@ describe("RealtimeSession", () => {
       [3, "response.text"],
       [4, "response.completed"],
     ]);
+    expect(immediate).toEqual([]);
     await expect(ledger.list()).resolves.toMatchObject([
       {
         content: "Hello",
@@ -86,10 +89,12 @@ describe("RealtimeSession", () => {
               outputModalities: ["audio", "text"],
               runtimeKind: "integrated",
               transcription: true,
+              turnDetection: "smart_turn",
               voiceKind: "preset",
             } as const,
             async close() {},
-            async *send() {},
+            async *outputs() {},
+            async send() {},
           };
         },
       },
@@ -125,8 +130,66 @@ describe("RealtimeSession", () => {
       capabilities: {
         inputAudio: { sampleRate: 16000 },
         outputAudio: { sampleRate: 24000 },
+        turnDetection: "smart_turn",
       },
       type: "session.ready",
+    });
+  });
+
+  it("seeds a new realtime runtime with recent ledger history", async () => {
+    const sessionId = randomUUID();
+    const ledger = new InMemoryConversationLedger();
+    await ledger.append({
+      content: "Earlier question",
+      id: randomUUID(),
+      occurredAt: new Date("2026-08-22T00:00:00.000Z"),
+      requestId: randomUUID(),
+      role: "user",
+    });
+    await ledger.append({
+      content: "Earlier answer",
+      id: randomUUID(),
+      occurredAt: new Date("2026-08-22T00:00:01.000Z"),
+      requestId: randomUUID(),
+      role: "assistant",
+    });
+    let observedConfiguration: Parameters<DeterministicRealtimeConversationPort["open"]>[0] | null =
+      null;
+    const deterministic = new DeterministicRealtimeConversationPort({
+      generateId: randomUUID,
+    });
+    const session = new RealtimeSession({
+      conversationPort: {
+        async open(configuration, signal) {
+          observedConfiguration = configuration;
+          return deterministic.open(configuration, signal);
+        },
+      },
+      generateId: randomUUID,
+      ledger,
+    });
+
+    await collect(
+      session.handle({
+        configuration: {
+          inputModalities: ["audio", "text"],
+          outputModalities: ["audio", "text"],
+          protocolVersion: "1",
+          turnDetection: "smart_turn",
+        },
+        eventId: randomUUID(),
+        sequence: 1,
+        sessionId,
+        type: "session.configure",
+      }),
+    );
+
+    expect(observedConfiguration).toMatchObject({
+      history: [
+        { content: "Earlier question", role: "user" },
+        { content: "Earlier answer", role: "assistant" },
+      ],
+      turnDetection: "smart_turn",
     });
   });
 
@@ -168,6 +231,7 @@ describe("RealtimeSession", () => {
       }),
     );
     const acceptedEventId = randomUUID();
+    const responsePromise = take(session.outputs(), 3);
     const accepted = await collect(
       session.handle({
         eventId: acceptedEventId,
@@ -178,6 +242,7 @@ describe("RealtimeSession", () => {
         type: "input.text",
       }),
     );
+    const response = await responsePromise;
     const duplicate = await collect(
       session.handle({
         eventId: acceptedEventId,
@@ -197,7 +262,8 @@ describe("RealtimeSession", () => {
       code: "SESSION_ID_MISMATCH",
       type: "error",
     });
-    expect(accepted.map((event) => event.type)).toEqual([
+    expect(accepted).toEqual([]);
+    expect(response.map((event) => event.type)).toEqual([
       "response.started",
       "response.text",
       "response.completed",
@@ -275,6 +341,17 @@ async function collect<T>(events: AsyncIterable<T>): Promise<T[]> {
   const collected = [];
   for await (const event of events) {
     collected.push(event);
+  }
+  return collected;
+}
+
+async function take<T>(events: AsyncIterable<T>, count: number): Promise<T[]> {
+  const collected = [];
+  for await (const event of events) {
+    collected.push(event);
+    if (collected.length === count) {
+      break;
+    }
   }
   return collected;
 }

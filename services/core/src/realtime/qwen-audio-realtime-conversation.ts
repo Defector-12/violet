@@ -67,6 +67,7 @@ export class QwenAudioRealtimeConversationPort implements RealtimeConversationPo
     signal?: AbortSignal,
   ): Promise<RealtimeConversation> {
     validateConfiguration(configuration, this.#voice);
+    const turnDetection = configuration.turnDetection ?? "manual";
     const url = qwenRealtimeUrl(this.#workspaceId, this.#model);
     const transport = this.#createTransport(url, {
       Authorization: `Bearer ${this.#apiKey}`,
@@ -86,13 +87,33 @@ export class QwenAudioRealtimeConversationPort implements RealtimeConversationPo
           max_history_turns: 20,
           modalities: ["audio", "text"],
           output_audio_format: "pcm",
-          turn_detection: null,
+          turn_detection:
+            turnDetection === "manual"
+              ? null
+              : {
+                  type: turnDetection,
+                },
           voice: this.#voice,
         },
         type: "session.update",
       });
       await waitForEvent(transport, "session.updated", setup.signal);
-      return new QwenAudioRealtimeConversation(transport, this.#generateId);
+      for (const message of configuration.history ?? []) {
+        await transport.send({
+          item: {
+            content: [
+              {
+                text: message.content,
+                type: message.role === "user" ? "input_text" : "output_text",
+              },
+            ],
+            role: message.role,
+            type: "message",
+          },
+          type: "conversation.item.create",
+        });
+      }
+      return new QwenAudioRealtimeConversation(transport, this.#generateId, turnDetection);
     } catch (error) {
       transport.close();
       throw error;
@@ -103,27 +124,37 @@ export class QwenAudioRealtimeConversationPort implements RealtimeConversationPo
 }
 
 class QwenAudioRealtimeConversation implements RealtimeConversation {
-  readonly capabilities: RealtimeCapabilities = {
-    inputAudio,
-    inputModalities: ["audio", "text"],
-    interruption: false,
-    outputAudio,
-    outputModalities: ["audio", "text"],
-    runtimeKind: "integrated",
-    transcription: true,
-    voiceKind: "preset",
-  };
+  readonly capabilities: RealtimeCapabilities;
   readonly #generateId: () => string;
   readonly #localResponseIds = new Map<string, string>();
   readonly #providerResponseIds = new Map<string, string>();
-  readonly #startedResponses = new Set<string>();
   readonly #transport: QwenRealtimeTransport;
+  readonly #turnDetection: "manual" | "server_vad" | "smart_turn";
+  readonly #turnIdsByProviderResponse = new Map<string, string>();
+  #activeProviderResponseId: string | null = null;
   #closed = false;
+  #currentTurnId: string | null = null;
   #pendingAudioTurnId: string | null = null;
 
-  constructor(transport: QwenRealtimeTransport, generateId: () => string) {
+  constructor(
+    transport: QwenRealtimeTransport,
+    generateId: () => string,
+    turnDetection: "manual" | "server_vad" | "smart_turn",
+  ) {
+    this.capabilities = {
+      inputAudio,
+      inputModalities: ["audio", "text"],
+      interruption: turnDetection !== "manual",
+      outputAudio,
+      outputModalities: ["audio", "text"],
+      runtimeKind: "integrated",
+      transcription: true,
+      turnDetection,
+      voiceKind: "preset",
+    };
     this.#transport = transport;
     this.#generateId = generateId;
+    this.#turnDetection = turnDetection;
   }
 
   async close(): Promise<void> {
@@ -134,107 +165,127 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
     this.#transport.close();
     this.#localResponseIds.clear();
     this.#providerResponseIds.clear();
-    this.#startedResponses.clear();
+    this.#turnIdsByProviderResponse.clear();
+    this.#activeProviderResponseId = null;
+    this.#currentTurnId = null;
     this.#pendingAudioTurnId = null;
   }
 
-  async *send(
-    input: RealtimeConversationInput,
-    signal?: AbortSignal,
-  ): AsyncIterable<RealtimeConversationOutput> {
-    if (this.#closed) {
-      yield adapterError("QWEN_REALTIME_CLOSED", "The Qwen realtime session is closed", false);
-      return;
-    }
-
-    try {
-      signal?.throwIfAborted();
-      switch (input.type) {
-        case "audio":
-          yield* this.#appendAudio(input);
-          break;
-        case "commit":
-          yield* this.#commitAudio(input.turnId, signal);
-          break;
-        case "text":
-          yield* this.#sendText(input.text, input.turnId, signal);
-          break;
-        case "cancel":
-          yield* this.#cancelResponse(input.responseId, signal);
-          break;
-      }
-    } catch (error) {
-      if (signal?.aborted) {
+  async *outputs(signal?: AbortSignal): AsyncIterable<RealtimeConversationOutput> {
+    while (!this.#closed) {
+      try {
+        const event = providerEvent(await this.#transport.receive(signal));
+        const output = await this.#mapProviderEvent(event);
+        if (output) {
+          yield output;
+        }
+      } catch (error) {
+        if (signal?.aborted || this.#closed) {
+          return;
+        }
+        if (error instanceof QwenAdapterError) {
+          yield adapterError(error.code, error.message, error.retryable);
+        } else {
+          yield adapterError(
+            "QWEN_REALTIME_TRANSPORT_ERROR",
+            "The Qwen realtime connection failed",
+            true,
+          );
+        }
         return;
       }
-      if (error instanceof QwenAdapterError) {
-        yield adapterError(error.code, error.message, error.retryable);
-        return;
-      }
-      yield adapterError(
-        "QWEN_REALTIME_TRANSPORT_ERROR",
-        "The Qwen realtime connection failed",
-        true,
-      );
     }
   }
 
-  async *#appendAudio(
-    input: Extract<RealtimeConversationInput, { readonly type: "audio" }>,
-  ): AsyncIterable<RealtimeConversationOutput> {
-    if (input.audio.length === 0) {
-      yield adapterError("INVALID_AUDIO_FRAME", "Realtime audio frames must not be empty", false);
-      return;
+  async send(input: RealtimeConversationInput, signal?: AbortSignal): Promise<void> {
+    if (this.#closed) {
+      throw new QwenAdapterError(
+        "QWEN_REALTIME_CLOSED",
+        "The Qwen realtime session is closed",
+        false,
+      );
     }
-    if (this.#pendingAudioTurnId && this.#pendingAudioTurnId !== input.turnId) {
-      yield adapterError(
+
+    signal?.throwIfAborted();
+    switch (input.type) {
+      case "audio":
+        await this.#appendAudio(input);
+        break;
+      case "commit":
+        await this.#commitAudio(input.turnId);
+        break;
+      case "text":
+        await this.#sendText(input.text, input.turnId);
+        break;
+      case "cancel":
+        await this.#cancelResponse(input.responseId);
+        break;
+    }
+  }
+
+  async #appendAudio(
+    input: Extract<RealtimeConversationInput, { readonly type: "audio" }>,
+  ): Promise<void> {
+    if (input.audio.length === 0) {
+      throw new QwenAdapterError(
+        "INVALID_AUDIO_FRAME",
+        "Realtime audio frames must not be empty",
+        false,
+      );
+    }
+    if (
+      this.#turnDetection === "manual" &&
+      this.#pendingAudioTurnId &&
+      this.#pendingAudioTurnId !== input.turnId
+    ) {
+      throw new QwenAdapterError(
         "AUDIO_TURN_MISMATCH",
         "Finish the current audio turn before starting another",
         false,
       );
-      return;
     }
 
-    this.#pendingAudioTurnId = input.turnId;
+    if (this.#turnDetection === "manual") {
+      this.#pendingAudioTurnId = input.turnId;
+    }
     await this.#transport.send({
       audio: Buffer.from(input.audio).toString("base64"),
       type: "input_audio_buffer.append",
     });
   }
 
-  async *#commitAudio(
-    turnId: string,
-    signal?: AbortSignal,
-  ): AsyncIterable<RealtimeConversationOutput> {
+  async #commitAudio(turnId: string): Promise<void> {
+    if (this.#turnDetection !== "manual") {
+      throw new QwenAdapterError(
+        "AUTOMATIC_TURN_DETECTION",
+        "Audio commit is not valid when automatic turn detection is enabled",
+        false,
+      );
+    }
     if (this.#pendingAudioTurnId !== turnId) {
-      yield adapterError(
+      throw new QwenAdapterError(
         "AUDIO_TURN_MISMATCH",
         "The committed audio turn does not match the buffered audio",
         false,
       );
-      return;
     }
 
     this.#pendingAudioTurnId = null;
+    this.#currentTurnId = turnId;
     await this.#transport.send({ type: "input_audio_buffer.commit" });
     await this.#transport.send({ type: "response.create" });
-    yield* this.#streamResponse(turnId, signal);
   }
 
-  async *#sendText(
-    text: string,
-    turnId: string,
-    signal?: AbortSignal,
-  ): AsyncIterable<RealtimeConversationOutput> {
+  async #sendText(text: string, turnId: string): Promise<void> {
     if (this.#pendingAudioTurnId) {
-      yield adapterError(
+      throw new QwenAdapterError(
         "AUDIO_TURN_IN_PROGRESS",
         "Commit or close the buffered audio turn before sending text",
         false,
       );
-      return;
     }
 
+    this.#currentTurnId = turnId;
     await this.#transport.send({
       item: {
         content: [{ text, type: "input_text" }],
@@ -244,174 +295,175 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
       type: "conversation.item.create",
     });
     await this.#transport.send({ type: "response.create" });
-    yield* this.#streamResponse(turnId, signal);
   }
 
-  async *#cancelResponse(
-    localResponseId: string,
-    signal?: AbortSignal,
-  ): AsyncIterable<RealtimeConversationOutput> {
+  async #cancelResponse(localResponseId: string): Promise<void> {
     const providerResponseId = this.#providerResponseIds.get(localResponseId);
     if (!providerResponseId) {
-      yield adapterError(
+      throw new QwenAdapterError(
         "UNKNOWN_RESPONSE",
         "The Qwen response is not active in this session",
         false,
       );
-      return;
     }
 
     await this.#transport.send({ type: "response.cancel" });
-    while (true) {
-      const event = providerEvent(await this.#transport.receive(signal));
-      if (event.type === "error") {
-        yield providerErrorOutput(event);
-        return;
+  }
+
+  async #mapProviderEvent(
+    event: Readonly<Record<string, unknown>> & { readonly type: string },
+  ): Promise<RealtimeConversationOutput | undefined> {
+    if (event.type === "error") {
+      return providerErrorOutput(event);
+    }
+    if (event.type === "input_audio_buffer.speech_started") {
+      if (this.#activeProviderResponseId) {
+        await this.#transport.send({ type: "response.cancel" });
       }
-      if (event.type !== "response.done") {
-        continue;
+      this.#currentTurnId = this.#generateId();
+      return {
+        turnId: this.#currentTurnId,
+        type: "speech-started",
+      };
+    }
+    if (event.type === "input_audio_buffer.speech_stopped") {
+      return {
+        turnId: this.#currentTurnId ?? this.#newTurnId(),
+        type: "speech-stopped",
+      };
+    }
+    if (event.type === "conversation.item.input_audio_transcription.delta") {
+      const text = string(event["text"]);
+      const stash = string(event["stash"]);
+      const transcript = `${text ?? ""}${stash ?? ""}`;
+      return transcript
+        ? {
+            final: false,
+            text: transcript,
+            turnId: this.#currentTurnId ?? this.#newTurnId(),
+            type: "transcript",
+          }
+        : undefined;
+    }
+    if (event.type === "conversation.item.input_audio_transcription.completed") {
+      const transcript = string(event["transcript"]);
+      return transcript
+        ? {
+            final: true,
+            text: transcript,
+            turnId: this.#currentTurnId ?? this.#newTurnId(),
+            type: "transcript",
+          }
+        : undefined;
+    }
+    if (event.type === "conversation.item.input_audio_transcription.failed") {
+      return providerErrorOutput(event);
+    }
+
+    const providerResponseId = responseId(event);
+    if (!providerResponseId) {
+      return undefined;
+    }
+    const context = this.#responseContext(providerResponseId);
+    if (event.type === "response.created") {
+      this.#activeProviderResponseId = providerResponseId;
+      return {
+        responseId: context.localResponseId,
+        turnId: context.turnId,
+        type: "response-started",
+      };
+    }
+    if (event.type === "response.text.delta" || event.type === "response.audio_transcript.delta") {
+      const delta = string(event["delta"]);
+      return delta
+        ? {
+            responseId: context.localResponseId,
+            text: delta,
+            turnId: context.turnId,
+            type: "response-text",
+          }
+        : undefined;
+    }
+    if (event.type === "response.audio.delta") {
+      const delta = string(event["delta"]);
+      if (!delta) {
+        throw new QwenAdapterError(
+          "INVALID_PROVIDER_EVENT",
+          "Qwen returned an invalid audio event",
+          false,
+        );
       }
-      const response = record(event["response"]);
-      if (string(response?.["id"]) !== providerResponseId) {
-        continue;
-      }
-      this.#forgetResponse(providerResponseId, localResponseId);
-      yield {
-        responseId: localResponseId,
+      return {
+        audio: decodeBase64(delta),
+        responseId: context.localResponseId,
+        turnId: context.turnId,
+        type: "response-audio",
+      };
+    }
+    if (event.type !== "response.done") {
+      return undefined;
+    }
+
+    const response = record(event["response"]);
+    const status = string(response?.["status"]);
+    this.#forgetResponse(providerResponseId, context.localResponseId);
+    if (status === "cancelled") {
+      return {
+        responseId: context.localResponseId,
         type: "response-cancelled",
       };
-      return;
     }
+    if (status && status !== "completed") {
+      return adapterError(
+        "QWEN_RESPONSE_FAILED",
+        "Qwen could not complete the realtime response",
+        status === "failed",
+      );
+    }
+
+    const usage = record(response?.["usage"]);
+    return {
+      inputTokens: nonNegativeInteger(usage?.["input_tokens"]),
+      outputTokens: nonNegativeInteger(usage?.["output_tokens"]),
+      responseId: context.localResponseId,
+      turnId: context.turnId,
+      type: "response-completed",
+    };
   }
 
-  async *#streamResponse(
-    turnId: string,
-    signal?: AbortSignal,
-  ): AsyncIterable<RealtimeConversationOutput> {
-    while (true) {
-      const event = providerEvent(await this.#transport.receive(signal));
+  #newTurnId(): string {
+    const turnId = this.#generateId();
+    this.#currentTurnId = turnId;
+    return turnId;
+  }
 
-      if (event.type === "error") {
-        yield providerErrorOutput(event);
-        return;
-      }
-      if (event.type === "conversation.item.input_audio_transcription.delta") {
-        const text = string(event["text"]);
-        const stash = string(event["stash"]);
-        const transcript = `${text ?? ""}${stash ?? ""}`;
-        if (transcript) {
-          yield { final: false, text: transcript, turnId, type: "transcript" };
-        }
-        continue;
-      }
-      if (event.type === "conversation.item.input_audio_transcription.completed") {
-        const transcript = string(event["transcript"]);
-        if (transcript) {
-          yield { final: true, text: transcript, turnId, type: "transcript" };
-        }
-        continue;
-      }
-      if (event.type === "conversation.item.input_audio_transcription.failed") {
-        yield providerErrorOutput(event);
-        return;
-      }
-
-      const providerResponseId = responseId(event);
-      if (!providerResponseId) {
-        continue;
-      }
-      const localResponseId = this.#localResponseId(providerResponseId);
-      if (!this.#startedResponses.has(providerResponseId)) {
-        this.#startedResponses.add(providerResponseId);
-        yield {
-          responseId: localResponseId,
-          turnId,
-          type: "response-started",
-        };
-      }
-
-      if (
-        event.type === "response.text.delta" ||
-        event.type === "response.audio_transcript.delta"
-      ) {
-        const delta = string(event["delta"]);
-        if (delta) {
-          yield {
-            responseId: localResponseId,
-            text: delta,
-            turnId,
-            type: "response-text",
-          };
-        }
-        continue;
-      }
-      if (event.type === "response.audio.delta") {
-        const delta = string(event["delta"]);
-        if (!delta) {
-          throw new QwenAdapterError(
-            "INVALID_PROVIDER_EVENT",
-            "Qwen returned an invalid audio event",
-            false,
-          );
-        }
-        yield {
-          audio: decodeBase64(delta),
-          responseId: localResponseId,
-          turnId,
-          type: "response-audio",
-        };
-        continue;
-      }
-      if (event.type !== "response.done") {
-        continue;
-      }
-
-      const response = record(event["response"]);
-      const status = string(response?.["status"]);
-      this.#forgetResponse(providerResponseId, localResponseId);
-      if (status === "cancelled") {
-        yield {
-          responseId: localResponseId,
-          type: "response-cancelled",
-        };
-        return;
-      }
-      if (status && status !== "completed") {
-        yield adapterError(
-          "QWEN_RESPONSE_FAILED",
-          "Qwen could not complete the realtime response",
-          status === "failed",
-        );
-        return;
-      }
-
-      const usage = record(response?.["usage"]);
-      yield {
-        inputTokens: nonNegativeInteger(usage?.["input_tokens"]),
-        outputTokens: nonNegativeInteger(usage?.["output_tokens"]),
-        responseId: localResponseId,
-        turnId,
-        type: "response-completed",
+  #responseContext(providerResponseId: string): {
+    readonly localResponseId: string;
+    readonly turnId: string;
+  } {
+    const existingResponseId = this.#localResponseIds.get(providerResponseId);
+    const existingTurnId = this.#turnIdsByProviderResponse.get(providerResponseId);
+    if (existingResponseId && existingTurnId) {
+      return {
+        localResponseId: existingResponseId,
+        turnId: existingTurnId,
       };
-      return;
-    }
-  }
-
-  #localResponseId(providerResponseId: string): string {
-    const existing = this.#localResponseIds.get(providerResponseId);
-    if (existing) {
-      return existing;
     }
     const localResponseId = this.#generateId();
+    const turnId = this.#currentTurnId ?? this.#newTurnId();
     this.#localResponseIds.set(providerResponseId, localResponseId);
     this.#providerResponseIds.set(localResponseId, providerResponseId);
-    return localResponseId;
+    this.#turnIdsByProviderResponse.set(providerResponseId, turnId);
+    return { localResponseId, turnId };
   }
 
   #forgetResponse(providerResponseId: string, localResponseId: string): void {
     this.#localResponseIds.delete(providerResponseId);
     this.#providerResponseIds.delete(localResponseId);
-    this.#startedResponses.delete(providerResponseId);
+    this.#turnIdsByProviderResponse.delete(providerResponseId);
+    if (this.#activeProviderResponseId === providerResponseId) {
+      this.#activeProviderResponseId = null;
+    }
   }
 }
 

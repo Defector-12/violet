@@ -189,6 +189,8 @@ export interface components {
                 outputModalities: components["schemas"]["modalities"];
                 /** @constant */
                 protocolVersion: "1";
+                /** @enum {string} */
+                turnDetection?: "manual" | "server_vad" | "smart_turn";
                 voice?: string;
             };
             eventId: components["schemas"]["uuid"];
@@ -268,6 +270,8 @@ export interface components {
                 runtimeKind: "deterministic" | "integrated" | "pipeline";
                 transcription: boolean;
                 /** @enum {string} */
+                turnDetection: "manual" | "server_vad" | "smart_turn";
+                /** @enum {string} */
                 voiceKind: "clone" | "none" | "parametric" | "preset";
             };
             eventId: components["schemas"]["uuid"];
@@ -275,6 +279,20 @@ export interface components {
             sessionId: components["schemas"]["uuid"];
             /** @constant */
             type: "session.ready";
+        } | {
+            eventId: components["schemas"]["uuid"];
+            sequence: components["schemas"]["sequence"];
+            sessionId: components["schemas"]["uuid"];
+            turnId: components["schemas"]["uuid"];
+            /** @constant */
+            type: "input.speech.started";
+        } | {
+            eventId: components["schemas"]["uuid"];
+            sequence: components["schemas"]["sequence"];
+            sessionId: components["schemas"]["uuid"];
+            turnId: components["schemas"]["uuid"];
+            /** @constant */
+            type: "input.speech.stopped";
         } | {
             eventId: components["schemas"]["uuid"];
             final: boolean;
