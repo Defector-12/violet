@@ -24,6 +24,7 @@ public struct VioletAudioFrame: Equatable, Sendable {
 @MainActor
 public protocol AudioIOPort: AnyObject {
   var isCapturing: Bool { get }
+  var isPlaying: Bool { get }
   func play(_ frame: VioletAudioFrame) throws
   func requestCaptureAccess() async -> Bool
   func startCapture(handler: @escaping @Sendable (VioletAudioFrame) -> Void) throws
@@ -34,6 +35,7 @@ public protocol AudioIOPort: AnyObject {
 @MainActor
 public final class SilentAudioIO: AudioIOPort {
   public private(set) var isCapturing = false
+  public var isPlaying: Bool { false }
   public private(set) var playedFrameCount = 0
 
   public init() {}
@@ -60,9 +62,13 @@ public final class SilentAudioIO: AudioIOPort {
 @MainActor
 public final class AVAudioEngineIO: AudioIOPort {
   public private(set) var isCapturing = false
+  public var isPlaying: Bool {
+    playbackEndsAt.map { $0 > Date() } ?? false
+  }
 
   private let engine = AVAudioEngine()
   private let player = AVAudioPlayerNode()
+  private var playbackEndsAt: Date?
   private var playbackFormat: VioletAudioFormat?
 
   public init() {
@@ -173,6 +179,11 @@ public final class AVAudioEngineIO: AudioIOPort {
     }
     frame.data.copyBytes(
       to: destination.assumingMemoryBound(to: UInt8.self), count: frame.data.count)
+    let now = Date()
+    let playbackStart = max(playbackEndsAt ?? now, now)
+    playbackEndsAt = playbackStart.addingTimeInterval(
+      Double(frameCount) / frame.format.sampleRate
+    )
 
     let requiresConnection = playbackFormat != frame.format
     if requiresConnection {
@@ -192,6 +203,7 @@ public final class AVAudioEngineIO: AudioIOPort {
 
   public func stopPlayback() {
     player.stop()
+    playbackEndsAt = nil
     stopEngineIfIdle()
   }
 

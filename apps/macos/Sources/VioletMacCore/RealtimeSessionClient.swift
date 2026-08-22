@@ -90,6 +90,7 @@ public enum RealtimeSessionClientError: Error, Equatable, LocalizedError {
 }
 
 public protocol RealtimeSessionClientPort: Sendable {
+  func cancelResponse() async
   func close() async
   func connect() async throws -> RealtimeCapabilities
   func streamAudio(
@@ -218,6 +219,10 @@ public actor URLSessionRealtimeClient: RealtimeSessionClientPort {
     self.socket = nil
     activeResponseId = nil
     turnActive = false
+  }
+
+  public func cancelResponse() async {
+    await cancelActiveResponse()
   }
 
   private func performAudioTurn(

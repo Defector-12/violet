@@ -155,7 +155,11 @@ public final class PresenceModel: ObservableObject {
     switch audioState {
     case .idle, .failed, .unavailable:
       startAudioSession()
-    case .connecting, .listening, .processing:
+    case .processing:
+      interruptAudioResponse()
+    case .listening where audioIO.isPlaying:
+      interruptAudioResponse()
+    case .connecting, .listening:
       cancelAudioSession()
     }
   }
@@ -283,6 +287,20 @@ public final class PresenceModel: ObservableObject {
     if let realtimeClient {
       Task {
         await realtimeClient.close()
+      }
+    }
+  }
+
+  public func interruptAudioResponse() {
+    guard audioState == .processing || audioIO.isPlaying else {
+      return
+    }
+    audioIO.stopPlayback()
+    audioResponseMessageId = nil
+    audioState = .listening
+    if let realtimeClient {
+      Task {
+        await realtimeClient.cancelResponse()
       }
     }
   }

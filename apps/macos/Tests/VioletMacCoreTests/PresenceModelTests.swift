@@ -170,6 +170,7 @@ struct PresenceModelTests {
     #expect(model.messages.map(\.text) == ["Hello Violet", "Hello"])
     #expect(model.audioState == .listening)
 
+    audio.finishPlayback()
     model.toggleAudioSession()
     #expect(model.audioState == .idle)
     #expect(audio.stopCaptureCount >= 1)
@@ -221,6 +222,39 @@ struct PresenceModelTests {
     ])
     #expect(model.audioState == .listening)
 
+    model.cancelAudioSession()
+  }
+
+  @Test
+  @MainActor
+  func clickingDuringAResponseInterruptsWithoutClosingTheSession() async throws {
+    let turnId = UUID()
+    let responseId = UUID()
+    let audio = FakeAudioIO()
+    let realtime = FakeRealtimeSessionClient(
+      capabilities: audioCapabilities,
+      events: [
+        .speechStarted(turnId: turnId),
+        .speechStopped(turnId: turnId),
+        .responseStarted(responseId: responseId, turnId: turnId),
+        .responseAudio(responseId: responseId, audio: Data([0, 0]), turnId: turnId),
+      ]
+    )
+    let model = PresenceModel(
+      client: FakeCoreClient(statusValue: .init(state: .ready, version: "test")),
+      audioIO: audio,
+      realtimeClient: realtime
+    )
+    await model.refresh()
+    model.startAudioSession()
+    try await waitUntil { model.audioState == .processing && !audio.playedFrames.isEmpty }
+
+    model.toggleAudioSession()
+    try await Task.sleep(for: .milliseconds(20))
+
+    #expect(model.audioState == .listening)
+    #expect(audio.stopPlaybackCount >= 2)
+    #expect(await realtime.connectCount == 1)
     model.cancelAudioSession()
   }
 
@@ -437,6 +471,7 @@ private final class FakeAudioIO: AudioIOPort {
   let captureAccessGranted: Bool
   private(set) var captureAccessRequestCount = 0
   private(set) var isCapturing = false
+  private(set) var isPlaying = false
   private(set) var playedFrames: [VioletAudioFrame] = []
   private(set) var startCaptureCount = 0
   private(set) var stopCaptureCount = 0
@@ -450,7 +485,12 @@ private final class FakeAudioIO: AudioIOPort {
     captureHandler?(frame)
   }
 
+  func finishPlayback() {
+    isPlaying = false
+  }
+
   func play(_ frame: VioletAudioFrame) {
+    isPlaying = true
     playedFrames.append(frame)
   }
 
@@ -472,6 +512,7 @@ private final class FakeAudioIO: AudioIOPort {
   }
 
   func stopPlayback() {
+    isPlaying = false
     stopPlaybackCount += 1
   }
 }
@@ -479,6 +520,7 @@ private final class FakeAudioIO: AudioIOPort {
 private actor FakeRealtimeSessionClient: RealtimeSessionClientPort {
   let capabilities: RealtimeCapabilities
   let events: [RealtimeServerEvent]
+  private(set) var cancelResponseCount = 0
   private(set) var connectCount = 0
   private var frames: [VioletAudioFrame] = []
 
@@ -488,6 +530,10 @@ private actor FakeRealtimeSessionClient: RealtimeSessionClientPort {
   ) {
     self.capabilities = capabilities
     self.events = events
+  }
+
+  func cancelResponse() async {
+    cancelResponseCount += 1
   }
 
   func close() async {}
