@@ -63,6 +63,7 @@ public final class AVAudioEngineIO: AudioIOPort {
 
   private let engine = AVAudioEngine()
   private let player = AVAudioPlayerNode()
+  private var playbackFormat: VioletAudioFormat?
 
   public init() {
     engine.attach(player)
@@ -106,18 +107,13 @@ public final class AVAudioEngineIO: AudioIOPort {
     input.installTap(
       onBus: 0,
       bufferSize: 1_024,
-      format: inputFormat
-    ) { buffer, _ in
-      guard let converted = convert(buffer, using: converter, to: targetFormat) else {
-        return
-      }
-      handler(
-        VioletAudioFrame(
-          data: converted,
-          format: VioletAudioFormat(sampleRate: targetFormat.sampleRate)
-        )
+      format: inputFormat,
+      block: makeCaptureTapHandler(
+        converter: converter,
+        targetFormat: targetFormat,
+        handler: handler
       )
-    }
+    )
 
     do {
       try startEngineIfNeeded()
@@ -171,7 +167,15 @@ public final class AVAudioEngineIO: AudioIOPort {
     frame.data.copyBytes(
       to: destination.assumingMemoryBound(to: UInt8.self), count: frame.data.count)
 
-    engine.connect(player, to: engine.mainMixerNode, format: format)
+    let requiresConnection = playbackFormat != frame.format
+    if requiresConnection {
+      if playbackFormat != nil {
+        player.stop()
+        engine.disconnectNodeOutput(player)
+      }
+      engine.connect(player, to: engine.mainMixerNode, format: format)
+      playbackFormat = frame.format
+    }
     try startEngineIfNeeded()
     player.scheduleBuffer(buffer)
     if !player.isPlaying {
@@ -201,6 +205,24 @@ public enum AudioIOError: Error, Equatable {
   case invalidAudioFrame
   case unsupportedInputFormat
   case unsupportedOutputFormat
+}
+
+private func makeCaptureTapHandler(
+  converter: AVAudioConverter,
+  targetFormat: AVAudioFormat,
+  handler: @escaping @Sendable (VioletAudioFrame) -> Void
+) -> AVAudioNodeTapBlock {
+  { buffer, _ in
+    guard let converted = convert(buffer, using: converter, to: targetFormat) else {
+      return
+    }
+    handler(
+      VioletAudioFrame(
+        data: converted,
+        format: VioletAudioFormat(sampleRate: targetFormat.sampleRate)
+      )
+    )
+  }
 }
 
 private func convert(

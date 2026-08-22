@@ -151,7 +151,9 @@ Violet/
 
 首个端到端候选 `QwenAudioRealtimeAdapter` 已在 `feat/qwen-audio-realtime` 实现并部署到 Devbox Core 候选。它使用 Core 中继、北京地域 Workspace、16kHz PCM 输入、24kHz PCM 输出和系统音色 `longanqian`，不向供应商注册工具。无麦克风合成 canary 已返回完整文字与音频，首次音频约 775ms，输入/输出用量为 48/18 tokens；当前功能分支 `pnpm check:ci` 的 42 个测试和 Swift 13 个测试通过。
 
-该证据仍不代表 Release 1B 已完成：Qwen 分支尚未合并，真实麦克风开始/立即停止、最终转写、音色体验、VAD、打断和稳定网络下端到端延迟仍未验收；Pipeline 基线也尚未建立。Qwen 只有在同一评估集通过决策门后才能成为默认运行时。
+首次真实 Mac 音频闭环已经通过：48kHz 设备输入转换为协议要求的 16kHz PCM，最终转写和助手回复进入事件账本，24kHz PCM 通过系统扬声器清晰播放；停止采集到首个播放分片约 1.2 秒。验收发现并修复了 Swift 6 主执行器隔离导致 CoreAudio tap 回调 `SIGTRAP`，以及每个流式音频分片重复连接播放器导致后续声音失真的问题。
+
+该证据仍不代表 Release 1B 已完成：Qwen 分支尚未合并，30 次真实语音、30 次打断、50 次停止、VAD、弱网和故障恢复尚未达到批量验收门槛；Pipeline 基线也尚未建立。Qwen 只有在同一评估集通过决策门后才能成为默认运行时。
 
 **建设内容**
 
