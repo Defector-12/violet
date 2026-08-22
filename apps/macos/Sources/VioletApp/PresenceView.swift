@@ -90,39 +90,116 @@ struct PresenceView: View {
   }
 
   private var composer: some View {
-    HStack(alignment: .bottom, spacing: 10) {
-      TextField("Message Violet", text: $draft, axis: .vertical)
-        .textFieldStyle(.plain)
-        .lineLimit(1...4)
-        .onSubmit(send)
+    VStack(alignment: .leading, spacing: 6) {
+      if let audioStatusLabel {
+        Text(audioStatusLabel)
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .lineLimit(2)
+      }
 
-      if model.isResponding {
+      HStack(alignment: .bottom, spacing: 10) {
         Button {
-          model.stop()
+          model.toggleAudioSession()
         } label: {
-          Image(systemName: "stop.fill")
+          Image(systemName: audioButtonSymbol)
+            .frame(width: 22, height: 22)
         }
         .buttonStyle(.plain)
-        .help("Stop response")
-      } else {
-        Button(action: send) {
-          Image(systemName: "arrow.up.circle.fill")
-            .font(.title2)
+        .foregroundStyle(audioButtonColor)
+        .disabled(!canControlAudio)
+        .help(audioButtonHelp)
+
+        TextField("Message Violet", text: $draft, axis: .vertical)
+          .textFieldStyle(.plain)
+          .lineLimit(1...4)
+          .disabled(model.isAudioSessionActive)
+          .onSubmit(send)
+
+        if model.isResponding {
+          Button {
+            model.stop()
+          } label: {
+            Image(systemName: "stop.fill")
+          }
+          .buttonStyle(.plain)
+          .help("Stop response")
+        } else {
+          Button(action: send) {
+            Image(systemName: "arrow.up.circle.fill")
+              .font(.title2)
+          }
+          .buttonStyle(.plain)
+          .disabled(!canSend)
+          .help("Send")
         }
-        .buttonStyle(.plain)
-        .disabled(!canSend)
-        .help("Send")
       }
     }
     .padding(12)
     .background(Color(nsColor: .controlBackgroundColor))
   }
 
+  private var audioButtonColor: Color {
+    if case .listening = model.audioState {
+      return .red
+    }
+    return .primary
+  }
+
+  private var audioButtonHelp: String {
+    switch model.audioState {
+    case .connecting, .processing:
+      "Cancel audio session"
+    case .listening:
+      "Stop listening"
+    case .failed, .idle, .unavailable:
+      "Start audio session"
+    }
+  }
+
+  private var audioButtonSymbol: String {
+    switch model.audioState {
+    case .connecting, .processing:
+      "xmark.circle.fill"
+    case .listening:
+      "stop.circle.fill"
+    case .failed, .idle, .unavailable:
+      "mic.fill"
+    }
+  }
+
+  private var audioStatusLabel: String? {
+    switch model.audioState {
+    case .connecting:
+      "Connecting audio"
+    case .failed(let message), .unavailable(let message):
+      message
+    case .idle:
+      nil
+    case .listening:
+      "Listening"
+    case .processing:
+      "Responding"
+    }
+  }
+
+  private var canControlAudio: Bool {
+    if model.isAudioSessionActive {
+      return true
+    }
+    guard case .ready = model.connectionState else {
+      return false
+    }
+    return !model.isResponding
+  }
+
   private var canSend: Bool {
     guard case .ready = model.connectionState else {
       return false
     }
-    return !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    return
+      !model.isAudioSessionActive
+      && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
   }
 
   private var statusColor: Color {

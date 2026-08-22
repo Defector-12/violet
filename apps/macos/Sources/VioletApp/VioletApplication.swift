@@ -16,7 +16,6 @@ enum VioletApplication {
 
 @MainActor
 private final class VioletApplicationDelegate: NSObject, NSApplicationDelegate {
-  private var audioIO: (any AudioIOPort)?
   private var model: PresenceModel?
   private var portForwarder: (any PortForwarderPort)?
   private var statusController: StatusItemController?
@@ -25,7 +24,8 @@ private final class VioletApplicationDelegate: NSObject, NSApplicationDelegate {
     let dependencies:
       (
         configuration: VioletRuntimeConfiguration,
-        client: any VioletCoreClientPort
+        client: any VioletCoreClientPort,
+        realtimeClient: (any RealtimeSessionClientPort)?
       )
     do {
       let configuration = try VioletRuntimeConfiguration()
@@ -35,7 +35,13 @@ private final class VioletApplicationDelegate: NSObject, NSApplicationDelegate {
         GeneratedVioletCoreClient(
           serverURL: configuration.coreURL,
           deviceToken: token
-        )
+        ),
+        configuration.testMode
+          ? nil
+          : URLSessionRealtimeClient(
+            coreURL: configuration.coreURL,
+            deviceToken: token
+          )
       )
     } catch {
       guard let fallbackURL = URL(string: "http://127.0.0.1:14310") else {
@@ -47,15 +53,20 @@ private final class VioletApplicationDelegate: NSObject, NSApplicationDelegate {
           coreURL: fallbackURL,
           testMode: true
         ),
-        UnavailableCoreClient(error: error)
+        UnavailableCoreClient(error: error),
+        nil
       )
     }
 
-    let model = PresenceModel(client: dependencies.client)
     let audioIO: any AudioIOPort =
       dependencies.configuration.testMode
       ? SilentAudioIO()
       : AVAudioEngineIO()
+    let model = PresenceModel(
+      client: dependencies.client,
+      audioIO: audioIO,
+      realtimeClient: dependencies.realtimeClient
+    )
     let shortcut: any GlobalShortcutPort =
       dependencies.configuration.testMode
       ? SilentGlobalShortcut()
@@ -66,7 +77,6 @@ private final class VioletApplicationDelegate: NSObject, NSApplicationDelegate {
       : dependencies.configuration.sshTunnel.map(SSHPortForwarder.init)
         ?? SilentPortForwarder()
 
-    self.audioIO = audioIO
     self.model = model
     self.portForwarder = portForwarder
     statusController = StatusItemController(
@@ -86,8 +96,6 @@ private final class VioletApplicationDelegate: NSObject, NSApplicationDelegate {
     model?.stop()
     model?.stopMonitoring()
     portForwarder?.stop()
-    audioIO?.stopCapture()
-    audioIO?.stopPlayback()
     statusController?.stop()
   }
 
@@ -122,8 +130,6 @@ private final class VioletApplicationDelegate: NSObject, NSApplicationDelegate {
   @objc
   private func stopSensitiveActivity() {
     model?.stop()
-    audioIO?.stopCapture()
-    audioIO?.stopPlayback()
   }
 
   @objc

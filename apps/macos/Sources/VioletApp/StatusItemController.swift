@@ -3,7 +3,7 @@ import SwiftUI
 import VioletMacCore
 
 @MainActor
-final class StatusItemController: NSObject {
+final class StatusItemController: NSObject, NSPopoverDelegate {
   private let model: PresenceModel
   private let popover = NSPopover()
   private let shortcut: any GlobalShortcutPort
@@ -29,6 +29,7 @@ final class StatusItemController: NSObject {
     }
 
     popover.behavior = .transient
+    popover.delegate = self
     popover.contentSize = NSSize(width: 400, height: 520)
     popover.contentViewController = NSHostingController(
       rootView: PresenceView(model: model)
@@ -47,6 +48,10 @@ final class StatusItemController: NSObject {
     shortcut.stop()
     popover.close()
     NSStatusBar.system.removeStatusItem(statusItem)
+  }
+
+  func popoverDidClose(_ notification: Notification) {
+    model.cancelAudioSession()
   }
 
   @objc

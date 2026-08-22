@@ -1,4 +1,4 @@
-@preconcurrency import AVFAudio
+@preconcurrency import AVFoundation
 import Foundation
 
 public struct VioletAudioFormat: Equatable, Sendable {
@@ -25,6 +25,7 @@ public struct VioletAudioFrame: Equatable, Sendable {
 public protocol AudioIOPort: AnyObject {
   var isCapturing: Bool { get }
   func play(_ frame: VioletAudioFrame) throws
+  func requestCaptureAccess() async -> Bool
   func startCapture(handler: @escaping @Sendable (VioletAudioFrame) -> Void) throws
   func stopCapture()
   func stopPlayback()
@@ -36,6 +37,10 @@ public final class SilentAudioIO: AudioIOPort {
   public private(set) var playedFrameCount = 0
 
   public init() {}
+
+  public func requestCaptureAccess() async -> Bool {
+    true
+  }
 
   public func play(_ frame: VioletAudioFrame) {
     playedFrameCount += 1
@@ -61,6 +66,19 @@ public final class AVAudioEngineIO: AudioIOPort {
 
   public init() {
     engine.attach(player)
+  }
+
+  public func requestCaptureAccess() async -> Bool {
+    switch AVCaptureDevice.authorizationStatus(for: .audio) {
+    case .authorized:
+      true
+    case .notDetermined:
+      await AVCaptureDevice.requestAccess(for: .audio)
+    case .denied, .restricted:
+      false
+    @unknown default:
+      false
+    }
   }
 
   public func startCapture(

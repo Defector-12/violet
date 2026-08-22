@@ -49,10 +49,11 @@ struct PresenceModelTests {
 
   @Test
   @MainActor
-  func silentAdaptersHaveNoDeviceSideEffects() {
+  func silentAdaptersHaveNoDeviceSideEffects() async {
     let audio = SilentAudioIO()
     let shortcut = SilentGlobalShortcut()
 
+    #expect(await audio.requestCaptureAccess())
     audio.startCapture { _ in }
     shortcut.start {}
     audio.play(
@@ -68,6 +69,124 @@ struct PresenceModelTests {
     #expect(!audio.isCapturing)
     #expect(audio.playedFrameCount == 1)
     #expect(shortcut.startCount == 1)
+  }
+
+  @Test
+  @MainActor
+  func refusesCaptureWhenRuntimeDoesNotSupportAudio() async throws {
+    let audio = FakeAudioIO()
+    let realtime = FakeRealtimeSessionClient(
+      capabilities: .init(
+        inputModalities: ["text"],
+        interruption: true,
+        outputModalities: ["text"],
+        runtimeKind: "deterministic",
+        transcription: false,
+        voiceKind: "none"
+      )
+    )
+    let model = PresenceModel(
+      client: FakeCoreClient(statusValue: .init(state: .ready, version: "test")),
+      audioIO: audio,
+      realtimeClient: realtime
+    )
+    await model.refresh()
+
+    model.startAudioSession()
+    try await waitUntil {
+      model.audioState
+        == .unavailable(message: "Audio is unavailable for this runtime.")
+    }
+
+    #expect(audio.captureAccessRequestCount == 0)
+    #expect(audio.startCaptureCount == 0)
+    #expect(!audio.isCapturing)
+  }
+
+  @Test
+  @MainActor
+  func refusesCaptureWhenMicrophoneAccessIsDenied() async throws {
+    let audio = FakeAudioIO(captureAccessGranted: false)
+    let realtime = FakeRealtimeSessionClient(capabilities: audioCapabilities)
+    let model = PresenceModel(
+      client: FakeCoreClient(statusValue: .init(state: .ready, version: "test")),
+      audioIO: audio,
+      realtimeClient: realtime
+    )
+    await model.refresh()
+
+    model.startAudioSession()
+    try await waitUntil {
+      model.audioState
+        == .failed(message: "Microphone access was not granted.")
+    }
+
+    #expect(audio.captureAccessRequestCount == 1)
+    #expect(audio.startCaptureCount == 0)
+    #expect(!audio.isCapturing)
+  }
+
+  @Test
+  @MainActor
+  func streamsUserStartedAudioAndRendersRealtimeOutput() async throws {
+    let turnId = UUID()
+    let responseId = UUID()
+    let outputAudio = Data([0, 0])
+    let audio = FakeAudioIO()
+    let realtime = FakeRealtimeSessionClient(
+      capabilities: audioCapabilities,
+      events: [
+        .transcript(text: "Hello Violet", final: true, turnId: turnId),
+        .responseStarted(responseId: responseId, turnId: turnId),
+        .responseText(responseId: responseId, text: "Hello", turnId: turnId),
+        .responseAudio(responseId: responseId, audio: outputAudio, turnId: turnId),
+        .responseCompleted(responseId: responseId, turnId: turnId),
+      ]
+    )
+    let model = PresenceModel(
+      client: FakeCoreClient(statusValue: .init(state: .ready, version: "test")),
+      audioIO: audio,
+      realtimeClient: realtime
+    )
+    let inputFrame = VioletAudioFrame(
+      data: Data([1, 2]),
+      format: VioletAudioFormat(sampleRate: 16_000)
+    )
+    await model.refresh()
+
+    model.startAudioSession()
+    try await waitUntil { model.audioState == .listening }
+    audio.emit(inputFrame)
+    model.finishAudioInput()
+    try await waitUntil { model.audioState == .idle }
+
+    #expect(await realtime.receivedFrames() == [inputFrame])
+    #expect(audio.captureAccessRequestCount == 1)
+    #expect(audio.startCaptureCount == 1)
+    #expect(audio.stopCaptureCount >= 1)
+    #expect(audio.playedFrames.map(\.data) == [outputAudio])
+    #expect(model.messages.map(\.text) == ["Hello Violet", "Hello"])
+  }
+
+  @Test
+  @MainActor
+  func cancellingAudioSessionStopsCaptureImmediately() async throws {
+    let audio = FakeAudioIO()
+    let realtime = FakeRealtimeSessionClient(capabilities: audioCapabilities)
+    let model = PresenceModel(
+      client: FakeCoreClient(statusValue: .init(state: .ready, version: "test")),
+      audioIO: audio,
+      realtimeClient: realtime
+    )
+    await model.refresh()
+    model.startAudioSession()
+    try await waitUntil { model.audioState == .listening }
+
+    model.cancelAudioSession()
+
+    #expect(model.audioState == .idle)
+    #expect(!audio.isCapturing)
+    #expect(audio.stopCaptureCount >= 1)
   }
 
   @Test
@@ -205,6 +324,108 @@ private struct FailingCoreClient: VioletCoreClientPort {
     }
   }
 }
+
+@MainActor
+private final class FakeAudioIO: AudioIOPort {
+  private var captureHandler: (@Sendable (VioletAudioFrame) -> Void)?
+  let captureAccessGranted: Bool
+  private(set) var captureAccessRequestCount = 0
+  private(set) var isCapturing = false
+  private(set) var playedFrames: [VioletAudioFrame] = []
+  private(set) var startCaptureCount = 0
+  private(set) var stopCaptureCount = 0
+
+  init(captureAccessGranted: Bool = true) {
+    self.captureAccessGranted = captureAccessGranted
+  }
+
+  func emit(_ frame: VioletAudioFrame) {
+    captureHandler?(frame)
+  }
+
+  func play(_ frame: VioletAudioFrame) {
+    playedFrames.append(frame)
+  }
+
+  func requestCaptureAccess() async -> Bool {
+    captureAccessRequestCount += 1
+    return captureAccessGranted
+  }
+
+  func startCapture(handler: @escaping @Sendable (VioletAudioFrame) -> Void) {
+    captureHandler = handler
+    isCapturing = true
+    startCaptureCount += 1
+  }
+
+  func stopCapture() {
+    captureHandler = nil
+    isCapturing = false
+    stopCaptureCount += 1
+  }
+
+  func stopPlayback() {}
+}
+
+private actor FakeRealtimeSessionClient: RealtimeSessionClientPort {
+  let capabilities: RealtimeCapabilities
+  let events: [RealtimeServerEvent]
+  private var frames: [VioletAudioFrame] = []
+
+  init(
+    capabilities: RealtimeCapabilities,
+    events: [RealtimeServerEvent] = []
+  ) {
+    self.capabilities = capabilities
+    self.events = events
+  }
+
+  func close() async {}
+
+  func connect() async throws -> RealtimeCapabilities {
+    capabilities
+  }
+
+  func receivedFrames() -> [VioletAudioFrame] {
+    frames
+  }
+
+  func streamAudio(
+    _ frames: AsyncStream<VioletAudioFrame>
+  ) async -> AsyncThrowingStream<RealtimeServerEvent, Error> {
+    let events = self.events
+    return AsyncThrowingStream { continuation in
+      Task {
+        for await frame in frames {
+          self.record(frame)
+        }
+        for event in events {
+          continuation.yield(event)
+        }
+        continuation.finish()
+      }
+    }
+  }
+
+  func streamText(_ text: String) async -> AsyncThrowingStream<String, Error> {
+    AsyncThrowingStream { continuation in
+      continuation.finish()
+    }
+  }
+
+  private func record(_ frame: VioletAudioFrame) {
+    frames.append(frame)
+  }
+}
+
+private let audioCapabilities = RealtimeCapabilities(
+  inputModalities: ["audio", "text"],
+  interruption: true,
+  outputModalities: ["audio", "text"],
+  runtimeKind: "integrated",
+  transcription: true,
+  voiceKind: "preset"
+)
 
 @MainActor
 private func waitUntil(
