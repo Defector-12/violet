@@ -5,7 +5,7 @@
 ## 1. 当前状态
 
 - Release 1A 已完成交付。当前 `main` 已包含 pnpm workspace、JSON Schema/OpenAPI 协议、TypeScript SDK、Swift 生成客户端边界、模块化 Core、`dev-cli`、PostgreSQL 迁移、应用层信封加密、DeepSeek Adapter、Docker Compose、可观测配置和加密备份恢复。
-- Release 1B 已开始实现并合并首个纵向切片。`RealtimeSession v1`、WebSocket、`RealtimeConversationPort`、确定性实时 Adapter 和最终事件落账可用；原生菜单栏 App、Keychain、可选 SSH 隧道、全局快捷键、系统生命周期和 `AudioIOPort` 边界已经构建。正常模式的自动 SSH 隧道、Keychain 鉴权、真实 DeepSeek 文字流、全局快捷键、SSH 子进程重连、显示器睡眠、锁屏和整机睡眠恢复已经通过验收。Mac App 已增加用户主动启动的音频会话入口：先协商 Realtime 能力，服务端声明支持音频后才请求麦克风权限并采集，用户停止后发送 `input.commit`；关闭浮层、退出、锁屏或睡眠立即取消。首个支持音频的 `QwenAudioRealtimeAdapter` 已在功能分支实现，Devbox Core 候选已加载该 Adapter；北京地域 Workspace、系统音色 `longanqian` 的无麦克风 canary 和首次真实 Mac 麦克风到扬声器闭环均已通过。该分支尚未合并，VAD、打断、批量停止和完整延迟验收尚未完成。
+- Release 1B 已开始实现并合并首个纵向切片。`RealtimeSession v1`、WebSocket、`RealtimeConversationPort`、确定性实时 Adapter 和最终事件落账可用；原生菜单栏 App、Keychain、可选 SSH 隧道、全局快捷键、系统生命周期和 `AudioIOPort` 边界已经构建。正常模式的自动 SSH 隧道、Keychain 鉴权、真实 DeepSeek 文字流、全局快捷键、SSH 子进程重连、显示器睡眠、锁屏和整机睡眠恢复已经通过验收。首个支持音频的 `QwenAudioRealtimeAdapter` 已在功能分支实现并部署到 Devbox：Mac 使用一个持续会话发送音频，Qwen `smart_turn` 负责自动断句，Core 将最近 20 轮事件注入新会话，并允许供应商输出与取消输入并行流动；新语音开始时 Mac 立即停播，回复期间点击麦克风也可显式取消。北京地域 Workspace、系统音色 `longanqian` 的无麦克风 canary、首次真实 Mac 麦克风到扬声器闭环以及同连接两轮短期上下文均已通过。该分支尚未合并，真实连续对话与打断的批量设备验收尚未完成。
 - 已完成现有阅读工具 Sprinkle 的只读评估。Sprinkle 是 WXT、React、TypeScript 构建的浏览器扩展，可复用其页面提取、文字与图片选择、区域框选和浏览器内交互能力，但不能作为 Violet 本体。
 - 当前可使用一台公司 Devbox 作为临时云环境：32 核 CPU、128G 内存、120G 系统盘、500G 数据盘、veLinux 1.0。它足以支撑第一阶段的后端、数据库、Worker、沙箱和测试。
 - Violet 是单用户、云端智能优先、Mac 先行的绿地项目。
@@ -460,7 +460,7 @@ Sprinkle 不扩建为 Violet 本体，而演化为浏览器结构化感官：
 
 ## 18. 关键风险与待决事项
 
-- Mac 全局快捷键、锁屏和睡眠生命周期已经完成一次真实验收；麦克风入口、能力门禁和停止状态机已实现，Qwen Adapter 已通过无麦克风 canary 和一次真实音频闭环，仍需完成 50 次停止、锁屏和超时测试。
+- Mac 全局快捷键、锁屏和睡眠生命周期已经完成一次真实验收；持续麦克风会话、能力门禁、自动断句和停止状态机已实现，Qwen Adapter 已通过无麦克风 canary、一次真实音频闭环和同连接两轮上下文验证，仍需完成真实打断及批量停止、锁屏和超时测试。
 - Qwen-Audio 3.0 Realtime Plus 是首个端到端实测候选，但尚未成为最终默认运行时。其真实语音质量、首包延迟、弱网恢复、回声消除、VAD、打断、最终转写和费用仍需与 Pipeline 基线在同一评估集上比较。
 - 端到端实时模型的预设音色不等于可克隆或任意设计音色；目标音色能力和合法使用边界尚需单独验证。
 - 任意应用中的指向、选区和结构化语义能否稳定融合，需要专项评估。
@@ -476,4 +476,4 @@ Sprinkle 不扩建为 Violet 本体，而演化为浏览器结构化感官：
 
 ## 19. 下一步
 
-按《工程路线》执行第一阶段。Release 1A 基座、Release 1B Core/Mac 候选切片和首个 Qwen 音频 Adapter 已经完成；Qwen 无麦克风 canary 与首次真实 Mac 麦克风到扬声器闭环通过。下一步扩大真实语音样本并完成停止、VAD、打断、弱网与故障恢复测试，再以同一评估集补 Pipeline 基线。未完成这些门禁前不把 Qwen 设为最终默认运行时，也不标记 Release 1B 完成。之后继续全局感知、统一记忆、持久任务、工具执行和端到端验收闭环。
+按《工程路线》执行第一阶段。Release 1A 基座、Release 1B Core/Mac 候选切片、首个 Qwen 音频 Adapter、持续会话、`smart_turn` 和短期上下文已经完成；下一步由用户验收真实连续对话与打断，再扩大样本完成批量停止、弱网与故障恢复测试，并以同一评估集补 Pipeline 基线。未完成这些门禁前不把 Qwen 设为最终默认运行时，也不标记 Release 1B 完成。之后继续本地语音唤醒、全局感知、统一长期记忆、持久任务、工具执行和端到端验收闭环。
