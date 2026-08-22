@@ -49,6 +49,9 @@ public enum RealtimeSessionClientError: Error, Equatable, LocalizedError {
 public protocol RealtimeSessionClientPort: Sendable {
   func close() async
   func connect() async throws -> RealtimeCapabilities
+  func streamAudio(
+    _ frames: AsyncStream<VioletAudioFrame>
+  ) async -> AsyncThrowingStream<RealtimeServerEvent, Error>
   func streamText(_ text: String) async -> AsyncThrowingStream<String, Error>
 }
 
@@ -56,7 +59,7 @@ public actor URLSessionRealtimeClient: RealtimeSessionClientPort {
   private let coreURL: URL
   private let deviceToken: String
   private let session: URLSession
-  private let sessionId = UUID()
+  private var sessionId = UUID()
   private var clientSequence = 1
   private var serverSequence = 1
   private var activeResponseId: UUID?
@@ -77,6 +80,12 @@ public actor URLSessionRealtimeClient: RealtimeSessionClientPort {
     if socket != nil {
       throw RealtimeSessionClientError.invalidEvent
     }
+    sessionId = UUID()
+    clientSequence = 1
+    serverSequence = 1
+    activeResponseId = nil
+    turnActive = false
+
     var request = URLRequest(url: try realtimeURL(from: coreURL))
     request.setValue("Bearer \(deviceToken)", forHTTPHeaderField: "Authorization")
     let newSocket = session.webSocketTask(with: request)
@@ -87,7 +96,9 @@ public actor URLSessionRealtimeClient: RealtimeSessionClientPort {
       try await send(
         ConfigureEvent(
           configuration: .init(
+            inputAudio: .init(),
             inputModalities: ["audio", "text"],
+            outputAudio: .init(),
             outputModalities: ["audio", "text"],
             protocolVersion: "1"
           ),
@@ -106,6 +117,26 @@ public actor URLSessionRealtimeClient: RealtimeSessionClientPort {
       newSocket.cancel(with: .goingAway, reason: nil)
       socket = nil
       throw error
+    }
+  }
+
+  public func streamAudio(
+    _ frames: AsyncStream<VioletAudioFrame>
+  ) async -> AsyncThrowingStream<RealtimeServerEvent, Error> {
+    AsyncThrowingStream { continuation in
+      let task = Task {
+        do {
+          try await performAudioTurn(frames, continuation: continuation)
+        } catch is CancellationError {
+          await cancelActiveResponse()
+          continuation.finish()
+        } catch {
+          continuation.finish(throwing: error)
+        }
+      }
+      continuation.onTermination = { _ in
+        task.cancel()
+      }
     }
   }
 
@@ -143,6 +174,91 @@ public actor URLSessionRealtimeClient: RealtimeSessionClientPort {
     self.socket = nil
     activeResponseId = nil
     turnActive = false
+  }
+
+  private func performAudioTurn(
+    _ frames: AsyncStream<VioletAudioFrame>,
+    continuation: AsyncThrowingStream<RealtimeServerEvent, Error>.Continuation
+  ) async throws {
+    guard socket != nil else {
+      throw RealtimeSessionClientError.notConnected
+    }
+    guard !turnActive else {
+      throw RealtimeSessionClientError.turnInProgress
+    }
+    turnActive = true
+    defer {
+      activeResponseId = nil
+      turnActive = false
+    }
+
+    let turnId = UUID()
+    for await frame in frames {
+      try Task.checkCancellation()
+      guard
+        !frame.data.isEmpty,
+        frame.format == VioletAudioFormat(sampleRate: 16_000)
+      else {
+        throw RealtimeSessionClientError.invalidEvent
+      }
+      try await send(
+        AudioInputEvent(
+          audio: frame.data.base64EncodedString(),
+          eventId: UUID(),
+          sequence: nextClientSequence(),
+          sessionId: sessionId,
+          turnId: turnId,
+          type: "input.audio"
+        )
+      )
+    }
+
+    try Task.checkCancellation()
+    try await send(
+      CommitInputEvent(
+        eventId: UUID(),
+        sequence: nextClientSequence(),
+        sessionId: sessionId,
+        turnId: turnId,
+        type: "input.commit"
+      )
+    )
+
+    while !Task.isCancelled {
+      let event = try await receive()
+      switch event {
+      case .transcript(_, _, let responseTurnId),
+        .responseStarted(_, let responseTurnId),
+        .responseText(_, _, let responseTurnId),
+        .responseAudio(_, _, let responseTurnId):
+        guard responseTurnId == turnId else {
+          throw RealtimeSessionClientError.invalidEvent
+        }
+        if case .responseStarted(let responseId, _) = event {
+          activeResponseId = responseId
+        }
+        continuation.yield(event)
+      case .responseCompleted(_, let responseTurnId):
+        guard responseTurnId == turnId else {
+          throw RealtimeSessionClientError.invalidEvent
+        }
+        continuation.yield(event)
+        continuation.finish()
+        return
+      case .responseCancelled:
+        continuation.yield(event)
+        continuation.finish()
+        return
+      case .error(let code, let message, let retryable):
+        throw RealtimeSessionClientError.server(
+          code: code,
+          message: message,
+          retryable: retryable
+        )
+      case .ready:
+        continue
+      }
+    }
   }
 
   private func performTextTurn(
@@ -264,7 +380,9 @@ public actor URLSessionRealtimeClient: RealtimeSessionClientPort {
 
 private struct ConfigureEvent: Encodable {
   struct Configuration: Encodable {
+    let inputAudio: RealtimeAudioFormatEvent
     let inputModalities: [String]
+    let outputAudio: RealtimeAudioFormatEvent
     let outputModalities: [String]
     let protocolVersion: String
   }
@@ -276,11 +394,34 @@ private struct ConfigureEvent: Encodable {
   let type: String
 }
 
+private struct RealtimeAudioFormatEvent: Encodable {
+  let channels = 1
+  let encoding = "pcm_s16le"
+  let sampleRate = 16_000
+}
+
 private struct TextInputEvent: Encodable {
   let eventId: UUID
   let sequence: Int
   let sessionId: UUID
   let text: String
+  let turnId: UUID
+  let type: String
+}
+
+private struct AudioInputEvent: Encodable {
+  let audio: String
+  let eventId: UUID
+  let sequence: Int
+  let sessionId: UUID
+  let turnId: UUID
+  let type: String
+}
+
+private struct CommitInputEvent: Encodable {
+  let eventId: UUID
+  let sequence: Int
+  let sessionId: UUID
   let turnId: UUID
   let type: String
 }

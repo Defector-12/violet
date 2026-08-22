@@ -143,13 +143,13 @@ Violet/
 
 **当前实现证据**
 
-截至 2026-08-21，首个纵向切片已完成实现并合并：`RealtimeSession v1` 协议、Core WebSocket 认证与 sealed 门禁、确定性实时 Adapter、最终用户/助手事件落账、Swift 原生菜单栏 App、Keychain 读取与 stdin 迁移工具、可选 SSH 隧道、文字流式 UI、全局快捷键、睡眠与锁屏停止、`AudioIOPort` 和隔离测试 Adapter。TypeScript 11 个测试文件共 37 个测试、Swift 8 个测试通过，ad-hoc 签名 `.app` 构建与签名校验通过。
+截至 2026-08-22，首个纵向切片已完成实现并合并：`RealtimeSession v1` 协议、Core WebSocket 认证与 sealed 门禁、确定性实时 Adapter、最终用户/助手事件落账、Swift 原生菜单栏 App、Keychain 读取与 stdin 迁移工具、可选 SSH 隧道、文字流式 UI、全局快捷键、睡眠与锁屏停止、`AudioIOPort` 和隔离测试 Adapter。TypeScript 11 个测试文件共 37 个测试通过；用户主动音频会话入口、Realtime 音频帧与 commit 流、麦克风能力门禁和生命周期停止状态机已实现，Swift 12 个测试通过。
 
 Devbox 已部署提交 `639a6cf` 的 Core 候选。ready/sealed、正确与错误认证、Realtime 配置与关闭、未知事件拒绝、回环端口和遥测白名单验证通过；Release 1A 镜像保留为 `rollback-f707f27`，并生成一份未上传外部服务的部署前加密备份。
 
 正常模式真实验收已经通过自动 SSH 隧道、Keychain 鉴权、`Ready` 状态、DeepSeek 文字流、`Control + Option + Space` 全局快捷键、SSH 子进程自动重连、显示器睡眠、锁屏和整机 46 秒 Deep Idle 后恢复。唯一一条明确标记的测试对话得到预期回复，事件账本由 40 条增加为 42 条，新增顺序为 `user`、`assistant`。验收中发现 Swift OpenAPI 默认日期解码器不能解析 Core 的毫秒 ISO-8601 时间，已改用 fractional-seconds transcoder 并加入固定响应回归测试。
 
-该证据仍不代表 Release 1B 已完成：当前 App 仅构造 `AudioIOPort` 并在退出、锁屏和睡眠时调用停止，生产 UI 或会话状态机没有调用 `startCapture()`，因此麦克风开始/立即停止、真实语音、音色、VAD、打断和延迟尚不能验收；真实 Pipeline 与端到端实时模型也尚未评估或选型。
+该证据仍不代表 Release 1B 已完成：App 只会在用户点击、Realtime 能力包含音频且麦克风权限通过后调用 `startCapture()`；当前 Devbox 的确定性 Adapter 只声明文字能力，正常模式已验证会显示音频不可用、不开启音频设备且不新增事件。因此真实麦克风开始/立即停止、语音、音色、VAD、打断和延迟尚不能验收；真实 Pipeline 与端到端实时模型也尚未评估或选型。
 
 **建设内容**
 
