@@ -45,6 +45,7 @@ public final class PresenceModel: ObservableObject {
   private let client: any VioletCoreClientPort
   private let realtimeClient: (any RealtimeSessionClientPort)?
   private var audioFrameContinuation: AsyncStream<VioletAudioFrame>.Continuation?
+  private var audioOutputFormat: VioletAudioFormat?
   private var audioResponseMessageId: UUID?
   private var audioSessionId: UUID?
   private var audioTask: Task<Void, Never>?
@@ -176,6 +177,7 @@ public final class PresenceModel: ObservableObject {
 
     let sessionId = UUID()
     audioSessionId = sessionId
+    audioOutputFormat = nil
     audioResponseMessageId = nil
     audioTranscriptMessageId = nil
     audioState = .connecting
@@ -191,7 +193,16 @@ public final class PresenceModel: ObservableObject {
           await realtimeClient.close()
           return
         }
-        guard capabilities.inputModalities.contains("audio") else {
+        guard
+          capabilities.inputModalities.contains("audio"),
+          capabilities.outputModalities.contains("audio"),
+          capabilities.inputAudio
+            == RealtimeAudioFormat(sampleRate: 16_000),
+          let negotiatedOutput = capabilities.outputAudio,
+          negotiatedOutput.channels == 1,
+          negotiatedOutput.encoding == "pcm_s16le",
+          negotiatedOutput.sampleRate == 24_000
+        else {
           await realtimeClient.close()
           guard self.audioSessionId == sessionId else {
             return
@@ -201,6 +212,10 @@ public final class PresenceModel: ObservableObject {
           )
           return
         }
+        self.audioOutputFormat = VioletAudioFormat(
+          sampleRate: Double(negotiatedOutput.sampleRate),
+          channels: UInt32(negotiatedOutput.channels)
+        )
         guard await self.audioIO.requestCaptureAccess() else {
           await realtimeClient.close()
           guard self.audioSessionId == sessionId else {
@@ -271,6 +286,7 @@ public final class PresenceModel: ObservableObject {
     audioTask = nil
     audioIO.stopCapture()
     audioIO.stopPlayback()
+    audioOutputFormat = nil
     audioState = .idle
     if let realtimeClient {
       Task {
@@ -311,10 +327,13 @@ public final class PresenceModel: ObservableObject {
         messages.append(message)
       }
     case .responseAudio(_, let audio, _):
+      guard let audioOutputFormat else {
+        throw RealtimeSessionClientError.invalidEvent
+      }
       try audioIO.play(
         VioletAudioFrame(
           data: audio,
-          format: VioletAudioFormat(sampleRate: 16_000)
+          format: audioOutputFormat
         )
       )
     case .error(let code, let message, let retryable):
@@ -333,6 +352,7 @@ public final class PresenceModel: ObservableObject {
     audioFrameContinuation?.finish()
     audioFrameContinuation = nil
     audioSessionId = nil
+    audioOutputFormat = nil
     audioTask = nil
     audioState = state
   }

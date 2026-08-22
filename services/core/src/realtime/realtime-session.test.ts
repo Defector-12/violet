@@ -63,6 +63,73 @@ describe("RealtimeSession", () => {
     ]);
   });
 
+  it("returns the audio formats negotiated by the adapter", async () => {
+    const sessionId = randomUUID();
+    const ledger = new InMemoryConversationLedger();
+    const session = new RealtimeSession({
+      conversationPort: {
+        async open() {
+          return {
+            capabilities: {
+              inputAudio: {
+                channels: 1,
+                encoding: "pcm_s16le",
+                sampleRate: 16000,
+              },
+              inputModalities: ["audio", "text"],
+              interruption: false,
+              outputAudio: {
+                channels: 1,
+                encoding: "pcm_s16le",
+                sampleRate: 24000,
+              },
+              outputModalities: ["audio", "text"],
+              runtimeKind: "integrated",
+              transcription: true,
+              voiceKind: "preset",
+            } as const,
+            async close() {},
+            async *send() {},
+          };
+        },
+      },
+      generateId: randomUUID,
+      ledger,
+    });
+
+    const ready = await collect(
+      session.handle({
+        configuration: {
+          inputAudio: {
+            channels: 1,
+            encoding: "pcm_s16le",
+            sampleRate: 16000,
+          },
+          inputModalities: ["audio", "text"],
+          outputAudio: {
+            channels: 1,
+            encoding: "pcm_s16le",
+            sampleRate: 24000,
+          },
+          outputModalities: ["audio", "text"],
+          protocolVersion: "1",
+        },
+        eventId: randomUUID(),
+        sequence: 1,
+        sessionId,
+        type: "session.configure",
+      }),
+    );
+
+    expect(ready[0]).toMatchObject({
+      capabilities: {
+        inputAudio: { sampleRate: 16000 },
+        outputAudio: { sampleRate: 24000 },
+      },
+      type: "session.ready",
+    });
+  });
+
   it("rejects out-of-order and mismatched events without advancing client state", async () => {
     const sessionId = randomUUID();
     const { session } = createSession();

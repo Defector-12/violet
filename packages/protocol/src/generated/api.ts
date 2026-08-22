@@ -240,6 +240,14 @@ export interface components {
         /** RealtimeServerEvent */
         "realtime-server-event.schema": {
             $defs: {
+                audioFormat: {
+                    /** @constant */
+                    channels: 1;
+                    /** @constant */
+                    encoding: "pcm_s16le";
+                    /** @enum {integer} */
+                    sampleRate: 16000 | 24000 | 48000;
+                };
                 modalities: ("audio" | "text")[];
                 sequence: number;
                 usage: {
@@ -251,8 +259,10 @@ export interface components {
             };
         } & ({
             capabilities: {
+                inputAudio?: components["schemas"]["audioFormat"];
                 inputModalities: components["schemas"]["modalities"];
                 interruption: boolean;
+                outputAudio?: components["schemas"]["audioFormat"];
                 outputModalities: components["schemas"]["modalities"];
                 /** @enum {string} */
                 runtimeKind: "deterministic" | "integrated" | "pipeline";

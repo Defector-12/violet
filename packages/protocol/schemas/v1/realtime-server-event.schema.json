@@ -20,11 +20,17 @@
             "voiceKind"
           ],
           "properties": {
+            "inputAudio": {
+              "$ref": "#/$defs/audioFormat"
+            },
             "inputModalities": {
               "$ref": "#/$defs/modalities"
             },
             "interruption": {
               "type": "boolean"
+            },
+            "outputAudio": {
+              "$ref": "#/$defs/audioFormat"
             },
             "outputModalities": {
               "$ref": "#/$defs/modalities"
@@ -252,6 +258,23 @@
     }
   ],
   "$defs": {
+    "audioFormat": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["channels", "encoding", "sampleRate"],
+      "properties": {
+        "channels": {
+          "const": 1
+        },
+        "encoding": {
+          "const": "pcm_s16le"
+        },
+        "sampleRate": {
+          "type": "integer",
+          "enum": [16000, 24000, 48000]
+        }
+      }
+    },
     "modalities": {
       "type": "array",
       "minItems": 1,

@@ -104,8 +104,14 @@ export class RealtimeSession {
       );
       yield {
         capabilities: {
+          ...(this.#conversation.capabilities.inputAudio
+            ? { inputAudio: this.#conversation.capabilities.inputAudio }
+            : {}),
           inputModalities: [...this.#conversation.capabilities.inputModalities],
           interruption: this.#conversation.capabilities.interruption,
+          ...(this.#conversation.capabilities.outputAudio
+            ? { outputAudio: this.#conversation.capabilities.outputAudio }
+            : {}),
           outputModalities: [...this.#conversation.capabilities.outputModalities],
           runtimeKind: this.#conversation.capabilities.runtimeKind,
           transcription: this.#conversation.capabilities.transcription,

@@ -165,7 +165,41 @@ struct PresenceModelTests {
     #expect(audio.startCaptureCount == 1)
     #expect(audio.stopCaptureCount >= 1)
     #expect(audio.playedFrames.map(\.data) == [outputAudio])
+    #expect(audio.playedFrames.map(\.format) == [VioletAudioFormat(sampleRate: 24_000)])
     #expect(model.messages.map(\.text) == ["Hello Violet", "Hello"])
+  }
+
+  @Test
+  @MainActor
+  func refusesCaptureWhenNegotiatedAudioFormatIsUnsupported() async throws {
+    let audio = FakeAudioIO()
+    let realtime = FakeRealtimeSessionClient(
+      capabilities: .init(
+        inputAudio: .init(sampleRate: 16_000),
+        inputModalities: ["audio", "text"],
+        interruption: false,
+        outputAudio: .init(sampleRate: 16_000),
+        outputModalities: ["audio", "text"],
+        runtimeKind: "integrated",
+        transcription: true,
+        voiceKind: "preset"
+      )
+    )
+    let model = PresenceModel(
+      client: FakeCoreClient(statusValue: .init(state: .ready, version: "test")),
+      audioIO: audio,
+      realtimeClient: realtime
+    )
+    await model.refresh()
+
+    model.startAudioSession()
+    try await waitUntil {
+      model.audioState
+        == .unavailable(message: "Audio is unavailable for this runtime.")
+    }
+
+    #expect(audio.captureAccessRequestCount == 0)
+    #expect(audio.startCaptureCount == 0)
   }
 
   @Test
@@ -419,8 +453,10 @@ private actor FakeRealtimeSessionClient: RealtimeSessionClientPort {
 }
 
 private let audioCapabilities = RealtimeCapabilities(
+  inputAudio: .init(sampleRate: 16_000),
   inputModalities: ["audio", "text"],
-  interruption: true,
+  interruption: false,
+  outputAudio: .init(sampleRate: 24_000),
   outputModalities: ["audio", "text"],
   runtimeKind: "integrated",
   transcription: true,

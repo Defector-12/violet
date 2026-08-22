@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { EnvelopeCipher } from "@violet/crypto";
-import type { ModelGateway } from "@violet/domain";
+import type { ModelGateway, RealtimeConversationPort } from "@violet/domain";
 import { Pool } from "pg";
 
 import { DeviceAuthenticator } from "./auth/device-authenticator.js";
@@ -11,6 +11,7 @@ import { buildCoreApp } from "./http/app.js";
 import { DeepSeekModelGateway } from "./model/deepseek-model-gateway.js";
 import { DeterministicModelGateway } from "./model/deterministic-model-gateway.js";
 import { DeterministicRealtimeConversationPort } from "./realtime/deterministic-realtime-conversation.js";
+import { QwenAudioRealtimeConversationPort } from "./realtime/qwen-audio-realtime-conversation.js";
 import { PostgresConversationLedger } from "./storage/postgres-conversation-ledger.js";
 
 const config = loadCoreRuntimeConfig(process.env);
@@ -42,6 +43,18 @@ const modelGateway: ModelGateway =
         userId: config.model.userId,
       })
     : new DeterministicModelGateway();
+const realtimeConversationPort: RealtimeConversationPort =
+  config.realtime.provider === "qwen-audio"
+    ? new QwenAudioRealtimeConversationPort({
+        apiKey: config.realtime.apiKey,
+        generateId: randomUUID,
+        model: config.realtime.model,
+        voice: config.realtime.voice,
+        workspaceId: config.realtime.workspaceId,
+      })
+    : new DeterministicRealtimeConversationPort({
+        generateId: randomUUID,
+      });
 const app = buildCoreApp({
   authenticator: new DeviceAuthenticator({
     expectedHashHex: config.deviceTokenHash,
@@ -52,9 +65,7 @@ const app = buildCoreApp({
     ledger,
     modelGateway,
   }),
-  realtimeConversationPort: new DeterministicRealtimeConversationPort({
-    generateId: randomUUID,
-  }),
+  realtimeConversationPort,
   realtimeLedger: ledger,
   sealed: !config.contentKey,
   version: config.version,

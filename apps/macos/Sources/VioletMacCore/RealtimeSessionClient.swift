@@ -1,12 +1,50 @@
 import Foundation
 
+public struct RealtimeAudioFormat: Codable, Equatable, Sendable {
+  public let channels: Int
+  public let encoding: String
+  public let sampleRate: Int
+
+  public init(
+    channels: Int = 1,
+    encoding: String = "pcm_s16le",
+    sampleRate: Int
+  ) {
+    self.channels = channels
+    self.encoding = encoding
+    self.sampleRate = sampleRate
+  }
+}
+
 public struct RealtimeCapabilities: Codable, Equatable, Sendable {
+  public let inputAudio: RealtimeAudioFormat?
   public let inputModalities: [String]
   public let interruption: Bool
+  public let outputAudio: RealtimeAudioFormat?
   public let outputModalities: [String]
   public let runtimeKind: String
   public let transcription: Bool
   public let voiceKind: String
+
+  public init(
+    inputAudio: RealtimeAudioFormat? = nil,
+    inputModalities: [String],
+    interruption: Bool,
+    outputAudio: RealtimeAudioFormat? = nil,
+    outputModalities: [String],
+    runtimeKind: String,
+    transcription: Bool,
+    voiceKind: String
+  ) {
+    self.inputAudio = inputAudio
+    self.inputModalities = inputModalities
+    self.interruption = interruption
+    self.outputAudio = outputAudio
+    self.outputModalities = outputModalities
+    self.runtimeKind = runtimeKind
+    self.transcription = transcription
+    self.voiceKind = voiceKind
+  }
 }
 
 public enum RealtimeServerEvent: Equatable, Sendable {
@@ -96,9 +134,9 @@ public actor URLSessionRealtimeClient: RealtimeSessionClientPort {
       try await send(
         ConfigureEvent(
           configuration: .init(
-            inputAudio: .init(),
+            inputAudio: .init(sampleRate: 16_000),
             inputModalities: ["audio", "text"],
-            outputAudio: .init(),
+            outputAudio: .init(sampleRate: 24_000),
             outputModalities: ["audio", "text"],
             protocolVersion: "1"
           ),
@@ -397,7 +435,7 @@ private struct ConfigureEvent: Encodable {
 private struct RealtimeAudioFormatEvent: Encodable {
   let channels = 1
   let encoding = "pcm_s16le"
-  let sampleRate = 16_000
+  let sampleRate: Int
 }
 
 private struct TextInputEvent: Encodable {

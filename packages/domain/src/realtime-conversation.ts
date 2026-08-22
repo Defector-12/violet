@@ -18,8 +18,10 @@ export interface RealtimeSessionConfiguration {
 }
 
 export interface RealtimeCapabilities {
+  readonly inputAudio?: RealtimeAudioFormat;
   readonly inputModalities: readonly RealtimeModality[];
   readonly interruption: boolean;
+  readonly outputAudio?: RealtimeAudioFormat;
   readonly outputModalities: readonly RealtimeModality[];
   readonly runtimeKind: RealtimeRuntimeKind;
   readonly transcription: boolean;

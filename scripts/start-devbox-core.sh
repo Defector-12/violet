@@ -59,7 +59,8 @@ if [ "$mode" = auto ]; then
   if
     [ -s "$runtime_secrets_dir/content_key" ] &&
       [ -s "$runtime_secrets_dir/database_url" ] &&
-      [ -s "$runtime_secrets_dir/deepseek_api_key" ]
+      [ -s "$runtime_secrets_dir/deepseek_api_key" ] &&
+      [ -s "$runtime_secrets_dir/qwen_realtime_api_key" ]
   then
     mode=ready
   else
