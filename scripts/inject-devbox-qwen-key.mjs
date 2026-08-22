@@ -80,7 +80,7 @@ function writeRemoteSecret(targetHost, value) {
       "ssh",
       sshArguments(
         targetHost,
-        'set -eu; umask 077; directory=/dev/shm/violet; temporary=$(mktemp "$directory/qwen_realtime_api_key.XXXXXX"); trap \'rm -f "$temporary"\' EXIT; cat > "$temporary"; chmod 0400 "$temporary"; mv -f "$temporary" "$directory/qwen_realtime_api_key"; trap - EXIT',
+        'set -eu; umask 077; directory=/dev/shm/violet; temporary=$(mktemp "$directory/qwen_realtime_api_key.XXXXXX"); trap \'rm -f "$temporary"\' EXIT; cat > "$temporary"; chmod 0444 "$temporary"; mv -f "$temporary" "$directory/qwen_realtime_api_key"; trap - EXIT',
       ),
       { stdio: ["pipe", "inherit", "inherit"] },
     );
