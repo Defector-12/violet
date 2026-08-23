@@ -14,12 +14,16 @@ struct RealtimeAcceptanceTests {
     defer { try? FileManager.default.removeItem(at: directory) }
     let sessionId = UUID()
     let turnId = UUID()
-    var recorder: JSONLinesRealtimeAcceptanceRecorder? =
-      try JSONLinesRealtimeAcceptanceRecorder(fileURL: fileURL)
+    var recorder: (any RealtimeAcceptanceRecording)? =
+      configuredRealtimeAcceptanceRecorder(
+        environment: ["VIOLET_ACCEPTANCE_LOG": fileURL.path]
+      )
 
     recorder?.record(
       .init(type: .speechStopped, sessionId: sessionId, turnId: turnId)
     )
+    recorder?.flush()
+    #expect(recorder is JSONLinesRealtimeAcceptanceRecorder)
     recorder = nil
 
     let line = try #require(

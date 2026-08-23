@@ -4,7 +4,7 @@
 
 ## 1. 记录边界
 
-验收记录默认关闭。只有设置 VIOLET_ACCEPTANCE_LOG 后，Mac App 才向指定本地 NDJSON 文件追加事件。
+验收记录默认关闭。启动脚本只为本次 App 进程设置 `VIOLET_ACCEPTANCE_LOG`，Mac App 随后向指定本地 NDJSON 文件追加事件。
 
 记录内容仅限：
 
