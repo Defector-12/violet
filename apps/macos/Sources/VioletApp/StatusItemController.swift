@@ -32,6 +32,7 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
       button.action = #selector(togglePopover)
     }
 
+    popover.animates = false
     popover.behavior = .transient
     popover.delegate = self
     popover.contentSize = NSSize(width: 400, height: 520)
