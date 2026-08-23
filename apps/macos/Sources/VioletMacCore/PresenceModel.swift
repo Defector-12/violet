@@ -41,6 +41,7 @@ public final class PresenceModel: ObservableObject {
   @Published public private(set) var isResponding = false
   @Published public private(set) var messages: [PresenceMessage] = []
 
+  private let acceptanceRecorder: any RealtimeAcceptanceRecording
   private let audioIO: any AudioIOPort
   private let client: any VioletCoreClientPort
   private let realtimeClient: (any RealtimeSessionClientPort)?
@@ -55,12 +56,16 @@ public final class PresenceModel: ObservableObject {
   private var ignoredRealtimeResponseIds = Set<UUID>()
   private var localBargeInFrameCount = 0
   private var monitoringTask: Task<Void, Never>?
+  private var recordedAudioResponseIds = Set<UUID>()
 
   public init(
     client: any VioletCoreClientPort,
     audioIO: any AudioIOPort = SilentAudioIO(),
-    realtimeClient: (any RealtimeSessionClientPort)? = nil
+    realtimeClient: (any RealtimeSessionClientPort)? = nil,
+    acceptanceRecorder: any RealtimeAcceptanceRecording =
+      NoopRealtimeAcceptanceRecorder()
   ) {
+    self.acceptanceRecorder = acceptanceRecorder
     self.audioIO = audioIO
     self.client = client
     self.realtimeClient = realtimeClient
@@ -188,7 +193,11 @@ public final class PresenceModel: ObservableObject {
     activeRealtimeResponseId = nil
     ignoredRealtimeResponseIds.removeAll()
     localBargeInFrameCount = 0
+    recordedAudioResponseIds.removeAll()
     audioState = .connecting
+    acceptanceRecorder.record(
+      .init(type: .sessionStartRequested, sessionId: sessionId)
+    )
     audioTask = Task { [weak self, realtimeClient] in
       await realtimeClient.close()
       guard let self, self.audioSessionId == sessionId else {
@@ -216,7 +225,8 @@ public final class PresenceModel: ObservableObject {
             return
           }
           self.finishAudioSession(
-            state: .unavailable(message: "Audio is unavailable for this runtime.")
+            state: .unavailable(message: "Audio is unavailable for this runtime."),
+            reason: .failure
           )
           return
         }
@@ -237,7 +247,8 @@ public final class PresenceModel: ObservableObject {
             return
           }
           self.finishAudioSession(
-            state: .failed(message: "Microphone access was not granted.")
+            state: .failed(message: "Microphone access was not granted."),
+            reason: .failure
           )
           return
         }
@@ -255,6 +266,9 @@ public final class PresenceModel: ObservableObject {
           }
         }
         self.audioState = .listening
+        self.acceptanceRecorder.record(
+          .init(type: .captureStarted, sessionId: sessionId)
+        )
 
         for try await event in events {
           guard self.audioSessionId == sessionId else {
@@ -267,20 +281,21 @@ public final class PresenceModel: ObservableObject {
         guard self.audioSessionId == sessionId else {
           return
         }
-        self.finishAudioSession(state: .idle)
+        self.finishAudioSession(state: .idle, reason: .streamEnded)
       } catch is CancellationError {
         await realtimeClient.close()
         guard self.audioSessionId == sessionId else {
           return
         }
-        self.finishAudioSession(state: .idle)
+        self.finishAudioSession(state: .idle, reason: .failure)
       } catch {
         await realtimeClient.close()
         guard self.audioSessionId == sessionId else {
           return
         }
         self.finishAudioSession(
-          state: .failed(message: audioUserFacingMessage(error))
+          state: .failed(message: audioUserFacingMessage(error)),
+          reason: .failure
         )
       }
     }
@@ -290,7 +305,16 @@ public final class PresenceModel: ObservableObject {
     cancelAudioSession()
   }
 
-  public func cancelAudioSession() {
+  public func cancelAudioSession(
+    reason: RealtimeAcceptanceReason = .userStop
+  ) {
+    let sessionId = audioSessionId
+    if let sessionId {
+      acceptanceRecorder.record(
+        .init(type: .sessionStopRequested, reason: reason, sessionId: sessionId)
+      )
+    }
+    let wasCapturing = audioIO.isCapturing
     audioSessionId = nil
     audioFrameContinuation?.finish()
     audioFrameContinuation = nil
@@ -298,11 +322,22 @@ public final class PresenceModel: ObservableObject {
     audioTask = nil
     audioIO.stopCapture()
     audioIO.stopPlayback()
+    if wasCapturing, let sessionId {
+      acceptanceRecorder.record(
+        .init(type: .captureStopped, reason: reason, sessionId: sessionId)
+      )
+    }
     audioOutputFormat = nil
     activeRealtimeResponseId = nil
     ignoredRealtimeResponseIds.removeAll()
     localBargeInFrameCount = 0
+    recordedAudioResponseIds.removeAll()
     audioState = .idle
+    if let sessionId {
+      acceptanceRecorder.record(
+        .init(type: .sessionEnded, reason: reason, sessionId: sessionId)
+      )
+    }
     if let realtimeClient {
       Task {
         await realtimeClient.close()
@@ -311,13 +346,41 @@ public final class PresenceModel: ObservableObject {
   }
 
   public func interruptAudioResponse() {
+    interruptAudioResponse(reason: .userClick)
+  }
+
+  private func interruptAudioResponse(
+    reason: RealtimeAcceptanceReason
+  ) {
     guard audioState == .processing || audioIO.isPlaying else {
       return
+    }
+    let responseId = activeRealtimeResponseId
+    let wasPlaying = audioIO.isPlaying
+    if wasPlaying {
+      acceptanceRecorder.record(
+        .init(
+          type: .interruptionDetected,
+          reason: reason,
+          sessionId: audioSessionId,
+          responseId: responseId
+        )
+      )
     }
     if let activeRealtimeResponseId {
       ignoredRealtimeResponseIds.insert(activeRealtimeResponseId)
     }
     audioIO.stopPlayback()
+    if wasPlaying {
+      acceptanceRecorder.record(
+        .init(
+          type: .playbackStopped,
+          reason: reason,
+          sessionId: audioSessionId,
+          responseId: responseId
+        )
+      )
+    }
     audioResponseMessageId = nil
     localBargeInFrameCount = 0
     audioState = .listening
@@ -328,22 +391,55 @@ public final class PresenceModel: ObservableObject {
     }
   }
 
-  public func stop() {
+  public func stop(reason: RealtimeAcceptanceReason = .userStop) {
     chatTask?.cancel()
     chatTask = nil
     isResponding = false
-    cancelAudioSession()
+    cancelAudioSession(reason: reason)
   }
 
   private func handleAudioEvent(_ event: RealtimeServerEvent) throws {
     switch event {
-    case .speechStarted:
+    case .speechStarted(let turnId):
+      let responseId = activeRealtimeResponseId
+      let wasPlaying = audioIO.isPlaying
+      if let responseId {
+        ignoredRealtimeResponseIds.insert(responseId)
+      }
+      acceptanceRecorder.record(
+        .init(type: .speechStarted, sessionId: audioSessionId, turnId: turnId)
+      )
+      if wasPlaying {
+        acceptanceRecorder.record(
+          .init(
+            type: .interruptionDetected,
+            reason: .serverSpeech,
+            sessionId: audioSessionId,
+            turnId: turnId,
+            responseId: responseId
+          )
+        )
+      }
       audioIO.stopPlayback()
+      if wasPlaying {
+        acceptanceRecorder.record(
+          .init(
+            type: .playbackStopped,
+            reason: .serverSpeech,
+            sessionId: audioSessionId,
+            turnId: turnId,
+            responseId: responseId
+          )
+        )
+      }
       audioResponseMessageId = nil
       audioTranscriptMessageId = nil
       localBargeInFrameCount = 0
       audioState = .listening
-    case .speechStopped:
+    case .speechStopped(let turnId):
+      acceptanceRecorder.record(
+        .init(type: .speechStopped, sessionId: audioSessionId, turnId: turnId)
+      )
       audioState = .processing
     case .transcript(let text, _, _):
       if let audioTranscriptMessageId {
@@ -353,8 +449,16 @@ public final class PresenceModel: ObservableObject {
         audioTranscriptMessageId = message.id
         messages.append(message)
       }
-    case .responseStarted(let responseId, _):
+    case .responseStarted(let responseId, let turnId):
       activeRealtimeResponseId = responseId
+      acceptanceRecorder.record(
+        .init(
+          type: .responseStarted,
+          sessionId: audioSessionId,
+          turnId: turnId,
+          responseId: responseId
+        )
+      )
       if audioResponseMessageId == nil {
         let message = PresenceMessage(role: .assistant, text: "")
         audioResponseMessageId = message.id
@@ -371,7 +475,7 @@ public final class PresenceModel: ObservableObject {
         audioResponseMessageId = message.id
         messages.append(message)
       }
-    case .responseAudio(let responseId, let audio, _):
+    case .responseAudio(let responseId, let audio, let turnId):
       guard !ignoredRealtimeResponseIds.contains(responseId) else {
         return
       }
@@ -384,35 +488,72 @@ public final class PresenceModel: ObservableObject {
           format: audioOutputFormat
         )
       )
+      acceptanceRecorder.record(
+        .init(
+          type: .responseAudioScheduled,
+          sessionId: audioSessionId,
+          turnId: turnId,
+          responseId: responseId
+        )
+      )
+      if recordedAudioResponseIds.insert(responseId).inserted {
+        acceptanceRecorder.record(
+          .init(
+            type: .responseAudioStarted,
+            sessionId: audioSessionId,
+            turnId: turnId,
+            responseId: responseId
+          )
+        )
+      }
     case .error(let code, let message, let retryable):
       throw RealtimeSessionClientError.server(
         code: code,
         message: message,
         retryable: retryable
       )
-    case .responseCompleted(let responseId, _):
-      ignoredRealtimeResponseIds.remove(responseId)
+    case .responseCompleted(let responseId, let turnId):
+      acceptanceRecorder.record(
+        .init(
+          type: .responseCompleted,
+          sessionId: audioSessionId,
+          turnId: turnId,
+          responseId: responseId
+        )
+      )
       if activeRealtimeResponseId == responseId {
         activeRealtimeResponseId = nil
+        audioResponseMessageId = nil
+        audioTranscriptMessageId = nil
+        audioState = .listening
       }
-      audioResponseMessageId = nil
-      audioTranscriptMessageId = nil
-      audioState = .listening
     case .responseCancelled(let responseId):
-      ignoredRealtimeResponseIds.remove(responseId)
+      acceptanceRecorder.record(
+        .init(type: .responseCancelled, sessionId: audioSessionId, responseId: responseId)
+      )
       if activeRealtimeResponseId == responseId {
         activeRealtimeResponseId = nil
+        audioResponseMessageId = nil
+        audioState = .listening
       }
-      audioResponseMessageId = nil
-      audioState = .listening
     case .ready:
       break
     }
   }
 
-  private func finishAudioSession(state: PresenceAudioState) {
+  private func finishAudioSession(
+    state: PresenceAudioState,
+    reason: RealtimeAcceptanceReason
+  ) {
+    let sessionId = audioSessionId
+    let wasCapturing = audioIO.isCapturing
     audioIO.stopCapture()
     audioIO.stopPlayback()
+    if wasCapturing, let sessionId {
+      acceptanceRecorder.record(
+        .init(type: .captureStopped, reason: reason, sessionId: sessionId)
+      )
+    }
     audioFrameContinuation?.finish()
     audioFrameContinuation = nil
     audioSessionId = nil
@@ -420,8 +561,14 @@ public final class PresenceModel: ObservableObject {
     activeRealtimeResponseId = nil
     ignoredRealtimeResponseIds.removeAll()
     localBargeInFrameCount = 0
+    recordedAudioResponseIds.removeAll()
     audioTask = nil
     audioState = state
+    if let sessionId {
+      acceptanceRecorder.record(
+        .init(type: .sessionEnded, reason: reason, sessionId: sessionId)
+      )
+    }
   }
 
   private func observeLocalBargeIn(_ frame: VioletAudioFrame) {
@@ -442,7 +589,7 @@ public final class PresenceModel: ObservableObject {
     guard localBargeInFrameCount >= 2 else {
       return
     }
-    interruptAudioResponse()
+    interruptAudioResponse(reason: .localSpeech)
   }
 
   private func append(_ delta: String, to responseId: UUID) {

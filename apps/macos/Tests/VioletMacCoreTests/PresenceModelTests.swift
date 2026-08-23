@@ -215,14 +215,62 @@ struct PresenceModelTests {
 
     #expect(await realtime.connectCount == 1)
     #expect(audio.stopPlaybackCount == 2)
-    #expect(model.messages.map(\.text) == [
-      "First question",
-      "First answer",
-      "Second question",
-      "Second answer",
-    ])
+    #expect(
+      model.messages.map(\.text) == [
+        "First question",
+        "First answer",
+        "Second question",
+        "Second answer",
+      ])
     #expect(model.audioState == .listening)
 
+    model.cancelAudioSession()
+  }
+
+  @Test
+  @MainActor
+  func lateCancellationCannotResetOrReplayAnOlderResponse() async throws {
+    let firstTurnId = UUID()
+    let firstResponseId = UUID()
+    let secondTurnId = UUID()
+    let secondResponseId = UUID()
+    let audio = FakeAudioIO()
+    let realtime = FakeRealtimeSessionClient(
+      capabilities: audioCapabilities,
+      events: [
+        .speechStarted(turnId: firstTurnId),
+        .speechStopped(turnId: firstTurnId),
+        .responseStarted(responseId: firstResponseId, turnId: firstTurnId),
+        .responseAudio(responseId: firstResponseId, audio: Data([1, 0]), turnId: firstTurnId),
+        .speechStarted(turnId: secondTurnId),
+        .speechStopped(turnId: secondTurnId),
+        .responseStarted(responseId: secondResponseId, turnId: secondTurnId),
+        .responseCancelled(responseId: firstResponseId),
+        .responseText(responseId: firstResponseId, text: "late", turnId: firstTurnId),
+        .responseAudio(responseId: firstResponseId, audio: Data([2, 0]), turnId: firstTurnId),
+        .responseText(responseId: secondResponseId, text: "Second answer", turnId: secondTurnId),
+        .responseAudio(responseId: secondResponseId, audio: Data([3, 0]), turnId: secondTurnId),
+        .responseCompleted(responseId: secondResponseId, turnId: secondTurnId),
+      ],
+      eventInterval: .milliseconds(2)
+    )
+    let model = PresenceModel(
+      client: FakeCoreClient(statusValue: .init(state: .ready, version: "test")),
+      audioIO: audio,
+      realtimeClient: realtime
+    )
+    await model.refresh()
+
+    model.startAudioSession()
+    try await waitUntil {
+      model.messages.last?.text == "Second answer"
+        && audio.playedFrames.count == 2
+        && model.audioState == .listening
+    }
+
+    #expect(model.messages.map(\.text) == ["", "Second answer"])
+    #expect(audio.playedFrames.map(\.data) == [Data([1, 0]), Data([3, 0])])
+    #expect(model.audioState == .listening)
     model.cancelAudioSession()
   }
 
@@ -265,6 +313,7 @@ struct PresenceModelTests {
     let turnId = UUID()
     let responseId = UUID()
     let audio = FakeAudioIO()
+    let acceptance = FakeAcceptanceRecorder()
     let realtime = FakeRealtimeSessionClient(
       capabilities: audioCapabilities,
       events: [
@@ -277,7 +326,8 @@ struct PresenceModelTests {
     let model = PresenceModel(
       client: FakeCoreClient(statusValue: .init(state: .ready, version: "test")),
       audioIO: audio,
-      realtimeClient: realtime
+      realtimeClient: realtime,
+      acceptanceRecorder: acceptance
     )
     let voicedFrame = VioletAudioFrame(
       data: Data([0xD0, 0x07, 0xD0, 0x07]),
@@ -294,6 +344,12 @@ struct PresenceModelTests {
     #expect(model.audioState == .listening)
     #expect(!audio.isPlaying)
     #expect(await realtime.cancelResponseCount == 1)
+    #expect(
+      acceptance.marks
+        .filter { $0.reason == .localSpeech }
+        .map(\.type)
+        == [.interruptionDetected, .playbackStopped]
+    )
     model.cancelAudioSession()
   }
 
@@ -334,11 +390,13 @@ struct PresenceModelTests {
   @MainActor
   func cancellingAudioSessionStopsCaptureImmediately() async throws {
     let audio = FakeAudioIO()
+    let acceptance = FakeAcceptanceRecorder()
     let realtime = FakeRealtimeSessionClient(capabilities: audioCapabilities)
     let model = PresenceModel(
       client: FakeCoreClient(statusValue: .init(state: .ready, version: "test")),
       audioIO: audio,
-      realtimeClient: realtime
+      realtimeClient: realtime,
+      acceptanceRecorder: acceptance
     )
     await model.refresh()
     model.startAudioSession()
@@ -349,6 +407,12 @@ struct PresenceModelTests {
     #expect(model.audioState == .idle)
     #expect(!audio.isCapturing)
     #expect(audio.stopCaptureCount >= 1)
+    #expect(
+      acceptance.marks
+        .filter { $0.reason == .userStop }
+        .map(\.type)
+        == [.sessionStopRequested, .captureStopped, .sessionEnded]
+    )
   }
 
   @Test
@@ -370,6 +434,40 @@ struct PresenceModelTests {
 
     #expect(model.audioState == .idle)
     #expect(audio.startCaptureCount == 0)
+  }
+
+  @Test
+  @MainActor
+  func canRestartAfterRealtimeStreamFailure() async throws {
+    let audio = FakeAudioIO()
+    let realtime = FakeRealtimeSessionClient(
+      capabilities: audioCapabilities,
+      streamFailureCount: 1
+    )
+    let model = PresenceModel(
+      client: FakeCoreClient(statusValue: .init(state: .ready, version: "test")),
+      audioIO: audio,
+      realtimeClient: realtime
+    )
+    await model.refresh()
+
+    model.startAudioSession()
+    try await waitUntil {
+      if case .failed = model.audioState {
+        return true
+      }
+      return false
+    }
+
+    #expect(!audio.isCapturing)
+    #expect(audio.stopCaptureCount >= 1)
+
+    model.startAudioSession()
+    try await waitUntil { model.audioState == .listening }
+
+    #expect(await realtime.connectCount == 2)
+    #expect(audio.isCapturing)
+    model.cancelAudioSession()
   }
 
   @Test
@@ -592,17 +690,23 @@ private final class FakeAudioIO: AudioIOPort {
 
 private actor FakeRealtimeSessionClient: RealtimeSessionClientPort {
   let capabilities: RealtimeCapabilities
+  let eventInterval: Duration
   let events: [RealtimeServerEvent]
   private(set) var cancelResponseCount = 0
   private(set) var connectCount = 0
   private var frames: [VioletAudioFrame] = []
+  private var streamFailureCount: Int
 
   init(
     capabilities: RealtimeCapabilities,
-    events: [RealtimeServerEvent] = []
+    events: [RealtimeServerEvent] = [],
+    eventInterval: Duration = .zero,
+    streamFailureCount: Int = 0
   ) {
     self.capabilities = capabilities
+    self.eventInterval = eventInterval
     self.events = events
+    self.streamFailureCount = streamFailureCount
   }
 
   func cancelResponse() async {
@@ -624,6 +728,11 @@ private actor FakeRealtimeSessionClient: RealtimeSessionClientPort {
     _ frames: AsyncStream<VioletAudioFrame>
   ) async -> AsyncThrowingStream<RealtimeServerEvent, Error> {
     let events = self.events
+    let eventInterval = self.eventInterval
+    let shouldFail = streamFailureCount > 0
+    if shouldFail {
+      streamFailureCount -= 1
+    }
     return AsyncThrowingStream { continuation in
       let frameTask = Task {
         for await frame in frames {
@@ -634,7 +743,10 @@ private actor FakeRealtimeSessionClient: RealtimeSessionClientPort {
         try? await Task.sleep(for: .milliseconds(10))
         for event in events {
           continuation.yield(event)
-          await Task.yield()
+          try? await Task.sleep(for: eventInterval)
+        }
+        if shouldFail {
+          continuation.finish(throwing: TestError.streamFailure)
         }
       }
       continuation.onTermination = { _ in
@@ -652,6 +764,17 @@ private actor FakeRealtimeSessionClient: RealtimeSessionClientPort {
 
   private func record(_ frame: VioletAudioFrame) {
     frames.append(frame)
+  }
+}
+
+@MainActor
+private final class FakeAcceptanceRecorder: RealtimeAcceptanceRecording {
+  private(set) var marks: [RealtimeAcceptanceMark] = []
+
+  func flush() {}
+
+  func record(_ mark: RealtimeAcceptanceMark) {
+    marks.append(mark)
   }
 }
 
@@ -683,5 +806,6 @@ private func waitUntil(
 }
 
 private enum TestError: Error {
+  case streamFailure
   case timeout
 }

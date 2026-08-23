@@ -9,6 +9,7 @@
     "pnpm": ">=11 <12"
   },
   "scripts": {
+    "acceptance:report": "node scripts/report-realtime-acceptance.mjs",
     "build": "pnpm -r build",
     "check": "pnpm generate && biome check . && pnpm typecheck && pnpm test",
     "check:ci": "pnpm check && git diff --exit-code -- packages/protocol/src/generated",
