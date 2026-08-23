@@ -278,6 +278,42 @@ describe("QwenAudioRealtimeConversationPort", () => {
     expect(transport.sent).toContainEqual({ type: "response.cancel" });
   });
 
+  it("ignores a late cancellation after the provider response is done", async () => {
+    const transport = new FakeTransport([
+      { type: "session.created" },
+      { type: "session.updated" },
+      {
+        response: { id: "resp-qwen-1", status: "in_progress" },
+        type: "response.created",
+      },
+      {
+        response: { id: "resp-qwen-1", status: "completed" },
+        type: "response.done",
+      },
+    ]);
+    const generatedIds = ["local-response-1", "turn-1"];
+    const port = new QwenAudioRealtimeConversationPort({
+      apiKey: "test-qwen-api-key",
+      createTransport: () => transport,
+      generateId: () => generatedIds.shift() ?? "unexpected-id",
+      model: "qwen-audio-3.0-realtime-plus",
+      voice: "longanqian",
+      workspaceId: "ws-jvh4fvlcktrjvtbj",
+    });
+    const conversation = await port.open(configuration());
+    const output = await take(conversation.outputs(), 2);
+
+    await expect(
+      conversation.send({
+        responseId: "local-response-1",
+        type: "cancel",
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(output.map((event) => event.type)).toEqual(["response-started", "response-completed"]);
+    expect(transport.sent).not.toContainEqual({ type: "response.cancel" });
+  });
+
   it("rejects an output format that Qwen cannot produce", async () => {
     let transportCreated = false;
     const port = new QwenAudioRealtimeConversationPort({

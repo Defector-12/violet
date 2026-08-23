@@ -162,7 +162,7 @@ export class RealtimeSession {
           method: "POST",
           body: JSON.stringify({
             sessionId: "duplicate-qwen-cancel",
-            runId: "pre-fix",
+            runId: "post-fix",
             hypothesisId: "B-C",
             location: "realtime-session.ts:handleInput",
             msg: "[DEBUG] Realtime input failed",

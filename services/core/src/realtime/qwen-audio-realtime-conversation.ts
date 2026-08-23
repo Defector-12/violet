@@ -306,7 +306,7 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
         method: "POST",
         body: JSON.stringify({
           sessionId: "duplicate-qwen-cancel",
-          runId: "pre-fix",
+          runId: "post-fix",
           hypothesisId: "A",
           location: "qwen-audio-realtime-conversation.ts:cancelResponse",
           msg: "[DEBUG] Client cancel lookup",
@@ -320,12 +320,8 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
       }).catch(() => {});
     }
     // #endregion
-    if (!providerResponseId) {
-      throw new QwenAdapterError(
-        "UNKNOWN_RESPONSE",
-        "The Qwen response is not active in this session",
-        false,
-      );
+    if (!providerResponseId || providerResponseId !== this.#activeProviderResponseId) {
+      return;
     }
 
     await this.#transport.send({ type: "response.cancel" });
@@ -342,7 +338,7 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
           method: "POST",
           body: JSON.stringify({
             sessionId: "duplicate-qwen-cancel",
-            runId: "pre-fix",
+            runId: "post-fix",
             hypothesisId: "C",
             location: "qwen-audio-realtime-conversation.ts:providerError",
             msg: "[DEBUG] Provider error",
@@ -365,7 +361,7 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
           method: "POST",
           body: JSON.stringify({
             sessionId: "duplicate-qwen-cancel",
-            runId: "pre-fix",
+            runId: "post-fix",
             hypothesisId: "A",
             location: "qwen-audio-realtime-conversation.ts:speechStarted",
             msg: "[DEBUG] Provider speech started",
@@ -474,7 +470,7 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
         method: "POST",
         body: JSON.stringify({
           sessionId: "duplicate-qwen-cancel",
-          runId: "pre-fix",
+          runId: "post-fix",
           hypothesisId: "B",
           location: "qwen-audio-realtime-conversation.ts:responseDone",
           msg: "[DEBUG] Provider response done",
