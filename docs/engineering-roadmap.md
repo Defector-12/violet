@@ -149,7 +149,7 @@ Violet/
 
 正常模式真实验收已经通过自动 SSH 隧道、Keychain 鉴权、`Ready` 状态、DeepSeek 文字流、`Control + Option + Space` 全局快捷键、SSH 子进程自动重连、显示器睡眠、锁屏和整机 46 秒 Deep Idle 后恢复。唯一一条明确标记的测试对话得到预期回复，事件账本由 40 条增加为 42 条，新增顺序为 `user`、`assistant`。验收中发现 Swift OpenAPI 默认日期解码器不能解析 Core 的毫秒 ISO-8601 时间，已改用 fractional-seconds transcoder 并加入固定响应回归测试。
 
-首个端到端候选 `QwenAudioRealtimeAdapter` 已在 `feat/qwen-audio-realtime` 实现并部署到 Devbox Core 候选。它使用 Core 中继、北京地域 Workspace、16kHz PCM 输入、24kHz PCM 输出和系统音色 `longanqian`，不向供应商注册工具。无麦克风合成 canary 已返回完整文字与音频，首次音频约 775ms，输入/输出用量为 48/18 tokens；当前功能分支的 TypeScript/JavaScript 48 个测试和 Swift 20 个测试通过。
+首个端到端候选 `QwenAudioRealtimeAdapter` 已在 `feat/qwen-audio-realtime` 实现并部署到 Devbox Core 候选。它使用 Core 中继、北京地域 Workspace、16kHz PCM 输入、24kHz PCM 输出和系统音色 `longanqian`，不向供应商注册工具。无麦克风合成 canary 已返回完整文字与音频，首次音频约 775ms，输入/输出用量为 48/18 tokens；当前功能分支的 TypeScript/JavaScript 49 个测试和 Swift 20 个测试通过。
 
 首次真实 Mac 音频闭环已经通过：48kHz 设备输入转换为协议要求的 16kHz PCM，最终转写和助手回复进入事件账本，24kHz PCM 通过系统扬声器清晰播放；停止采集到首个播放分片约 1.2 秒。验收发现并修复了 Swift 6 主执行器隔离导致 CoreAudio tap 回调 `SIGTRAP`，以及每个流式音频分片重复连接播放器导致后续声音失真的问题。
 
@@ -159,7 +159,9 @@ Violet/
 
 批量验收基础设施已建立：Mac 仅在启动脚本显式启用验收记录时写入本地 NDJSON，字段只包含单调时间、事件类型、停止原因和随机关联 ID；不记录音频、转写或回复内容。汇总器按路线门禁计算触发、首段音频、打断和停止的样本数与 p95，并检测旧响应停播后再次排队。详细矩阵见 [Release 1B 实时语音验收](./release-1b-acceptance.md)。
 
-该证据仍不代表 Release 1B 已完成：Qwen 分支尚未合并，30 次真实语音、30 次打断、50 次停止、弱网和故障恢复尚未达到批量验收门槛；Pipeline 基线也尚未建立。Qwen 只有在同一评估集通过决策门后才能成为默认运行时。
+2026-08-23 的 Qwen 候选批量验收已通过定量门禁：174 次浮层触发 p95 为 18ms，88 次服务端断句到首个音频分片 p95 为 501ms，31 次打断 p95 为 4ms，54 次麦克风停止 p95 为 15ms；四项配对成功率均为 100%，迟到播放和正常会话失败均为 0。触发样本包含 50 次菜单栏点击，前 30 个打断样本包含 20 次直接语音和 10 次点击。SSH 监听态与播放态断线恢复、单向 250ms 延迟链路，以及外置、Bluetooth 和 MacBook 内置音频路由也已验证。
+
+该证据仍不代表 Release 1B 已完成：Qwen 分支尚未合并，Pipeline 基线尚未建立；重复锁屏和整机睡眠需要用户在场完成最终抽样。Qwen 只有在同一评估集通过运行时决策门后才能成为默认运行时。
 
 **建设内容**
 
