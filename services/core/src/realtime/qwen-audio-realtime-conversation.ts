@@ -299,6 +299,27 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
 
   async #cancelResponse(localResponseId: string): Promise<void> {
     const providerResponseId = this.#providerResponseIds.get(localResponseId);
+    // #region debug-point A:client-cancel
+    const cancelDebugURL = process.env["DEBUG_SERVER_URL"];
+    if (cancelDebugURL) {
+      void fetch(cancelDebugURL, {
+        method: "POST",
+        body: JSON.stringify({
+          sessionId: "duplicate-qwen-cancel",
+          runId: "pre-fix",
+          hypothesisId: "A",
+          location: "qwen-audio-realtime-conversation.ts:cancelResponse",
+          msg: "[DEBUG] Client cancel lookup",
+          data: {
+            activeProviderResponseId: this.#activeProviderResponseId,
+            hasProviderResponseId: providerResponseId !== undefined,
+            localResponseId,
+          },
+          ts: Date.now(),
+        }),
+      }).catch(() => {});
+    }
+    // #endregion
     if (!providerResponseId) {
       throw new QwenAdapterError(
         "UNKNOWN_RESPONSE",
@@ -314,9 +335,49 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
     event: Readonly<Record<string, unknown>> & { readonly type: string },
   ): Promise<RealtimeConversationOutput | undefined> {
     if (event.type === "error") {
+      // #region debug-point C:provider-error
+      const providerErrorDebugURL = process.env["DEBUG_SERVER_URL"];
+      if (providerErrorDebugURL) {
+        void fetch(providerErrorDebugURL, {
+          method: "POST",
+          body: JSON.stringify({
+            sessionId: "duplicate-qwen-cancel",
+            runId: "pre-fix",
+            hypothesisId: "C",
+            location: "qwen-audio-realtime-conversation.ts:providerError",
+            msg: "[DEBUG] Provider error",
+            data: {
+              code: string(record(event["error"])?.["code"]),
+              errorType: string(record(event["error"])?.["type"]),
+            },
+            ts: Date.now(),
+          }),
+        }).catch(() => {});
+      }
+      // #endregion
       return providerErrorOutput(event);
     }
     if (event.type === "input_audio_buffer.speech_started") {
+      // #region debug-point A:speech-started-cancel
+      const speechDebugURL = process.env["DEBUG_SERVER_URL"];
+      if (speechDebugURL) {
+        void fetch(speechDebugURL, {
+          method: "POST",
+          body: JSON.stringify({
+            sessionId: "duplicate-qwen-cancel",
+            runId: "pre-fix",
+            hypothesisId: "A",
+            location: "qwen-audio-realtime-conversation.ts:speechStarted",
+            msg: "[DEBUG] Provider speech started",
+            data: {
+              activeProviderResponseId: this.#activeProviderResponseId,
+              willCancel: this.#activeProviderResponseId !== null,
+            },
+            ts: Date.now(),
+          }),
+        }).catch(() => {});
+      }
+      // #endregion
       if (this.#activeProviderResponseId) {
         await this.#transport.send({ type: "response.cancel" });
       }
@@ -406,6 +467,27 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
 
     const response = record(event["response"]);
     const status = string(response?.["status"]);
+    // #region debug-point B:response-done
+    const responseDoneDebugURL = process.env["DEBUG_SERVER_URL"];
+    if (responseDoneDebugURL) {
+      void fetch(responseDoneDebugURL, {
+        method: "POST",
+        body: JSON.stringify({
+          sessionId: "duplicate-qwen-cancel",
+          runId: "pre-fix",
+          hypothesisId: "B",
+          location: "qwen-audio-realtime-conversation.ts:responseDone",
+          msg: "[DEBUG] Provider response done",
+          data: {
+            activeProviderResponseId: this.#activeProviderResponseId,
+            providerResponseId,
+            status,
+          },
+          ts: Date.now(),
+        }),
+      }).catch(() => {});
+    }
+    // #endregion
     this.#forgetResponse(providerResponseId, context.localResponseId);
     if (status === "cancelled") {
       return {
