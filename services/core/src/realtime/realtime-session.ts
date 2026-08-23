@@ -154,31 +154,7 @@ export class RealtimeSession {
 
     try {
       await this.#conversation.send(mapInput(event), signal);
-    } catch (error) {
-      // #region debug-point B-C:input-error
-      const inputErrorDebugURL = process.env["DEBUG_SERVER_URL"];
-      if (inputErrorDebugURL) {
-        void fetch(inputErrorDebugURL, {
-          method: "POST",
-          body: JSON.stringify({
-            sessionId: "duplicate-qwen-cancel",
-            runId: "post-fix",
-            hypothesisId: "B-C",
-            location: "realtime-session.ts:handleInput",
-            msg: "[DEBUG] Realtime input failed",
-            data: {
-              code:
-                typeof error === "object" && error !== null && "code" in error
-                  ? String(error.code)
-                  : null,
-              eventType: event.type,
-              name: error instanceof Error ? error.name : typeof error,
-            },
-            ts: Date.now(),
-          }),
-        }).catch(() => {});
-      }
-      // #endregion
+    } catch {
       yield this.#error(
         event.sessionId,
         "REALTIME_INPUT_FAILED",
