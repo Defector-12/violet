@@ -5,6 +5,10 @@ compose_file=${VIOLET_COMPOSE_FILE:-infra/compose/compose.yaml}
 data_dir=${VIOLET_DATA_DIR:-/data00/violet}
 runtime_secrets_dir=${VIOLET_RUNTIME_SECRETS_DIR:-/dev/shm/violet}
 version=${VIOLET_VERSION:-0.1.0-dev}
+realtime_provider=${VIOLET_REALTIME_PROVIDER:-qwen-audio}
+pipeline_asr_model=${PIPELINE_ASR_MODEL:-paraformer-realtime-v2}
+pipeline_tts_model=${PIPELINE_TTS_MODEL:-cosyvoice-v3-flash}
+pipeline_tts_voice=${PIPELINE_TTS_VOICE:-longanyang}
 
 if docker info >/dev/null 2>&1; then
   use_sudo=false
@@ -19,13 +23,21 @@ run_compose() {
   if [ "$use_sudo" = true ]; then
     sudo -n env \
       VIOLET_DATA_DIR="$data_dir" \
+      VIOLET_REALTIME_PROVIDER="$realtime_provider" \
       VIOLET_RUNTIME_SECRETS_DIR="$runtime_secrets_dir" \
       VIOLET_VERSION="$version" \
+      PIPELINE_ASR_MODEL="$pipeline_asr_model" \
+      PIPELINE_TTS_MODEL="$pipeline_tts_model" \
+      PIPELINE_TTS_VOICE="$pipeline_tts_voice" \
       docker compose -f "$compose_file" "$@"
   else
     VIOLET_DATA_DIR="$data_dir" \
+    VIOLET_REALTIME_PROVIDER="$realtime_provider" \
     VIOLET_RUNTIME_SECRETS_DIR="$runtime_secrets_dir" \
     VIOLET_VERSION="$version" \
+    PIPELINE_ASR_MODEL="$pipeline_asr_model" \
+    PIPELINE_TTS_MODEL="$pipeline_tts_model" \
+    PIPELINE_TTS_VOICE="$pipeline_tts_voice" \
       docker compose -f "$compose_file" "$@"
   fi
 }

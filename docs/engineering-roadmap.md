@@ -442,7 +442,7 @@ CI 必须验证协议兼容、TypeScript、Swift、数据库迁移、容器构�
 ### 4.5 第一阶段依赖与授权
 
 - 内部集成远端、GitHub 可迁移镜像和 DeepSeek `deepseek-v4-flash` 文字模型 API 已经就绪；1C 开始前再提供多模态模型。
-- Release 1B 已选定 Qwen-Audio 3.0 Realtime Plus 作为首个端到端 canary 候选，并完成真实合成请求及单次真实连续语音验收；最终默认运行时仍须通过批量设备验收并与至少一个 Pipeline 基线比较，不得把当前候选静默升级为最终选型。
+- Release 1B 已选定 Qwen-Audio 3.0 Realtime Plus 作为首个端到端 canary 候选，并完成真实合成请求、连续语音和批量设备验收；最终默认运行时仍须与至少一个 Pipeline 基线比较，不得把当前候选静默升级为最终选型。
 - Devbox SSH、Docker 和必要网络能力。
 - PostgreSQL。
 - 个人火山引擎 TOS 私有普通桶、北京地域 Endpoint、版本控制、SSE-TOS、生命周期和最小权限 IAM 用户已经建立；暴露凭证已轮换，真实备份与恢复验证已通过。

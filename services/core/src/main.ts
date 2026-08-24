@@ -11,6 +11,7 @@ import { buildCoreApp } from "./http/app.js";
 import { DeepSeekModelGateway } from "./model/deepseek-model-gateway.js";
 import { DeterministicModelGateway } from "./model/deterministic-model-gateway.js";
 import { DeterministicRealtimeConversationPort } from "./realtime/deterministic-realtime-conversation.js";
+import { PipelineRealtimeConversationPort } from "./realtime/pipeline-realtime-conversation.js";
 import { QwenAudioRealtimeConversationPort } from "./realtime/qwen-audio-realtime-conversation.js";
 import { PostgresConversationLedger } from "./storage/postgres-conversation-ledger.js";
 
@@ -52,9 +53,19 @@ const realtimeConversationPort: RealtimeConversationPort =
         voice: config.realtime.voice,
         workspaceId: config.realtime.workspaceId,
       })
-    : new DeterministicRealtimeConversationPort({
-        generateId: randomUUID,
-      });
+    : config.realtime.provider === "pipeline"
+      ? new PipelineRealtimeConversationPort({
+          apiKey: config.realtime.apiKey,
+          asrModel: config.realtime.asrModel,
+          generateId: randomUUID,
+          modelGateway,
+          ttsModel: config.realtime.ttsModel,
+          voice: config.realtime.voice,
+          workspaceId: config.realtime.workspaceId,
+        })
+      : new DeterministicRealtimeConversationPort({
+          generateId: randomUUID,
+        });
 const app = buildCoreApp({
   authenticator: new DeviceAuthenticator({
     expectedHashHex: config.deviceTokenHash,
