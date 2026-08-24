@@ -12,15 +12,13 @@ describe("DeterministicRealtimeConversationPort", () => {
       inputModalities: ["audio", "text"],
       outputModalities: ["audio", "text"],
     });
-    const events = [];
-
-    for await (const event of conversation.send({
+    const eventsPromise = take(conversation.outputs(), 3);
+    await conversation.send({
       text: "Hello",
       turnId: "turn-1",
       type: "text",
-    })) {
-      events.push(event);
-    }
+    });
+    const events = await eventsPromise;
 
     expect(conversation.capabilities).toEqual({
       inputModalities: ["text"],
@@ -28,6 +26,7 @@ describe("DeterministicRealtimeConversationPort", () => {
       outputModalities: ["text"],
       runtimeKind: "deterministic",
       transcription: false,
+      turnDetection: "manual",
       voiceKind: "none",
     });
     expect(events).toEqual([
@@ -60,15 +59,13 @@ describe("DeterministicRealtimeConversationPort", () => {
       inputModalities: ["audio"],
       outputModalities: ["text"],
     });
-    const events = [];
-
-    for await (const event of conversation.send({
+    const eventsPromise = take(conversation.outputs(), 1);
+    await conversation.send({
       audio: Uint8Array.from([0, 1]),
       turnId: "turn-1",
       type: "audio",
-    })) {
-      events.push(event);
-    }
+    });
+    const events = await eventsPromise;
 
     expect(events).toEqual([
       {
@@ -80,3 +77,14 @@ describe("DeterministicRealtimeConversationPort", () => {
     ]);
   });
 });
+
+async function take<T>(events: AsyncIterable<T>, count: number): Promise<T[]> {
+  const collected = [];
+  for await (const event of events) {
+    collected.push(event);
+    if (collected.length === count) {
+      break;
+    }
+  }
+  return collected;
+}

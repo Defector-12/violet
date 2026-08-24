@@ -79,9 +79,45 @@ describe("protocol validation", () => {
     ).not.toThrow();
     expect(() =>
       assertRealtimeServerEvent({
+        capabilities: {
+          inputAudio: {
+            channels: 1,
+            encoding: "pcm_s16le",
+            sampleRate: 16000,
+          },
+          inputModalities: ["audio", "text"],
+          interruption: false,
+          outputAudio: {
+            channels: 1,
+            encoding: "pcm_s16le",
+            sampleRate: 24000,
+          },
+          outputModalities: ["audio", "text"],
+          runtimeKind: "integrated",
+          transcription: true,
+          turnDetection: "smart_turn",
+          voiceKind: "preset",
+        },
+        eventId: randomUUID(),
+        sequence: 1,
+        sessionId,
+        type: "session.ready",
+      }),
+    ).not.toThrow();
+    expect(() =>
+      assertRealtimeServerEvent({
+        eventId: randomUUID(),
+        sequence: 2,
+        sessionId,
+        turnId,
+        type: "input.speech.started",
+      }),
+    ).not.toThrow();
+    expect(() =>
+      assertRealtimeServerEvent({
         eventId: randomUUID(),
         responseId,
-        sequence: 1,
+        sequence: 3,
         sessionId,
         turnId,
         type: "response.completed",

@@ -189,6 +189,8 @@ export interface components {
                 outputModalities: components["schemas"]["modalities"];
                 /** @constant */
                 protocolVersion: "1";
+                /** @enum {string} */
+                turnDetection?: "manual" | "server_vad" | "smart_turn";
                 voice?: string;
             };
             eventId: components["schemas"]["uuid"];
@@ -240,6 +242,14 @@ export interface components {
         /** RealtimeServerEvent */
         "realtime-server-event.schema": {
             $defs: {
+                audioFormat: {
+                    /** @constant */
+                    channels: 1;
+                    /** @constant */
+                    encoding: "pcm_s16le";
+                    /** @enum {integer} */
+                    sampleRate: 16000 | 24000 | 48000;
+                };
                 modalities: ("audio" | "text")[];
                 sequence: number;
                 usage: {
@@ -251,12 +261,16 @@ export interface components {
             };
         } & ({
             capabilities: {
+                inputAudio?: components["schemas"]["audioFormat"];
                 inputModalities: components["schemas"]["modalities"];
                 interruption: boolean;
+                outputAudio?: components["schemas"]["audioFormat"];
                 outputModalities: components["schemas"]["modalities"];
                 /** @enum {string} */
                 runtimeKind: "deterministic" | "integrated" | "pipeline";
                 transcription: boolean;
+                /** @enum {string} */
+                turnDetection: "manual" | "server_vad" | "smart_turn";
                 /** @enum {string} */
                 voiceKind: "clone" | "none" | "parametric" | "preset";
             };
@@ -265,6 +279,20 @@ export interface components {
             sessionId: components["schemas"]["uuid"];
             /** @constant */
             type: "session.ready";
+        } | {
+            eventId: components["schemas"]["uuid"];
+            sequence: components["schemas"]["sequence"];
+            sessionId: components["schemas"]["uuid"];
+            turnId: components["schemas"]["uuid"];
+            /** @constant */
+            type: "input.speech.started";
+        } | {
+            eventId: components["schemas"]["uuid"];
+            sequence: components["schemas"]["sequence"];
+            sessionId: components["schemas"]["uuid"];
+            turnId: components["schemas"]["uuid"];
+            /** @constant */
+            type: "input.speech.stopped";
         } | {
             eventId: components["schemas"]["uuid"];
             final: boolean;

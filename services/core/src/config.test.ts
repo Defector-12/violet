@@ -25,6 +25,7 @@ describe("loadCoreRuntimeConfig", () => {
 
     expect(config.contentKey).toBeNull();
     expect(config.model.provider).toBe("deterministic");
+    expect(config.realtime.provider).toBe("deterministic");
   });
 
   it("requires a database when the content key is loaded", () => {
@@ -65,6 +66,28 @@ describe("loadCoreRuntimeConfig", () => {
       baseUrl: "https://api.deepseek.com",
       model: "deepseek-v4-flash",
       provider: "deepseek",
+    });
+  });
+
+  it("loads Qwen realtime credentials only after unsealing", () => {
+    const contentKeyFile = writeSecretFile(Buffer.alloc(32, 1).toString("base64"));
+    const realtimeKeyFile = writeSecretFile("test-qwen-realtime-key");
+    const config = loadCoreRuntimeConfig({
+      QWEN_REALTIME_API_KEY_FILE: realtimeKeyFile,
+      QWEN_REALTIME_WORKSPACE_ID: "ws-testworkspace",
+      VIOLET_CONTENT_KEY_FILE: contentKeyFile,
+      VIOLET_DATABASE_URL: "postgresql://violet:test@localhost/violet",
+      VIOLET_DEVICE_TOKEN_EXPIRES_AT: tokenExpiresAt,
+      VIOLET_DEVICE_TOKEN_SHA256: tokenHash,
+      VIOLET_REALTIME_PROVIDER: "qwen-audio",
+    });
+
+    expect(config.realtime).toEqual({
+      apiKey: "test-qwen-realtime-key",
+      model: "qwen-audio-3.0-realtime-plus",
+      provider: "qwen-audio",
+      voice: "longanqian",
+      workspaceId: "ws-testworkspace",
     });
   });
 });

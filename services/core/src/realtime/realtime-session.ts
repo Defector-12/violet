@@ -40,6 +40,10 @@ export class RealtimeSession {
     return this.#closed;
   }
 
+  get configured(): boolean {
+    return this.#conversation !== null;
+  }
+
   async close(): Promise<void> {
     if (this.#closed) {
       return;
@@ -98,17 +102,30 @@ export class RealtimeSession {
         return;
       }
 
+      const history = (await this.#ledger.list())
+        .slice(-40)
+        .map(({ content, role }) => ({ content, role }));
       this.#conversation = await this.#conversationPort.open(
-        mapConfiguration(event.configuration),
+        {
+          ...mapConfiguration(event.configuration),
+          history,
+        },
         signal,
       );
       yield {
         capabilities: {
+          ...(this.#conversation.capabilities.inputAudio
+            ? { inputAudio: this.#conversation.capabilities.inputAudio }
+            : {}),
           inputModalities: [...this.#conversation.capabilities.inputModalities],
           interruption: this.#conversation.capabilities.interruption,
+          ...(this.#conversation.capabilities.outputAudio
+            ? { outputAudio: this.#conversation.capabilities.outputAudio }
+            : {}),
           outputModalities: [...this.#conversation.capabilities.outputModalities],
           runtimeKind: this.#conversation.capabilities.runtimeKind,
           transcription: this.#conversation.capabilities.transcription,
+          turnDetection: this.#conversation.capabilities.turnDetection,
           voiceKind: this.#conversation.capabilities.voiceKind,
         },
         ...this.#baseEvent(event.sessionId),
@@ -135,14 +152,36 @@ export class RealtimeSession {
       await this.#persistUserTurn(event.turnId, event.text);
     }
 
-    for await (const output of this.#conversation.send(mapInput(event), signal)) {
+    try {
+      await this.#conversation.send(mapInput(event), signal);
+    } catch {
+      yield this.#error(
+        event.sessionId,
+        "REALTIME_INPUT_FAILED",
+        "The realtime runtime rejected the input",
+      );
+    }
+  }
+
+  async *outputs(signal?: AbortSignal): AsyncIterable<RealtimeServerEvent> {
+    const conversation = this.#conversation;
+    if (!conversation) {
+      return;
+    }
+    for await (const output of conversation.outputs(signal)) {
       await this.#persistOutput(output);
-      yield this.#mapOutput(event.sessionId, output);
+      if (!this.#sessionId) {
+        return;
+      }
+      yield this.#mapOutput(this.#sessionId, output);
     }
   }
 
   async #persistOutput(output: RealtimeConversationOutput): Promise<void> {
     switch (output.type) {
+      case "speech-started":
+      case "speech-stopped":
+        break;
       case "transcript":
         if (output.final) {
           await this.#persistUserTurn(output.turnId, output.text);
@@ -219,6 +258,18 @@ export class RealtimeSession {
   #mapOutput(sessionId: string, output: RealtimeConversationOutput): RealtimeServerEvent {
     const base = this.#baseEvent(sessionId);
     switch (output.type) {
+      case "speech-started":
+        return {
+          turnId: output.turnId,
+          ...base,
+          type: "input.speech.started",
+        };
+      case "speech-stopped":
+        return {
+          turnId: output.turnId,
+          ...base,
+          type: "input.speech.stopped",
+        };
       case "transcript":
         return {
           final: output.final,
@@ -291,6 +342,9 @@ function mapConfiguration(
     ...(configuration.language ? { language: configuration.language } : {}),
     ...(configuration.outputAudio ? { outputAudio: configuration.outputAudio } : {}),
     outputModalities: configuration.outputModalities,
+    ...(configuration.turnDetection
+      ? { turnDetection: configuration.turnDetection }
+      : { turnDetection: "manual" as const }),
     ...(configuration.voice ? { voice: configuration.voice } : {}),
   };
 }

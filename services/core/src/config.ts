@@ -19,6 +19,17 @@ export interface CoreRuntimeConfig {
         readonly userId: string;
       };
   readonly port: number;
+  readonly realtime:
+    | {
+        readonly provider: "deterministic";
+      }
+    | {
+        readonly apiKey: string;
+        readonly model: string;
+        readonly provider: "qwen-audio";
+        readonly voice: string;
+        readonly workspaceId: string;
+      };
   readonly version: string;
 }
 
@@ -43,6 +54,7 @@ export function loadCoreRuntimeConfig(env: NodeJS.ProcessEnv): CoreRuntimeConfig
   }
 
   const model = loadModelConfig(env, contentKey !== null);
+  const realtime = loadRealtimeConfig(env, contentKey !== null);
 
   return {
     contentKey,
@@ -53,6 +65,7 @@ export function loadCoreRuntimeConfig(env: NodeJS.ProcessEnv): CoreRuntimeConfig
     host: env["VIOLET_HOST"] ?? "127.0.0.1",
     model,
     port: parsePort(env["VIOLET_PORT"] ?? "4310"),
+    realtime,
     version: env["VIOLET_VERSION"] ?? "0.1.0-dev",
   };
 }
@@ -76,6 +89,30 @@ function loadModelConfig(env: NodeJS.ProcessEnv, enabled: boolean): CoreRuntimeC
     model: env["DEEPSEEK_MODEL"] ?? "deepseek-v4-flash",
     provider,
     userId: env["DEEPSEEK_USER_ID"] ?? "violet-instance",
+  };
+}
+
+function loadRealtimeConfig(
+  env: NodeJS.ProcessEnv,
+  enabled: boolean,
+): CoreRuntimeConfig["realtime"] {
+  if (!enabled) {
+    return { provider: "deterministic" };
+  }
+  const provider = env["VIOLET_REALTIME_PROVIDER"] ?? "deterministic";
+  if (provider === "deterministic") {
+    return { provider };
+  }
+  if (provider !== "qwen-audio") {
+    throw new Error("VIOLET_REALTIME_PROVIDER must be deterministic or qwen-audio");
+  }
+
+  return {
+    apiKey: readSecretFile(required(env, "QWEN_REALTIME_API_KEY_FILE"), "Qwen realtime API key"),
+    model: env["QWEN_REALTIME_MODEL"] ?? "qwen-audio-3.0-realtime-plus",
+    provider,
+    voice: env["QWEN_REALTIME_VOICE"] ?? "longanqian",
+    workspaceId: required(env, "QWEN_REALTIME_WORKSPACE_ID"),
   };
 }
 

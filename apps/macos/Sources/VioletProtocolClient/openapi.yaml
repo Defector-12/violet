@@ -194,6 +194,12 @@ paths:
                         $ref: '#/components/schemas/modalities'
                       protocolVersion:
                         const: '1'
+                      turnDetection:
+                        type: string
+                        enum:
+                          - manual
+                          - server_vad
+                          - smart_turn
                       voice:
                         type: string
                         minLength: 1
@@ -367,12 +373,17 @@ paths:
                       - outputModalities
                       - runtimeKind
                       - transcription
+                      - turnDetection
                       - voiceKind
                     properties:
+                      inputAudio:
+                        $ref: '#/components/schemas/audioFormat'
                       inputModalities:
                         $ref: '#/components/schemas/modalities'
                       interruption:
                         type: boolean
+                      outputAudio:
+                        $ref: '#/components/schemas/audioFormat'
                       outputModalities:
                         $ref: '#/components/schemas/modalities'
                       runtimeKind:
@@ -383,6 +394,12 @@ paths:
                           - pipeline
                       transcription:
                         type: boolean
+                      turnDetection:
+                        type: string
+                        enum:
+                          - manual
+                          - server_vad
+                          - smart_turn
                       voiceKind:
                         type: string
                         enum:
@@ -398,6 +415,44 @@ paths:
                     $ref: '#/components/schemas/uuid'
                   type:
                     const: session.ready
+              - type: object
+                additionalProperties: false
+                required:
+                  - eventId
+                  - sequence
+                  - sessionId
+                  - turnId
+                  - type
+                properties:
+                  eventId:
+                    $ref: '#/components/schemas/uuid'
+                  sequence:
+                    $ref: '#/components/schemas/sequence'
+                  sessionId:
+                    $ref: '#/components/schemas/uuid'
+                  turnId:
+                    $ref: '#/components/schemas/uuid'
+                  type:
+                    const: input.speech.started
+              - type: object
+                additionalProperties: false
+                required:
+                  - eventId
+                  - sequence
+                  - sessionId
+                  - turnId
+                  - type
+                properties:
+                  eventId:
+                    $ref: '#/components/schemas/uuid'
+                  sequence:
+                    $ref: '#/components/schemas/sequence'
+                  sessionId:
+                    $ref: '#/components/schemas/uuid'
+                  turnId:
+                    $ref: '#/components/schemas/uuid'
+                  type:
+                    const: input.speech.stopped
               - type: object
                 additionalProperties: false
                 required:
@@ -572,6 +627,24 @@ paths:
                   type:
                     const: error
             $defs:
+              audioFormat:
+                type: object
+                additionalProperties: false
+                required:
+                  - channels
+                  - encoding
+                  - sampleRate
+                properties:
+                  channels:
+                    const: 1
+                  encoding:
+                    const: pcm_s16le
+                  sampleRate:
+                    type: integer
+                    enum:
+                      - 16000
+                      - 24000
+                      - 48000
               modalities:
                 type: array
                 minItems: 1
@@ -867,6 +940,12 @@ components:
                   $ref: '#/components/schemas/modalities'
                 protocolVersion:
                   const: '1'
+                turnDetection:
+                  type: string
+                  enum:
+                    - manual
+                    - server_vad
+                    - smart_turn
                 voice:
                   type: string
                   minLength: 1
@@ -1053,12 +1132,17 @@ components:
                 - outputModalities
                 - runtimeKind
                 - transcription
+                - turnDetection
                 - voiceKind
               properties:
+                inputAudio:
+                  $ref: '#/components/schemas/audioFormat'
                 inputModalities:
                   $ref: '#/components/schemas/modalities'
                 interruption:
                   type: boolean
+                outputAudio:
+                  $ref: '#/components/schemas/audioFormat'
                 outputModalities:
                   $ref: '#/components/schemas/modalities'
                 runtimeKind:
@@ -1069,6 +1153,12 @@ components:
                     - pipeline
                 transcription:
                   type: boolean
+                turnDetection:
+                  type: string
+                  enum:
+                    - manual
+                    - server_vad
+                    - smart_turn
                 voiceKind:
                   type: string
                   enum:
@@ -1084,6 +1174,44 @@ components:
               $ref: '#/components/schemas/uuid'
             type:
               const: session.ready
+        - type: object
+          additionalProperties: false
+          required:
+            - eventId
+            - sequence
+            - sessionId
+            - turnId
+            - type
+          properties:
+            eventId:
+              $ref: '#/components/schemas/uuid'
+            sequence:
+              $ref: '#/components/schemas/sequence'
+            sessionId:
+              $ref: '#/components/schemas/uuid'
+            turnId:
+              $ref: '#/components/schemas/uuid'
+            type:
+              const: input.speech.started
+        - type: object
+          additionalProperties: false
+          required:
+            - eventId
+            - sequence
+            - sessionId
+            - turnId
+            - type
+          properties:
+            eventId:
+              $ref: '#/components/schemas/uuid'
+            sequence:
+              $ref: '#/components/schemas/sequence'
+            sessionId:
+              $ref: '#/components/schemas/uuid'
+            turnId:
+              $ref: '#/components/schemas/uuid'
+            type:
+              const: input.speech.stopped
         - type: object
           additionalProperties: false
           required:
@@ -1258,6 +1386,24 @@ components:
             type:
               const: error
       $defs:
+        audioFormat:
+          type: object
+          additionalProperties: false
+          required:
+            - channels
+            - encoding
+            - sampleRate
+          properties:
+            channels:
+              const: 1
+            encoding:
+              const: pcm_s16le
+            sampleRate:
+              type: integer
+              enum:
+                - 16000
+                - 24000
+                - 48000
         modalities:
           type: array
           minItems: 1

@@ -9,12 +9,14 @@
     "pnpm": ">=11 <12"
   },
   "scripts": {
+    "acceptance:report": "node scripts/report-realtime-acceptance.mjs",
     "build": "pnpm -r build",
     "check": "pnpm generate && biome check . && pnpm typecheck && pnpm test",
     "check:ci": "pnpm check && git diff --exit-code -- packages/protocol/src/generated",
     "clean": "pnpm -r clean",
     "env:init": "node scripts/init-local-env.mjs",
     "env:inject-devbox": "node scripts/inject-devbox-secrets.mjs",
+    "env:inject-devbox-qwen": "node scripts/inject-devbox-qwen-key.mjs",
     "format": "biome check --write .",
     "generate": "pnpm --filter @violet/protocol generate",
     "macos:app": "./scripts/build-macos-app.sh debug",
