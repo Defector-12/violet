@@ -37,6 +37,21 @@ public enum VioletCoreClientError: Error, Equatable, LocalizedError {
 public protocol VioletCoreClientPort: Sendable {
   func status() async throws -> VioletCoreStatus
   func streamChat(message: String, requestId: UUID) -> AsyncThrowingStream<String, Error>
+  func streamChat(
+    message: String,
+    requestId: UUID,
+    contextSessionId: UUID?
+  ) -> AsyncThrowingStream<String, Error>
+}
+
+extension VioletCoreClientPort {
+  public func streamChat(
+    message: String,
+    requestId: UUID,
+    contextSessionId: UUID?
+  ) -> AsyncThrowingStream<String, Error> {
+    streamChat(message: message, requestId: requestId)
+  }
 }
 
 public struct GeneratedVioletCoreClient: VioletCoreClientPort {
@@ -73,6 +88,14 @@ public struct GeneratedVioletCoreClient: VioletCoreClientPort {
     message: String,
     requestId: UUID
   ) -> AsyncThrowingStream<String, Error> {
+    streamChat(message: message, requestId: requestId, contextSessionId: nil)
+  }
+
+  public func streamChat(
+    message: String,
+    requestId: UUID,
+    contextSessionId: UUID?
+  ) -> AsyncThrowingStream<String, Error> {
     AsyncThrowingStream { continuation in
       let task = Task {
         do {
@@ -80,6 +103,7 @@ public struct GeneratedVioletCoreClient: VioletCoreClientPort {
             .init(
               body: .json(
                 .init(
+                  contextSessionId: contextSessionId?.uuidString.lowercased(),
                   message: message,
                   requestId: requestId.uuidString.lowercased()
                 )

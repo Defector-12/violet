@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   assertChatRequest,
   assertChatStreamEvent,
+  assertContextEnvelope,
   assertRealtimeClientEvent,
   assertRealtimeServerEvent,
   ProtocolValidationError,
@@ -25,6 +26,76 @@ describe("protocol validation", () => {
         message: "Hello",
         requestId: randomUUID(),
         secret: "must not cross the protocol boundary",
+      }),
+    ).toThrow(ProtocolValidationError);
+  });
+
+  it("accepts an explicitly authorized context envelope", () => {
+    const capturedAt = new Date("2026-08-24T00:00:00.000Z");
+
+    expect(() =>
+      assertContextEnvelope({
+        authorization: {
+          controlledSensitiveAllowed: false,
+          grantId: randomUUID(),
+          mode: "explicit",
+          purpose: "conversation",
+          retention: "ephemeral",
+        },
+        capturedAt: capturedAt.toISOString(),
+        completeness: 1,
+        confidence: 0.98,
+        eventId: randomUUID(),
+        expiresAt: new Date(capturedAt.getTime() + 300_000).toISOString(),
+        payload: {
+          text: "Selected local text",
+          type: "focus.text",
+        },
+        protocolVersion: "1",
+        redactions: [{ category: "secure_field", count: 1 }],
+        sensitivity: "personal",
+        sequence: 1,
+        sessionId: randomUUID(),
+        source: {
+          appBundleId: "com.apple.Preview",
+          deviceId: randomUUID(),
+          modality: "accessibility",
+        },
+      }),
+    ).not.toThrow();
+  });
+
+  it("rejects context payloads with undeclared raw content", () => {
+    const capturedAt = new Date("2026-08-24T00:00:00.000Z");
+
+    expect(() =>
+      assertContextEnvelope({
+        authorization: {
+          controlledSensitiveAllowed: false,
+          grantId: randomUUID(),
+          mode: "explicit",
+          purpose: "conversation",
+          retention: "ephemeral",
+        },
+        capturedAt: capturedAt.toISOString(),
+        completeness: 1,
+        confidence: 1,
+        eventId: randomUUID(),
+        expiresAt: new Date(capturedAt.getTime() + 300_000).toISOString(),
+        payload: {
+          rawPassword: "must never cross the device boundary",
+          text: "safe text",
+          type: "focus.text",
+        },
+        protocolVersion: "1",
+        redactions: [],
+        sensitivity: "personal",
+        sequence: 1,
+        sessionId: randomUUID(),
+        source: {
+          deviceId: randomUUID(),
+          modality: "accessibility",
+        },
       }),
     ).toThrow(ProtocolValidationError);
   });

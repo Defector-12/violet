@@ -5,6 +5,12 @@ import { Pool } from "pg";
 
 import { DeviceAuthenticator } from "./auth/device-authenticator.js";
 import { loadCoreRuntimeConfig } from "./config.js";
+import { ContextService } from "./context/context-service.js";
+import { DeepSeekVisionUnderstandingPort } from "./context/deepseek-vision-understanding.js";
+import { DeterministicContextUnderstandingPort } from "./context/deterministic-context-understanding.js";
+import { InMemoryContextArtifactStore } from "./context/in-memory-context-artifact-store.js";
+import { InMemoryContextSessionRepository } from "./context/in-memory-context-session-repository.js";
+import { TosContextArtifactStore } from "./context/tos-context-artifact-store.js";
 import { ChatService } from "./conversation/chat-service.js";
 import { InMemoryConversationLedger } from "./conversation/in-memory-conversation-ledger.js";
 import { buildCoreApp } from "./http/app.js";
@@ -76,6 +82,34 @@ const realtimeConversationPort: RealtimeConversationPort =
       : new DeterministicRealtimeConversationPort({
           generateId: randomUUID,
         });
+const contextArtifactStore =
+  config.contextStorage.provider === "tos" && config.contentKey
+    ? new TosContextArtifactStore({
+        accessKeyId: config.contextStorage.accessKeyId,
+        bucket: config.contextStorage.bucket,
+        cipher: new EnvelopeCipher({
+          key: config.contentKey,
+          keyVersion: config.contentKeyVersion,
+        }),
+        endpoint: config.contextStorage.endpoint,
+        forcePathStyle: config.contextStorage.forcePathStyle,
+        prefix: config.contextStorage.prefix,
+        region: config.contextStorage.region,
+        secretAccessKey: config.contextStorage.secretAccessKey,
+      })
+    : new InMemoryContextArtifactStore();
+const contextService = new ContextService({
+  artifactStore: contextArtifactStore,
+  repository: new InMemoryContextSessionRepository(),
+  understanding:
+    config.vision.provider === "deepseek"
+      ? new DeepSeekVisionUnderstandingPort({
+          apiKey: config.vision.apiKey,
+          baseUrl: config.vision.baseUrl,
+          model: config.vision.model,
+        })
+      : new DeterministicContextUnderstandingPort(),
+});
 const app = buildCoreApp({
   authenticator: new DeviceAuthenticator({
     expectedHashHex: config.deviceTokenHash,
@@ -86,6 +120,7 @@ const app = buildCoreApp({
     ledger,
     modelGateway,
   }),
+  contextService,
   realtimeConversationPort,
   realtimeLedger: ledger,
   sealed: !config.contentKey,

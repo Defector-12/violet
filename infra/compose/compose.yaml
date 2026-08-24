@@ -83,6 +83,8 @@ services:
       DASHSCOPE_WORKSPACE_ID: ws-jvh4fvlcktrjvtbj
       DEEPSEEK_BASE_URL: https://api.deepseek.com
       DEEPSEEK_MODEL: deepseek-v4-flash
+      DEEPSEEK_VISION_BASE_URL: https://api.deepseek.com
+      DEEPSEEK_VISION_MODEL: deepseek-v4-flash-vision-exp
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
       OTEL_SERVICE_NAME: violet-core
       PIPELINE_ASR_MODEL: ${PIPELINE_ASR_MODEL:-paraformer-realtime-v2}
@@ -94,6 +96,8 @@ services:
       QWEN_REALTIME_WORKSPACE_ID: ws-jvh4fvlcktrjvtbj
       VIOLET_CONTENT_KEY_FILE: /run/violet-secrets/content_key
       VIOLET_CONTENT_KEY_VERSION: content-v1
+      VIOLET_CONTEXT_STORAGE_PROVIDER: ${VIOLET_CONTEXT_STORAGE_PROVIDER:-tos}
+      VIOLET_CONTEXT_TOS_PREFIX: violet/tmp/context
       VIOLET_DATABASE_URL_FILE: /run/violet-secrets/database_url
       VIOLET_DEVICE_TOKEN_EXPIRES_AT_FILE: /run/violet-config/device_token_expires_at
       VIOLET_DEVICE_TOKEN_SHA256_FILE: /run/violet-config/device_token_sha256
@@ -102,7 +106,14 @@ services:
       VIOLET_MODEL_PROVIDER: deepseek
       VIOLET_PORT: 4310
       VIOLET_REALTIME_PROVIDER: ${VIOLET_REALTIME_PROVIDER:-qwen-audio}
+      VIOLET_VISION_PROVIDER: ${VIOLET_VISION_PROVIDER:-deepseek}
       VIOLET_VERSION: ${VIOLET_VERSION:-0.1.0-dev}
+      TOS_ACCESS_KEY_ID_FILE: /run/violet-secrets/tos_access_key_id
+      TOS_BUCKET: ${TOS_BUCKET:-vio}
+      TOS_ENDPOINT: ${TOS_ENDPOINT:-https://tos-s3-cn-beijing.volces.com}
+      TOS_FORCE_PATH_STYLE: ${TOS_FORCE_PATH_STYLE:-false}
+      TOS_REGION: ${TOS_REGION:-cn-beijing}
+      TOS_SECRET_ACCESS_KEY_FILE: /run/violet-secrets/tos_secret_access_key
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -131,6 +142,8 @@ services:
       - ${VIOLET_RUNTIME_SECRETS_DIR:-/dev/shm/violet}/database_url:/run/violet-secrets/database_url:ro
       - ${VIOLET_RUNTIME_SECRETS_DIR:-/dev/shm/violet}/deepseek_api_key:/run/violet-secrets/deepseek_api_key:ro
       - ${VIOLET_RUNTIME_SECRETS_DIR:-/dev/shm/violet}/qwen_realtime_api_key:/run/violet-secrets/qwen_realtime_api_key:ro
+      - ${VIOLET_RUNTIME_SECRETS_DIR:-/dev/shm/violet}/tos_access_key_id:/run/violet-secrets/tos_access_key_id:ro
+      - ${VIOLET_RUNTIME_SECRETS_DIR:-/dev/shm/violet}/tos_secret_access_key:/run/violet-secrets/tos_secret_access_key:ro
 
   core-sealed:
     profiles:

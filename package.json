@@ -23,6 +23,7 @@
     "macos:configure": "node scripts/configure-macos-client.mjs",
     "macos:migrate-token": "./scripts/migrate-device-token-to-keychain.sh",
     "macos:test": "TMPDIR=\"$PWD/apps/macos/.swift-tmp\" swift test --package-path apps/macos --disable-index-store -j 4",
+    "macos:wake-assets": "./scripts/fetch-wake-word-assets.sh",
     "test": "vitest run",
     "typecheck": "pnpm -r build && pnpm -r typecheck"
   },

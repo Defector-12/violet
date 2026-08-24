@@ -1,6 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
-
+import { ContextService } from "../context/context-service.js";
+import { DeterministicContextUnderstandingPort } from "../context/deterministic-context-understanding.js";
+import { InMemoryContextArtifactStore } from "../context/in-memory-context-artifact-store.js";
+import { InMemoryContextSessionRepository } from "../context/in-memory-context-session-repository.js";
 import { InMemoryConversationLedger } from "../conversation/in-memory-conversation-ledger.js";
 import { DeterministicRealtimeConversationPort } from "./deterministic-realtime-conversation.js";
 import { RealtimeSession } from "./realtime-session.js";
@@ -98,6 +101,7 @@ describe("RealtimeSession", () => {
           };
         },
       },
+      contextService: createContextService(),
       generateId: randomUUID,
       ledger,
     });
@@ -165,6 +169,7 @@ describe("RealtimeSession", () => {
           return deterministic.open(configuration, signal);
         },
       },
+      contextService: createContextService(),
       generateId: randomUUID,
       ledger,
     });
@@ -190,6 +195,75 @@ describe("RealtimeSession", () => {
         { content: "Earlier answer", role: "assistant" },
       ],
       turnDetection: "smart_turn",
+    });
+  });
+
+  it("resolves an active context before opening the realtime provider", async () => {
+    const sessionId = randomUUID();
+    const contextSessionId = randomUUID();
+    const contextService = createContextService();
+    const capturedAt = new Date();
+    await contextService.submit({
+      authorization: {
+        controlledSensitiveAllowed: false,
+        grantId: randomUUID(),
+        mode: "explicit",
+        purpose: "conversation",
+        retention: "ephemeral",
+      },
+      capturedAt: capturedAt.toISOString(),
+      completeness: 1,
+      confidence: 1,
+      eventId: randomUUID(),
+      expiresAt: new Date(capturedAt.getTime() + 300_000).toISOString(),
+      payload: {
+        text: "Current selected evidence",
+        type: "focus.text",
+      },
+      protocolVersion: "1",
+      redactions: [],
+      sensitivity: "personal",
+      sequence: 1,
+      sessionId: contextSessionId,
+      source: {
+        deviceId: randomUUID(),
+        modality: "accessibility",
+      },
+    });
+    let observedConfiguration: Parameters<DeterministicRealtimeConversationPort["open"]>[0] | null =
+      null;
+    const deterministic = new DeterministicRealtimeConversationPort({
+      generateId: randomUUID,
+    });
+    const session = new RealtimeSession({
+      contextService,
+      conversationPort: {
+        async open(configuration, signal) {
+          observedConfiguration = configuration;
+          return deterministic.open(configuration, signal);
+        },
+      },
+      generateId: randomUUID,
+      ledger: new InMemoryConversationLedger(),
+    });
+
+    await collect(
+      session.handle({
+        configuration: {
+          contextSessionId,
+          inputModalities: ["audio", "text"],
+          outputModalities: ["audio", "text"],
+          protocolVersion: "1",
+        },
+        eventId: randomUUID(),
+        sequence: 1,
+        sessionId,
+        type: "session.configure",
+      }),
+    );
+
+    expect(observedConfiguration).toMatchObject({
+      contextEvidence: expect.stringContaining("Current selected evidence"),
     });
   });
 
@@ -331,10 +405,19 @@ function createSession(): {
     ledger,
     session: new RealtimeSession({
       conversationPort: new DeterministicRealtimeConversationPort({ generateId }),
+      contextService: createContextService(),
       generateId,
       ledger,
     }),
   };
+}
+
+function createContextService(): ContextService {
+  return new ContextService({
+    artifactStore: new InMemoryContextArtifactStore(),
+    repository: new InMemoryContextSessionRepository(),
+    understanding: new DeterministicContextUnderstandingPort(),
+  });
 }
 
 async function collect<T>(events: AsyncIterable<T>): Promise<T[]> {

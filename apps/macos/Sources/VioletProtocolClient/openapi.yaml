@@ -32,6 +32,69 @@ paths:
                 $ref: '#/components/schemas/status.schema'
         '401':
           $ref: '#/components/responses/Unauthorized'
+  /v1/context/envelopes:
+    post:
+      operationId: submitContextEnvelope
+      summary: Validate and resolve one explicitly authorized context envelope.
+      security:
+        - deviceToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/context-envelope.schema'
+      responses:
+        '200':
+          description: The context is available to the active conversation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/context-receipt.schema'
+        '400':
+          description: The context envelope is invalid or violates local-policy assertions.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/error.schema'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '410':
+          description: The context envelope has expired.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/error.schema'
+        '423':
+          description: Core is sealed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/error.schema'
+  /v1/context/sessions/{sessionId}:
+    delete:
+      operationId: deleteContextSession
+      summary: End a context session and discard all ephemeral evidence.
+      security:
+        - deviceToken: []
+      parameters:
+        - in: path
+          name: sessionId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '204':
+          description: The context session was removed or had already expired.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '423':
+          description: Core is sealed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/error.schema'
   /v1/chat/stream:
     post:
       operationId: streamChat
@@ -180,6 +243,8 @@ paths:
                       - outputModalities
                       - protocolVersion
                     properties:
+                      contextSessionId:
+                        $ref: '#/components/schemas/uuid'
                       inputAudio:
                         $ref: '#/components/schemas/audioFormat'
                       inputModalities:
@@ -686,6 +751,10 @@ components:
   schemas:
     ChatStreamEvent:
       $ref: '#/components/schemas/chat-stream-event.schema'
+    ContextEnvelope:
+      $ref: '#/components/schemas/context-envelope.schema'
+    ContextReceipt:
+      $ref: '#/components/schemas/context-receipt.schema'
     RealtimeClientEvent:
       $ref: '#/components/schemas/realtime-client-event.schema'
     RealtimeServerEvent:
@@ -763,6 +832,327 @@ components:
           format: uuid
         retryable:
           type: boolean
+    probability:
+      type: number
+      minimum: 0
+      maximum: 1
+    uuid:
+      type: string
+      format: uuid
+    bundleId:
+      type: string
+      minLength: 3
+      maxLength: 255
+      pattern: ^[A-Za-z0-9][A-Za-z0-9.-]+$
+    image:
+      type: object
+      additionalProperties: false
+      required:
+        - data
+        - height
+        - mediaType
+        - sha256
+        - width
+      properties:
+        data:
+          type: string
+          minLength: 4
+          maxLength: 11184812
+          pattern: ^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$
+        height:
+          type: integer
+          minimum: 1
+          maximum: 8192
+        mediaType:
+          type: string
+          enum:
+            - image/jpeg
+            - image/png
+        sha256:
+          type: string
+          pattern: ^[a-f0-9]{64}$
+        width:
+          type: integer
+          minimum: 1
+          maximum: 8192
+    normalizedRect:
+      type: object
+      additionalProperties: false
+      required:
+        - height
+        - width
+        - x
+        - 'y'
+      properties:
+        height:
+          $ref: '#/components/schemas/probability'
+        width:
+          $ref: '#/components/schemas/probability'
+        x:
+          $ref: '#/components/schemas/probability'
+        'y':
+          $ref: '#/components/schemas/probability'
+    context-envelope.schema:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      $id: https://violet.local/schemas/v1/context-envelope.schema.json
+      title: ContextEnvelope
+      type: object
+      additionalProperties: false
+      required:
+        - authorization
+        - capturedAt
+        - completeness
+        - confidence
+        - eventId
+        - expiresAt
+        - payload
+        - protocolVersion
+        - redactions
+        - sensitivity
+        - sequence
+        - sessionId
+        - source
+      properties:
+        authorization:
+          type: object
+          additionalProperties: false
+          required:
+            - controlledSensitiveAllowed
+            - grantId
+            - mode
+            - purpose
+            - retention
+          properties:
+            controlledSensitiveAllowed:
+              type: boolean
+            grantId:
+              $ref: '#/components/schemas/uuid'
+            mode:
+              const: explicit
+            purpose:
+              const: conversation
+            retention:
+              const: ephemeral
+        capturedAt:
+          type: string
+          format: date-time
+        completeness:
+          $ref: '#/components/schemas/probability'
+        confidence:
+          $ref: '#/components/schemas/probability'
+        eventId:
+          $ref: '#/components/schemas/uuid'
+        expiresAt:
+          type: string
+          format: date-time
+        payload:
+          oneOf:
+            - type: object
+              additionalProperties: false
+              required:
+                - text
+                - type
+              properties:
+                text:
+                  type: string
+                  minLength: 1
+                  maxLength: 65536
+                type:
+                  const: focus.text
+            - type: object
+              additionalProperties: false
+              required:
+                - appBundleId
+                - type
+              properties:
+                appBundleId:
+                  $ref: '#/components/schemas/bundleId'
+                appName:
+                  type: string
+                  minLength: 1
+                  maxLength: 256
+                type:
+                  const: app.state
+            - type: object
+              additionalProperties: false
+              required:
+                - image
+                - type
+              properties:
+                image:
+                  $ref: '#/components/schemas/image'
+                localText:
+                  type: string
+                  maxLength: 65536
+                type:
+                  const: screen.snapshot
+            - type: object
+              additionalProperties: false
+              required:
+                - image
+                - region
+                - type
+              properties:
+                image:
+                  $ref: '#/components/schemas/image'
+                localText:
+                  type: string
+                  maxLength: 65536
+                region:
+                  $ref: '#/components/schemas/normalizedRect'
+                type:
+                  const: focus.region
+            - type: object
+              additionalProperties: false
+              required:
+                - transcript
+                - type
+              properties:
+                transcript:
+                  type: string
+                  minLength: 1
+                  maxLength: 65536
+                type:
+                  const: audio.utterance
+        previousEventId:
+          $ref: '#/components/schemas/uuid'
+        protocolVersion:
+          const: '1'
+        redactions:
+          type: array
+          maxItems: 128
+          items:
+            type: object
+            additionalProperties: false
+            required:
+              - category
+              - count
+            properties:
+              category:
+                type: string
+                enum:
+                  - absolute_secret
+                  - controlled_sensitive
+                  - secure_field
+              count:
+                type: integer
+                minimum: 1
+        sensitivity:
+          type: string
+          enum:
+            - public
+            - personal
+            - controlled
+        sequence:
+          type: integer
+          minimum: 1
+        sessionId:
+          $ref: '#/components/schemas/uuid'
+        source:
+          type: object
+          additionalProperties: false
+          required:
+            - deviceId
+            - modality
+          properties:
+            appBundleId:
+              $ref: '#/components/schemas/bundleId'
+            deviceId:
+              $ref: '#/components/schemas/uuid'
+            modality:
+              type: string
+              enum:
+                - accessibility
+                - audio
+                - screen
+      $defs:
+        bundleId:
+          type: string
+          minLength: 3
+          maxLength: 255
+          pattern: ^[A-Za-z0-9][A-Za-z0-9.-]+$
+        image:
+          type: object
+          additionalProperties: false
+          required:
+            - data
+            - height
+            - mediaType
+            - sha256
+            - width
+          properties:
+            data:
+              type: string
+              minLength: 4
+              maxLength: 11184812
+              pattern: ^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$
+            height:
+              type: integer
+              minimum: 1
+              maximum: 8192
+            mediaType:
+              type: string
+              enum:
+                - image/jpeg
+                - image/png
+            sha256:
+              type: string
+              pattern: ^[a-f0-9]{64}$
+            width:
+              type: integer
+              minimum: 1
+              maximum: 8192
+        normalizedRect:
+          type: object
+          additionalProperties: false
+          required:
+            - height
+            - width
+            - x
+            - 'y'
+          properties:
+            height:
+              $ref: '#/components/schemas/probability'
+            width:
+              $ref: '#/components/schemas/probability'
+            x:
+              $ref: '#/components/schemas/probability'
+            'y':
+              $ref: '#/components/schemas/probability'
+        probability:
+          type: number
+          minimum: 0
+          maximum: 1
+        uuid:
+          type: string
+          format: uuid
+    context-receipt.schema:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      $id: https://violet.local/schemas/v1/context-receipt.schema.json
+      title: ContextReceipt
+      type: object
+      additionalProperties: false
+      required:
+        - acceptedAt
+        - eventId
+        - expiresAt
+        - sessionId
+        - status
+      properties:
+        acceptedAt:
+          type: string
+          format: date-time
+        eventId:
+          type: string
+          format: uuid
+        expiresAt:
+          type: string
+          format: date-time
+        sessionId:
+          type: string
+          format: uuid
+        status:
+          const: ready
     chat-request.schema:
       $schema: https://json-schema.org/draft/2020-12/schema
       $id: https://violet.local/schemas/v1/chat-request.schema.json
@@ -773,6 +1163,9 @@ components:
         - message
         - requestId
       properties:
+        contextSessionId:
+          type: string
+          format: uuid
         message:
           type: string
           minLength: 1
@@ -898,9 +1291,6 @@ components:
         enum:
           - audio
           - text
-    uuid:
-      type: string
-      format: uuid
     sequence:
       type: integer
       minimum: 1
@@ -926,6 +1316,8 @@ components:
                 - outputModalities
                 - protocolVersion
               properties:
+                contextSessionId:
+                  $ref: '#/components/schemas/uuid'
                 inputAudio:
                   $ref: '#/components/schemas/audioFormat'
                 inputModalities:

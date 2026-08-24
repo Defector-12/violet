@@ -25,6 +25,61 @@ function streamingResponse(lines: readonly string[]): Response {
 }
 
 describe("VioletClient", () => {
+  it("submits a context envelope through the authenticated API", async () => {
+    const sessionId = randomUUID();
+    let request: RequestInit | undefined;
+    const fetch = (_input: string | URL | Request, init?: RequestInit) => {
+      request = init;
+      return Promise.resolve(
+        Response.json({
+          acceptedAt: "2026-08-24T00:00:00.000Z",
+          eventId: randomUUID(),
+          expiresAt: "2026-08-24T00:05:00.000Z",
+          sessionId,
+          status: "ready",
+        }),
+      );
+    };
+    const client = new VioletClient({
+      baseUrl: "http://127.0.0.1:4310",
+      deviceToken: "test-token",
+      fetch: fetch as typeof globalThis.fetch,
+    });
+
+    await client.submitContext({
+      authorization: {
+        controlledSensitiveAllowed: false,
+        grantId: randomUUID(),
+        mode: "explicit",
+        purpose: "conversation",
+        retention: "ephemeral",
+      },
+      capturedAt: "2026-08-24T00:00:00.000Z",
+      completeness: 1,
+      confidence: 1,
+      eventId: randomUUID(),
+      expiresAt: "2026-08-24T00:05:00.000Z",
+      payload: { text: "selected", type: "focus.text" },
+      protocolVersion: "1",
+      redactions: [],
+      sensitivity: "personal",
+      sequence: 1,
+      sessionId,
+      source: {
+        deviceId: randomUUID(),
+        modality: "accessibility",
+      },
+    });
+
+    expect(request).toMatchObject({
+      headers: {
+        authorization: "Bearer test-token",
+        "content-type": "application/json",
+      },
+      method: "POST",
+    });
+  });
+
   it("parses fragmented NDJSON events", async () => {
     const requestId = randomUUID();
     const events = [

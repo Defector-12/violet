@@ -1,5 +1,6 @@
 {
   "coreURL": "http://127.0.0.1:14310",
+  "excludedContextBundleIds": [],
   "sshTunnel": {
     "host": "violet-devbox",
     "localPort": 14310,

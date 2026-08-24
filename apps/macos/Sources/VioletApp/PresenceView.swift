@@ -4,6 +4,7 @@ import VioletMacCore
 
 struct PresenceView: View {
   @ObservedObject var model: PresenceModel
+  @ObservedObject var wakeWord: WakeWordCoordinator
   @State private var draft = ""
 
   var body: some View {
@@ -55,6 +56,17 @@ struct PresenceView: View {
       }
       .buttonStyle(.plain)
       .help("Quit Violet")
+
+      Toggle(
+        "Wake",
+        isOn: Binding(
+          get: { wakeWord.isEnabled },
+          set: { wakeWord.setEnabled($0) }
+        )
+      )
+      .toggleStyle(.switch)
+      .controlSize(.small)
+      .help(wakeWordHelp)
     }
     .padding(14)
   }
@@ -91,6 +103,12 @@ struct PresenceView: View {
 
   private var composer: some View {
     VStack(alignment: .leading, spacing: 6) {
+      if let contextStatusLabel {
+        Text(contextStatusLabel)
+          .font(.caption)
+          .foregroundStyle(contextStatusColor)
+          .lineLimit(2)
+      }
       if let audioStatusLabel {
         Text(audioStatusLabel)
           .font(.caption)
@@ -99,6 +117,31 @@ struct PresenceView: View {
       }
 
       HStack(alignment: .bottom, spacing: 10) {
+        Menu {
+          Button("Selected Text") {
+            model.captureContext(.selectedText)
+          }
+          Button("Window or Display") {
+            model.captureContext(.window)
+          }
+          Button("Region") {
+            model.captureContext(.region)
+          }
+          if case .ready = model.contextState {
+            Divider()
+            Button("Clear Context") {
+              model.clearContext()
+            }
+          }
+        } label: {
+          Image(systemName: "viewfinder")
+            .frame(width: 22, height: 22)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .disabled(!canCaptureContext)
+        .help("Choose context")
+
         Button {
           model.toggleAudioSession()
         } label: {
@@ -193,6 +236,37 @@ struct PresenceView: View {
     return !model.isResponding
   }
 
+  private var canCaptureContext: Bool {
+    guard case .ready = model.connectionState else {
+      return false
+    }
+    return !model.isResponding && !model.isAudioSessionActive && !model.isSelectingContext
+  }
+
+  private var contextStatusColor: Color {
+    switch model.contextState {
+    case .blocked, .failed:
+      .red
+    case .ready:
+      .green
+    case .idle, .selecting:
+      .secondary
+    }
+  }
+
+  private var contextStatusLabel: String? {
+    switch model.contextState {
+    case .blocked(let message), .failed(let message):
+      message
+    case .idle:
+      nil
+    case .ready:
+      "Context ready"
+    case .selecting:
+      "Reading"
+    }
+  }
+
   private var canSend: Bool {
     guard case .ready = model.connectionState else {
       return false
@@ -225,6 +299,19 @@ struct PresenceView: View {
       "Ready"
     case .sealed:
       "Sealed"
+    }
+  }
+
+  private var wakeWordHelp: String {
+    switch wakeWord.state {
+    case .disabled:
+      "Enable local Violet wake word"
+    case .listening:
+      "Listening locally for Violet"
+    case .paused:
+      "Wake word pauses during an active session"
+    case .unavailable(let message):
+      message
     }
   }
 

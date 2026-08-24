@@ -38,6 +38,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/context/envelopes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Validate and resolve one explicitly authorized context envelope. */
+        post: operations["submitContextEnvelope"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/context/sessions/{sessionId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** End a context session and discard all ephemeral evidence. */
+        delete: operations["deleteContextSession"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/chat/stream": {
         parameters: {
             query?: never;
@@ -77,6 +111,8 @@ export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
         ChatStreamEvent: components["schemas"]["chat-stream-event.schema"];
+        ContextEnvelope: components["schemas"]["context-envelope.schema"];
+        ContextReceipt: components["schemas"]["context-receipt.schema"];
         RealtimeClientEvent: components["schemas"]["realtime-client-event.schema"];
         RealtimeServerEvent: components["schemas"]["realtime-server-event.schema"];
         /** Health */
@@ -108,8 +144,124 @@ export interface components {
             requestId: string;
             retryable: boolean;
         };
+        probability: number;
+        /** Format: uuid */
+        uuid: string;
+        bundleId: string;
+        image: {
+            data: string;
+            height: number;
+            /** @enum {string} */
+            mediaType: "image/jpeg" | "image/png";
+            sha256: string;
+            width: number;
+        };
+        normalizedRect: {
+            height: components["schemas"]["probability"];
+            width: components["schemas"]["probability"];
+            x: components["schemas"]["probability"];
+            y: components["schemas"]["probability"];
+        };
+        /** ContextEnvelope */
+        "context-envelope.schema": {
+            authorization: {
+                controlledSensitiveAllowed: boolean;
+                grantId: components["schemas"]["uuid"];
+                /** @constant */
+                mode: "explicit";
+                /** @constant */
+                purpose: "conversation";
+                /** @constant */
+                retention: "ephemeral";
+            };
+            /** Format: date-time */
+            capturedAt: string;
+            completeness: components["schemas"]["probability"];
+            confidence: components["schemas"]["probability"];
+            eventId: components["schemas"]["uuid"];
+            /** Format: date-time */
+            expiresAt: string;
+            payload: {
+                text: string;
+                /** @constant */
+                type: "focus.text";
+            } | {
+                appBundleId: components["schemas"]["bundleId"];
+                appName?: string;
+                /** @constant */
+                type: "app.state";
+            } | {
+                image: components["schemas"]["image"];
+                localText?: string;
+                /** @constant */
+                type: "screen.snapshot";
+            } | {
+                image: components["schemas"]["image"];
+                localText?: string;
+                region: components["schemas"]["normalizedRect"];
+                /** @constant */
+                type: "focus.region";
+            } | {
+                transcript: string;
+                /** @constant */
+                type: "audio.utterance";
+            };
+            previousEventId?: components["schemas"]["uuid"];
+            /** @constant */
+            protocolVersion: "1";
+            redactions: {
+                /** @enum {string} */
+                category: "absolute_secret" | "controlled_sensitive" | "secure_field";
+                count: number;
+            }[];
+            /** @enum {string} */
+            sensitivity: "public" | "personal" | "controlled";
+            sequence: number;
+            sessionId: components["schemas"]["uuid"];
+            source: {
+                appBundleId?: components["schemas"]["bundleId"];
+                deviceId: components["schemas"]["uuid"];
+                /** @enum {string} */
+                modality: "accessibility" | "audio" | "screen";
+            };
+            $defs: {
+                bundleId: string;
+                image: {
+                    data: string;
+                    height: number;
+                    /** @enum {string} */
+                    mediaType: "image/jpeg" | "image/png";
+                    sha256: string;
+                    width: number;
+                };
+                normalizedRect: {
+                    height: components["schemas"]["probability"];
+                    width: components["schemas"]["probability"];
+                    x: components["schemas"]["probability"];
+                    y: components["schemas"]["probability"];
+                };
+                probability: number;
+                /** Format: uuid */
+                uuid: string;
+            };
+        };
+        /** ContextReceipt */
+        "context-receipt.schema": {
+            /** Format: date-time */
+            acceptedAt: string;
+            /** Format: uuid */
+            eventId: string;
+            /** Format: date-time */
+            expiresAt: string;
+            /** Format: uuid */
+            sessionId: string;
+            /** @constant */
+            status: "ready";
+        };
         /** ChatRequest */
         "chat-request.schema": {
+            /** Format: uuid */
+            contextSessionId?: string;
             message: string;
             /** Format: uuid */
             requestId: string;
@@ -161,8 +313,6 @@ export interface components {
             sampleRate: 16000 | 24000 | 48000;
         };
         modalities: ("audio" | "text")[];
-        /** Format: uuid */
-        uuid: string;
         sequence: number;
         /** RealtimeClientEvent */
         "realtime-client-event.schema": {
@@ -182,6 +332,7 @@ export interface components {
             };
         } & ({
             configuration: {
+                contextSessionId?: components["schemas"]["uuid"];
                 inputAudio?: components["schemas"]["audioFormat"];
                 inputModalities: components["schemas"]["modalities"];
                 language?: string;
@@ -412,6 +563,88 @@ export interface operations {
                 };
             };
             401: components["responses"]["Unauthorized"];
+        };
+    };
+    submitContextEnvelope: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["context-envelope.schema"];
+            };
+        };
+        responses: {
+            /** @description The context is available to the active conversation. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["context-receipt.schema"];
+                };
+            };
+            /** @description The context envelope is invalid or violates local-policy assertions. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["error.schema"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            /** @description The context envelope has expired. */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["error.schema"];
+                };
+            };
+            /** @description Core is sealed. */
+            423: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["error.schema"];
+                };
+            };
+        };
+    };
+    deleteContextSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The context session was removed or had already expired. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            /** @description Core is sealed. */
+            423: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["error.schema"];
+                };
+            };
         };
     };
     streamChat: {
