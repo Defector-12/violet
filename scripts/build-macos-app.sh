@@ -38,6 +38,9 @@ rm -rf "${APP_DIR}"
 mkdir -p "${MACOS_DIR}" "${RESOURCES_DIR}/WakeWord/lib" "${RESOURCES_DIR}/WakeWord/model"
 install -m 0755 "${BIN_DIR}/Violet" "${MACOS_DIR}/Violet"
 install -m 0644 "${PACKAGE_DIR}/Resources/Violet-Info.plist" "${CONTENTS_DIR}/Info.plist"
+install -m 0644 \
+  "${PACKAGE_DIR}/Resources/wake-ack-longanqian.wav" \
+  "${RESOURCES_DIR}/wake-ack-longanqian.wav"
 install -m 0755 "${WAKE_ASSETS_DIR}/lib/"*.dylib "${RESOURCES_DIR}/WakeWord/lib/"
 install -m 0644 "${WAKE_ASSETS_DIR}/model/"* "${RESOURCES_DIR}/WakeWord/model/"
 install -m 0644 "${WAKE_ASSETS_DIR}/ENGINE-LICENSE.txt" "${RESOURCES_DIR}/WakeWord/"

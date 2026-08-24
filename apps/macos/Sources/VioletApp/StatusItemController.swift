@@ -7,9 +7,10 @@ import VioletMacCore
 final class StatusItemController: NSObject, NSPopoverDelegate {
   private let acceptanceRecorder: any RealtimeAcceptanceRecording
   private let model: PresenceModel
-  private let acknowledgement = AVSpeechSynthesizer()
+  private var acknowledgement: AVAudioPlayer?
+  private var isStopping = false
   private var pendingTriggerId: UUID?
-  private var wakeStartTask: Task<Void, Never>?
+  private var wakeConversationPending = false
   private let popover = NSPopover()
   private let shortcut: any GlobalShortcutPort
   private let wakeWord: WakeWordCoordinator
@@ -28,6 +29,14 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
     self.shortcut = shortcut
     self.wakeWord = wakeWord
     super.init()
+    if let acknowledgementURL = Bundle.main.url(
+      forResource: "wake-ack-longanqian",
+      withExtension: "wav"
+    ) {
+      acknowledgement = try? AVAudioPlayer(contentsOf: acknowledgementURL)
+      acknowledgement?.delegate = self
+      acknowledgement?.prepareToPlay()
+    }
 
     if let button = statusItem.button {
       button.image = NSImage(
@@ -69,19 +78,22 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
   }
 
   func stop() {
-    wakeStartTask?.cancel()
-    wakeWord.suspend()
+    isStopping = true
+    cancelWakeAcknowledgement()
     shortcut.stop()
     popover.close()
+    wakeWord.suspend()
     NSStatusBar.system.removeStatusItem(statusItem)
   }
 
   func popoverDidClose(_ notification: Notification) {
-    wakeStartTask?.cancel()
-    wakeStartTask = nil
+    cancelWakeAcknowledgement()
     model.cancelAudioSession(reason: .popoverClosed)
     if !model.isSelectingContext {
       model.clearContext()
+    }
+    if !isStopping {
+      wakeWord.resume()
     }
   }
 
@@ -131,20 +143,38 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
 
   private func handleWakeWord() {
     showPopover()
-    let utterance = AVSpeechUtterance(string: "我在")
-    utterance.voice = AVSpeechSynthesisVoice(language: "zh-CN")
-    acknowledgement.speak(utterance)
-    wakeStartTask?.cancel()
-    wakeStartTask = Task { [weak self] in
-      try? await Task.sleep(for: .milliseconds(650))
-      guard !Task.isCancelled, let self else {
-        return
-      }
-      model.startAudioSession()
-      if !model.isAudioSessionActive {
-        wakeWord.resume()
-      }
-      wakeStartTask = nil
+    wakeConversationPending = true
+    acknowledgement?.currentTime = 0
+    if acknowledgement?.play() != true {
+      startWakeConversation()
+    }
+  }
+
+  private func cancelWakeAcknowledgement() {
+    wakeConversationPending = false
+    acknowledgement?.stop()
+    acknowledgement?.currentTime = 0
+  }
+
+  private func startWakeConversation() {
+    guard wakeConversationPending else {
+      return
+    }
+    wakeConversationPending = false
+    model.startAudioSession()
+    if !model.isAudioSessionActive {
+      wakeWord.resume()
+    }
+  }
+}
+
+extension StatusItemController: AVAudioPlayerDelegate {
+  nonisolated func audioPlayerDidFinishPlaying(
+    _ player: AVAudioPlayer,
+    successfully flag: Bool
+  ) {
+    Task { @MainActor [weak self] in
+      self?.startWakeConversation()
     }
   }
 }

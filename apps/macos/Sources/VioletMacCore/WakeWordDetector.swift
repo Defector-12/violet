@@ -146,7 +146,7 @@ private final class WakeWordProcessor: @unchecked Sendable {
     self.detection = detection
     var errorBuffer = [CChar](repeating: 0, count: 1024)
     engine = assetsURL.path.withCString { assetsPath in
-      "▁VI OL ET :1.5 #0.35 @VIOLET".withCString { keyword in
+      "▁VI OL ET :2.0 #0.25 @VIOLET".withCString { keyword in
         VioletWakeCreate(
           assetsPath,
           keyword,

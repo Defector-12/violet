@@ -34,9 +34,11 @@ VIOLET_SWIFTPM_DISABLE_SANDBOX=1 pnpm macos:app
 
 - 引擎：`sherpa-onnx v1.13.6`。
 - 模型：GigaSpeech English KWS 3.3M，模型卡标记 Apache-2.0。
-- 关键词：`Violet`，boost `1.5`，threshold `0.35`。
+- 关键词：`Violet`，boost `2.0`，threshold `0.25`。
 - 资产由 `scripts/fetch-wake-word-assets.sh` 下载并校验 SHA-256，不进入 Git。
 - 合成样本：100/100 触发，100 次静音误触发 0，CPU 处理 p95 22.2ms。
+- 用户实测旧参数可用但召回不足；六种系统音色对比中，旧参数触发 3/6，新参数触发 4/6，相近发音负样本均误触发 1/24。该结果说明调参有改善但不能证明达标。
+- 唤醒回执由现有 Qwen Realtime `longanqian` 生成，裁剪为 0.73 秒的本地 24kHz 单声道 PCM WAV；运行时不访问 Qwen，并在实际播放完成后启动 Realtime。
 
 合成样本不能替代真实验收。仍需：
 
@@ -45,6 +47,8 @@ VIOLET_SWIFTPM_DISABLE_SANDBOX=1 pnpm macos:app
 3. 办公环境连续 8 小时，误触发为 0。
 4. 锁屏、睡眠、切换用户和 Realtime 会话期间，KWS 采集为 0。
 5. 唤醒前 PCM 写盘、上传和日志记录为 0。
+
+调参后的第一轮人工门禁先执行 20 次正常距离唤醒：至少成功 19 次且无误触发才继续扩大样本。若仍不足 19 次，不继续降低 threshold，而是更换针对用户发音的定制 KWS 模型。
 
 ## 视觉真实验收
 

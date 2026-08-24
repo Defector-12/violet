@@ -14,6 +14,7 @@ LICENSE_URL="https://raw.githubusercontent.com/k2-fsa/sherpa-onnx/v${VERSION}/LI
 MODEL_URL="https://github.com/k2-fsa/sherpa-onnx/releases/download/kws-models/${MODEL_ARCHIVE}"
 
 if [[ -f "${DESTINATION}/.ready" && -f "${DESTINATION}/ENGINE-LICENSE.txt" ]]; then
+  printf '%s\n' "▁VI OL ET :2.0 #0.25 @VIOLET" >"${DESTINATION}/model/keywords.txt"
   printf '%s\n' "${DESTINATION}"
   exit 0
 fi
@@ -67,7 +68,7 @@ install -m 0644 "${model_source}/tokens.txt" "${DESTINATION}/model/tokens.txt"
 install -m 0644 "${model_source}/bpe.model" "${DESTINATION}/model/bpe.model"
 install -m 0644 "${model_source}/README.md" "${DESTINATION}/MODEL-LICENSE.md"
 install -m 0644 "${temporary_directory}/ENGINE-LICENSE.txt" "${DESTINATION}/"
-printf '%s\n' "▁VI OL ET :1.5 #0.35 @VIOLET" >"${DESTINATION}/model/keywords.txt"
+printf '%s\n' "▁VI OL ET :2.0 #0.25 @VIOLET" >"${DESTINATION}/model/keywords.txt"
 printf '%s\n' "${VERSION}" >"${DESTINATION}/.ready"
 
 printf '%s\n' "${DESTINATION}"

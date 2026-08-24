@@ -59,6 +59,6 @@ macOS 麦克风权限并启动 `AudioIOPort`。会话启动后由 `smart_turn` �
 
 浮层中的 Context 菜单支持 Accessibility 选中文本、系统窗口/显示器选择和区域框选。原始图片先在 Mac 使用 Apple Vision OCR 和本地规则遮挡，再装入五分钟有效的 Context Envelope。关闭浮层、锁屏、睡眠、撤权或主动清除会删除当前 Context。
 
-Wake 开关默认关闭。开启后，`sherpa-onnx` 只在本地监听关键词 `Violet`；唤醒前 PCM 不写盘、不上传、不记录。检测成功后 KWS 先停止，再显示浮层、播放“我在”并启动现有 Realtime 会话。模型和动态库下载到被 Git 忽略的 `.local-wake/`，打包时复制进 App Resources。
+Wake 开关默认关闭。开启后，`sherpa-onnx` 只在本地监听关键词 `Violet`；唤醒前 PCM 不写盘、不上传、不记录。检测成功后 KWS 先停止，再显示浮层、播放本地打包的 Qwen `longanqian`“我在”，并在播放完成后启动现有 Realtime 会话。模型和动态库下载到被 Git 忽略的 `.local-wake/`，打包时复制进 App Resources。
 
 真实权限和视觉验收见 [Release 1C Violet Sight 验收](../../docs/release-1c-acceptance.md)。

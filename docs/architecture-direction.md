@@ -89,7 +89,7 @@ Mac 客户端是 Violet 的第一具身体，不承载完整身份。
 
 客户端不要求运行本地大模型，但唤醒检测、权限校验、敏感过滤和加密必须在设备端完成。
 
-Release 1C 的语音唤醒使用 `WakeWordDetectorPort` 隔离具体引擎。当前 Mac Adapter 使用 `sherpa-onnx v1.13.6` 和带 Apache-2.0 模型卡的 GigaSpeech 英文 KWS 权重；模型与动态库通过固定 SHA-256 下载到本地构建缓存，不进入 Git。唤醒功能默认关闭，用户开启开关后才构成持续本地监听授权；唤醒前 PCM 仅进入本地 KWS，不写盘、不上传、不记录。检测成功后先停止唤醒引擎，再显示浮层、播放本地短回执并启动现有 Realtime 会话；实时会话结束后才恢复唤醒。
+Release 1C 的语音唤醒使用 `WakeWordDetectorPort` 隔离具体引擎。当前 Mac Adapter 使用 `sherpa-onnx v1.13.6` 和带 Apache-2.0 模型卡的 GigaSpeech 英文 KWS 权重；模型与动态库通过固定 SHA-256 下载到本地构建缓存，不进入 Git。唤醒功能默认关闭，用户开启开关后才构成持续本地监听授权；唤醒前 PCM 仅进入本地 KWS，不写盘、不上传、不记录。检测成功后先停止唤醒引擎，再显示浮层、播放本地打包的 Qwen `longanqian` 短回执，并在播放完成后启动现有 Realtime 会话；实时会话结束后才恢复唤醒。
 
 感知证据的默认优先级为：
 

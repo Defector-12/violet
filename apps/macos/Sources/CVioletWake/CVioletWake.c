@@ -214,8 +214,8 @@ VioletWakeEngine *VioletWakeCreate(const char *assets_path, const char *keyword,
   config.model_config.bpe_vocab = bpe_vocab_path;
   config.max_active_paths = 4;
   config.num_trailing_blanks = 1;
-  config.keywords_score = 1.5f;
-  config.keywords_threshold = 0.35f;
+  config.keywords_score = 2.0f;
+  config.keywords_threshold = 0.25f;
   config.keywords_buf = keyword;
   config.keywords_buf_size = (int32_t)strlen(keyword);
 
