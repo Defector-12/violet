@@ -4,7 +4,9 @@ import VioletMacCore
 
 @MainActor
 final class StatusItemController: NSObject, NSPopoverDelegate {
+  private let acceptanceRecorder: any RealtimeAcceptanceRecording
   private let model: PresenceModel
+  private var pendingTriggerId: UUID?
   private let popover = NSPopover()
   private let shortcut: any GlobalShortcutPort
   private let statusItem = NSStatusBar.system.statusItem(
@@ -13,8 +15,10 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
 
   init(
     model: PresenceModel,
-    shortcut: any GlobalShortcutPort
+    shortcut: any GlobalShortcutPort,
+    acceptanceRecorder: any RealtimeAcceptanceRecording
   ) {
+    self.acceptanceRecorder = acceptanceRecorder
     self.model = model
     self.shortcut = shortcut
     super.init()
@@ -28,6 +32,7 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
       button.action = #selector(togglePopover)
     }
 
+    popover.animates = false
     popover.behavior = .transient
     popover.delegate = self
     popover.contentSize = NSSize(width: 400, height: 520)
@@ -37,7 +42,7 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
 
     do {
       try shortcut.start { [weak self] in
-        self?.toggle()
+        self?.toggle(source: .shortcut)
       }
     } catch {
       // The menu bar button remains a reliable entry if registration fails.
@@ -51,15 +56,25 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
   }
 
   func popoverDidClose(_ notification: Notification) {
-    model.cancelAudioSession()
+    model.cancelAudioSession(reason: .popoverClosed)
+  }
+
+  func popoverDidShow(_ notification: Notification) {
+    guard let pendingTriggerId else {
+      return
+    }
+    acceptanceRecorder.record(
+      .init(type: .presencePresented, triggerId: pendingTriggerId)
+    )
+    self.pendingTriggerId = nil
   }
 
   @objc
   private func togglePopover() {
-    toggle()
+    toggle(source: .menuBar)
   }
 
-  private func toggle() {
+  private func toggle(source: RealtimeAcceptanceReason) {
     if popover.isShown {
       popover.performClose(nil)
       return
@@ -67,6 +82,11 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
     guard let button = statusItem.button else {
       return
     }
+    let triggerId = UUID()
+    pendingTriggerId = triggerId
+    acceptanceRecorder.record(
+      .init(type: .presenceTriggered, reason: source, triggerId: triggerId)
+    )
 
     popover.show(
       relativeTo: button.bounds,

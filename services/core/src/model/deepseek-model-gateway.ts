@@ -6,7 +6,7 @@ import type {
 } from "openai/resources/chat/completions";
 
 interface DeepSeekStreamingRequest extends ChatCompletionCreateParamsStreaming {
-  readonly thinking: {
+  readonly thinking?: {
     readonly type: "enabled";
   };
   readonly user_id: string;
@@ -15,12 +15,14 @@ interface DeepSeekStreamingRequest extends ChatCompletionCreateParamsStreaming {
 export class DeepSeekModelGateway implements ModelGateway {
   readonly #client: OpenAI;
   readonly #model: string;
+  readonly #thinking: boolean;
   readonly #userId: string;
 
   constructor(input: {
     readonly apiKey: string;
     readonly baseUrl: string;
     readonly model: string;
+    readonly thinking?: boolean;
     readonly userId: string;
   }) {
     this.#client = new OpenAI({
@@ -30,6 +32,7 @@ export class DeepSeekModelGateway implements ModelGateway {
       timeout: 120_000,
     });
     this.#model = input.model;
+    this.#thinking = input.thinking ?? true;
     this.#userId = input.userId;
   }
 
@@ -44,7 +47,7 @@ export class DeepSeekModelGateway implements ModelGateway {
       model: this.#model,
       stream: true,
       stream_options: { include_usage: true },
-      thinking: { type: "enabled" },
+      ...(this.#thinking ? { thinking: { type: "enabled" as const } } : {}),
       user_id: this.#userId,
     };
     const stream = await this.#client.chat.completions.create(parameters, {

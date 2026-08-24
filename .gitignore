@@ -7,6 +7,7 @@ dist/
 coverage/
 .DS_Store
 .local-backups/
+.local-acceptance/
 .swiftpm/
 .build/
 .swift-home/

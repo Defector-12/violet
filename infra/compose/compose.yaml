@@ -79,10 +79,19 @@ services:
       dockerfile: services/core/Dockerfile
     restart: "no"
     environment:
+      DASHSCOPE_API_KEY_FILE: /run/violet-secrets/qwen_realtime_api_key
+      DASHSCOPE_WORKSPACE_ID: ws-jvh4fvlcktrjvtbj
       DEEPSEEK_BASE_URL: https://api.deepseek.com
       DEEPSEEK_MODEL: deepseek-v4-flash
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
       OTEL_SERVICE_NAME: violet-core
+      PIPELINE_ASR_MODEL: ${PIPELINE_ASR_MODEL:-paraformer-realtime-v2}
+      PIPELINE_TTS_MODEL: ${PIPELINE_TTS_MODEL:-cosyvoice-v3-flash}
+      PIPELINE_TTS_VOICE: ${PIPELINE_TTS_VOICE:-longanyang}
+      QWEN_REALTIME_API_KEY_FILE: /run/violet-secrets/qwen_realtime_api_key
+      QWEN_REALTIME_MODEL: qwen-audio-3.0-realtime-plus
+      QWEN_REALTIME_VOICE: longanqian
+      QWEN_REALTIME_WORKSPACE_ID: ws-jvh4fvlcktrjvtbj
       VIOLET_CONTENT_KEY_FILE: /run/violet-secrets/content_key
       VIOLET_CONTENT_KEY_VERSION: content-v1
       VIOLET_DATABASE_URL_FILE: /run/violet-secrets/database_url
@@ -92,6 +101,7 @@ services:
       VIOLET_MODEL_API_KEY_FILE: /run/violet-secrets/deepseek_api_key
       VIOLET_MODEL_PROVIDER: deepseek
       VIOLET_PORT: 4310
+      VIOLET_REALTIME_PROVIDER: ${VIOLET_REALTIME_PROVIDER:-qwen-audio}
       VIOLET_VERSION: ${VIOLET_VERSION:-0.1.0-dev}
     depends_on:
       migrate:
@@ -120,6 +130,7 @@ services:
       - ${VIOLET_RUNTIME_SECRETS_DIR:-/dev/shm/violet}/content_key:/run/violet-secrets/content_key:ro
       - ${VIOLET_RUNTIME_SECRETS_DIR:-/dev/shm/violet}/database_url:/run/violet-secrets/database_url:ro
       - ${VIOLET_RUNTIME_SECRETS_DIR:-/dev/shm/violet}/deepseek_api_key:/run/violet-secrets/deepseek_api_key:ro
+      - ${VIOLET_RUNTIME_SECRETS_DIR:-/dev/shm/violet}/qwen_realtime_api_key:/run/violet-secrets/qwen_realtime_api_key:ro
 
   core-sealed:
     profiles:
@@ -137,6 +148,7 @@ services:
       VIOLET_HOST: 0.0.0.0
       VIOLET_MODEL_PROVIDER: deterministic
       VIOLET_PORT: 4310
+      VIOLET_REALTIME_PROVIDER: deterministic
       VIOLET_VERSION: ${VIOLET_VERSION:-0.1.0-dev}
     healthcheck:
       test:

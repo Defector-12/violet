@@ -19,6 +19,25 @@ export interface CoreRuntimeConfig {
         readonly userId: string;
       };
   readonly port: number;
+  readonly realtime:
+    | {
+        readonly provider: "deterministic";
+      }
+    | {
+        readonly apiKey: string;
+        readonly asrModel: string;
+        readonly provider: "pipeline";
+        readonly ttsModel: string;
+        readonly voice: string;
+        readonly workspaceId: string;
+      }
+    | {
+        readonly apiKey: string;
+        readonly model: string;
+        readonly provider: "qwen-audio";
+        readonly voice: string;
+        readonly workspaceId: string;
+      };
   readonly version: string;
 }
 
@@ -43,6 +62,10 @@ export function loadCoreRuntimeConfig(env: NodeJS.ProcessEnv): CoreRuntimeConfig
   }
 
   const model = loadModelConfig(env, contentKey !== null);
+  const realtime = loadRealtimeConfig(env, contentKey !== null);
+  if (realtime.provider === "pipeline" && model.provider !== "deepseek") {
+    throw new Error("The realtime pipeline requires the DeepSeek model provider");
+  }
 
   return {
     contentKey,
@@ -53,6 +76,7 @@ export function loadCoreRuntimeConfig(env: NodeJS.ProcessEnv): CoreRuntimeConfig
     host: env["VIOLET_HOST"] ?? "127.0.0.1",
     model,
     port: parsePort(env["VIOLET_PORT"] ?? "4310"),
+    realtime,
     version: env["VIOLET_VERSION"] ?? "0.1.0-dev",
   };
 }
@@ -79,6 +103,45 @@ function loadModelConfig(env: NodeJS.ProcessEnv, enabled: boolean): CoreRuntimeC
   };
 }
 
+function loadRealtimeConfig(
+  env: NodeJS.ProcessEnv,
+  enabled: boolean,
+): CoreRuntimeConfig["realtime"] {
+  if (!enabled) {
+    return { provider: "deterministic" };
+  }
+  const provider = env["VIOLET_REALTIME_PROVIDER"] ?? "deterministic";
+  if (provider === "deterministic") {
+    return { provider };
+  }
+  if (provider !== "pipeline" && provider !== "qwen-audio") {
+    throw new Error("VIOLET_REALTIME_PROVIDER must be deterministic, pipeline, or qwen-audio");
+  }
+
+  const apiKey = readSecretFile(
+    requiredOneOf(env, "DASHSCOPE_API_KEY_FILE", "QWEN_REALTIME_API_KEY_FILE"),
+    "DashScope API key",
+  );
+  const workspaceId = requiredOneOf(env, "DASHSCOPE_WORKSPACE_ID", "QWEN_REALTIME_WORKSPACE_ID");
+  if (provider === "pipeline") {
+    return {
+      apiKey,
+      asrModel: env["PIPELINE_ASR_MODEL"] ?? "paraformer-realtime-v2",
+      provider,
+      ttsModel: env["PIPELINE_TTS_MODEL"] ?? "cosyvoice-v3-flash",
+      voice: env["PIPELINE_TTS_VOICE"] ?? "longanyang",
+      workspaceId,
+    };
+  }
+  return {
+    apiKey,
+    model: env["QWEN_REALTIME_MODEL"] ?? "qwen-audio-3.0-realtime-plus",
+    provider,
+    voice: env["QWEN_REALTIME_VOICE"] ?? "longanqian",
+    workspaceId,
+  };
+}
+
 function parsePort(value: string): number {
   const port = Number.parseInt(value, 10);
   if (!Number.isInteger(port) || port < 1 || port > 65535) {
@@ -91,6 +154,14 @@ function required(env: NodeJS.ProcessEnv, name: string): string {
   const value = env[name]?.trim();
   if (!value) {
     throw new Error(`${name} is required`);
+  }
+  return value;
+}
+
+function requiredOneOf(env: NodeJS.ProcessEnv, primary: string, fallback: string): string {
+  const value = env[primary]?.trim() ?? env[fallback]?.trim();
+  if (!value) {
+    throw new Error(`${primary} or ${fallback} is required`);
   }
   return value;
 }

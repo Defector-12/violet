@@ -16,11 +16,13 @@ enum VioletApplication {
 
 @MainActor
 private final class VioletApplicationDelegate: NSObject, NSApplicationDelegate {
+  private var acceptanceRecorder: (any RealtimeAcceptanceRecording)?
   private var model: PresenceModel?
   private var portForwarder: (any PortForwarderPort)?
   private var statusController: StatusItemController?
 
   func applicationDidFinishLaunching(_ notification: Notification) {
+    let acceptanceRecorder = configuredRealtimeAcceptanceRecorder()
     let dependencies:
       (
         configuration: VioletRuntimeConfiguration,
@@ -65,7 +67,8 @@ private final class VioletApplicationDelegate: NSObject, NSApplicationDelegate {
     let model = PresenceModel(
       client: dependencies.client,
       audioIO: audioIO,
-      realtimeClient: dependencies.realtimeClient
+      realtimeClient: dependencies.realtimeClient,
+      acceptanceRecorder: acceptanceRecorder
     )
     let shortcut: any GlobalShortcutPort =
       dependencies.configuration.testMode
@@ -78,10 +81,12 @@ private final class VioletApplicationDelegate: NSObject, NSApplicationDelegate {
         ?? SilentPortForwarder()
 
     self.model = model
+    self.acceptanceRecorder = acceptanceRecorder
     self.portForwarder = portForwarder
     statusController = StatusItemController(
       model: model,
-      shortcut: shortcut
+      shortcut: shortcut,
+      acceptanceRecorder: acceptanceRecorder
     )
     registerSystemLifecycleObservers()
     try? portForwarder.start()
@@ -93,7 +98,8 @@ private final class VioletApplicationDelegate: NSObject, NSApplicationDelegate {
 
   func applicationWillTerminate(_ notification: Notification) {
     NSWorkspace.shared.notificationCenter.removeObserver(self)
-    model?.stop()
+    model?.stop(reason: .appTermination)
+    acceptanceRecorder?.flush()
     model?.stopMonitoring()
     portForwarder?.stop()
     statusController?.stop()
@@ -129,7 +135,8 @@ private final class VioletApplicationDelegate: NSObject, NSApplicationDelegate {
 
   @objc
   private func stopSensitiveActivity() {
-    model?.stop()
+    model?.stop(reason: .systemLifecycle)
+    acceptanceRecorder?.flush()
   }
 
   @objc

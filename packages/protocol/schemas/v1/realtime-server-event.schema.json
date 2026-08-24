@@ -17,14 +17,21 @@
             "outputModalities",
             "runtimeKind",
             "transcription",
+            "turnDetection",
             "voiceKind"
           ],
           "properties": {
+            "inputAudio": {
+              "$ref": "#/$defs/audioFormat"
+            },
             "inputModalities": {
               "$ref": "#/$defs/modalities"
             },
             "interruption": {
               "type": "boolean"
+            },
+            "outputAudio": {
+              "$ref": "#/$defs/audioFormat"
             },
             "outputModalities": {
               "$ref": "#/$defs/modalities"
@@ -35,6 +42,10 @@
             },
             "transcription": {
               "type": "boolean"
+            },
+            "turnDetection": {
+              "type": "string",
+              "enum": ["manual", "server_vad", "smart_turn"]
             },
             "voiceKind": {
               "type": "string",
@@ -53,6 +64,50 @@
         },
         "type": {
           "const": "session.ready"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["eventId", "sequence", "sessionId", "turnId", "type"],
+      "properties": {
+        "eventId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "sequence": {
+          "$ref": "#/$defs/sequence"
+        },
+        "sessionId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "turnId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "type": {
+          "const": "input.speech.started"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["eventId", "sequence", "sessionId", "turnId", "type"],
+      "properties": {
+        "eventId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "sequence": {
+          "$ref": "#/$defs/sequence"
+        },
+        "sessionId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "turnId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "type": {
+          "const": "input.speech.stopped"
         }
       }
     },
@@ -252,6 +307,23 @@
     }
   ],
   "$defs": {
+    "audioFormat": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["channels", "encoding", "sampleRate"],
+      "properties": {
+        "channels": {
+          "const": 1
+        },
+        "encoding": {
+          "const": "pcm_s16le"
+        },
+        "sampleRate": {
+          "type": "integer",
+          "enum": [16000, 24000, 48000]
+        }
+      }
+    },
     "modalities": {
       "type": "array",
       "minItems": 1,
