@@ -95,3 +95,31 @@
 - 外置麦克风/耳机、Bluetooth 和 MacBook 内置麦克风/扬声器均可建立真实采集会话；内置路由还完成了输入、回复播放和打断。
 
 本轮没有重复执行 10 次真实锁屏和 5 次整机睡眠，因为这些操作需要用户解锁并会中断当前桌面工作。此前真实锁屏、显示器睡眠和 46 秒 Deep Idle 恢复均已通过；发布前仍需由用户在场完成建议次数的最终抽样。
+
+## 7. 2026-08-24 Pipeline 初始基线
+
+提交 `3e0e2ab` 使用同一 `RealtimeConversationPort` 接入 `paraformer-realtime-v2 → deepseek-v4-flash → cosyvoice-v3-flash`。实时路径关闭 DeepSeek thinking，普通文字聊天保持原配置。
+
+为避免在办公环境外放，canary 全程在 Devbox 内存中完成：CosyVoice 生成的 24kHz PCM 不落盘、不播放，内存降采样到 16kHz 后直接送入 Paraformer。三次测试均准确转写“你好，这是静默语音测试。”：
+
+| 样本 | 文本输入到首音频 | Paraformer 断句到首音频 |
+|---|---:|---:|
+| 1 | 1.10s | 1.94s |
+| 2 | 1.24s | 1.92s |
+| 3 | 1.22s | 1.34s |
+
+另一次长回复取消 canary 在首个音频分片后取消模型与 CosyVoice 任务，随后 1 秒内迟到音频为 0，且未产生取消后的完成事件。
+
+该结果证明 Pipeline 基线可运行并满足三次初始样本的 2 秒内部延迟门禁。Qwen 当前 88 次样本的 p95 为 501ms，且已通过更完整的设备、弱网和恢复矩阵，因此确定为 Release 1B 默认运行时；Pipeline 保留为显式配置的手动降级与供应商替换基线，不做静默自动切换。完整同集比较只在准备更换默认运行时，或 Qwen 的质量、费用、地域和稳定性证据恶化时恢复。
+
+## 8. 账本与隐私收尾
+
+在临时 PostgreSQL 数据库中执行了真实 `Pipeline → RealtimeSession → PostgresConversationLedger` 闭环：
+
+- 最终用户转写和助手回复生成并恢复为两条 `user`、`assistant` 事件。
+- 内容字段使用 AES-256-GCM 信封加密，数据库只保存密文、nonce、tag 和 wrapped key。
+- `conversation_events` 不包含 audio、transcript 或 reasoning 原文字段。
+- 原始 PCM 只存在于进程内存，未写入日志或磁盘。
+- 验证完成后临时数据库已删除，正式账本未写入测试事件。
+
+结合此前真实锁屏、显示器睡眠和 Deep Idle 证据，Release 1B 的当前交付范围验收完成。重复锁屏、整机睡眠和更大规模的 Pipeline 同集比较保留为后续回归，不阻塞 1C。

@@ -90,6 +90,32 @@ describe("loadCoreRuntimeConfig", () => {
       workspaceId: "ws-testworkspace",
     });
   });
+
+  it("loads the realtime pipeline with Paraformer, DeepSeek, and CosyVoice", () => {
+    const contentKeyFile = writeSecretFile(Buffer.alloc(32, 1).toString("base64"));
+    const dashScopeKeyFile = writeSecretFile("test-dashscope-key");
+    const modelKeyFile = writeSecretFile("test-deepseek-key");
+    const config = loadCoreRuntimeConfig({
+      DASHSCOPE_API_KEY_FILE: dashScopeKeyFile,
+      DASHSCOPE_WORKSPACE_ID: "ws-testworkspace",
+      VIOLET_CONTENT_KEY_FILE: contentKeyFile,
+      VIOLET_DATABASE_URL: "postgresql://violet:test@localhost/violet",
+      VIOLET_DEVICE_TOKEN_EXPIRES_AT: tokenExpiresAt,
+      VIOLET_DEVICE_TOKEN_SHA256: tokenHash,
+      VIOLET_MODEL_API_KEY_FILE: modelKeyFile,
+      VIOLET_MODEL_PROVIDER: "deepseek",
+      VIOLET_REALTIME_PROVIDER: "pipeline",
+    });
+
+    expect(config.realtime).toEqual({
+      apiKey: "test-dashscope-key",
+      asrModel: "paraformer-realtime-v2",
+      provider: "pipeline",
+      ttsModel: "cosyvoice-v3-flash",
+      voice: "longanyang",
+      workspaceId: "ws-testworkspace",
+    });
+  });
 });
 
 function writeSecretFile(value: string): string {

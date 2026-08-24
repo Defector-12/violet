@@ -149,7 +149,7 @@ Violet/
 
 正常模式真实验收已经通过自动 SSH 隧道、Keychain 鉴权、`Ready` 状态、DeepSeek 文字流、`Control + Option + Space` 全局快捷键、SSH 子进程自动重连、显示器睡眠、锁屏和整机 46 秒 Deep Idle 后恢复。唯一一条明确标记的测试对话得到预期回复，事件账本由 40 条增加为 42 条，新增顺序为 `user`、`assistant`。验收中发现 Swift OpenAPI 默认日期解码器不能解析 Core 的毫秒 ISO-8601 时间，已改用 fractional-seconds transcoder 并加入固定响应回归测试。
 
-首个端到端候选 `QwenAudioRealtimeAdapter` 已在 `feat/qwen-audio-realtime` 实现并部署到 Devbox Core 候选。它使用 Core 中继、北京地域 Workspace、16kHz PCM 输入、24kHz PCM 输出和系统音色 `longanqian`，不向供应商注册工具。无麦克风合成 canary 已返回完整文字与音频，首次音频约 775ms，输入/输出用量为 48/18 tokens；当前功能分支的 TypeScript/JavaScript 49 个测试和 Swift 20 个测试通过。
+首个端到端候选 `QwenAudioRealtimeAdapter` 已通过 MR !14 合并。它使用 Core 中继、北京地域 Workspace、16kHz PCM 输入、24kHz PCM 输出和系统音色 `longanqian`，不向供应商注册工具。无麦克风合成 canary 已返回完整文字与音频，首次音频约 775ms，输入/输出用量为 48/18 tokens。
 
 首次真实 Mac 音频闭环已经通过：48kHz 设备输入转换为协议要求的 16kHz PCM，最终转写和助手回复进入事件账本，24kHz PCM 通过系统扬声器清晰播放；停止采集到首个播放分片约 1.2 秒。验收发现并修复了 Swift 6 主执行器隔离导致 CoreAudio tap 回调 `SIGTRAP`，以及每个流式音频分片重复连接播放器导致后续声音失真的问题。
 
@@ -161,7 +161,9 @@ Violet/
 
 2026-08-23 的 Qwen 候选批量验收已通过定量门禁：174 次浮层触发 p95 为 18ms，88 次服务端断句到首个音频分片 p95 为 501ms，31 次打断 p95 为 4ms，54 次麦克风停止 p95 为 15ms；四项配对成功率均为 100%，迟到播放和正常会话失败均为 0。触发样本包含 50 次菜单栏点击，前 30 个打断样本包含 20 次直接语音和 10 次点击。SSH 监听态与播放态断线恢复、单向 250ms 延迟链路，以及外置、Bluetooth 和 MacBook 内置音频路由也已验证。
 
-该证据仍不代表 Release 1B 已完成：Qwen 分支尚未合并，Pipeline 基线尚未建立；重复锁屏和整机睡眠需要用户在场完成最终抽样。Qwen 只有在同一评估集通过运行时决策门后才能成为默认运行时。
+`Paraformer → DeepSeek → CosyVoice` Pipeline 已通过同一 `RealtimeConversationPort` 建立最小基线。三次不播放、不落盘的真实静默 canary 均准确识别中文测试句，断句到首音频为 1.34–1.94 秒；真实取消后 1 秒内迟到音频为 0。Pipeline 实时路径关闭 DeepSeek thinking，文字聊天保持原配置。当前功能分支的 TypeScript/JavaScript 53 个测试和 Swift 20 个测试通过。
+
+运行时决策已收敛：Release 1B 默认使用 Qwen，Pipeline 保留为显式配置的降级与供应商替换基线，禁止静默自动切换。Qwen 已有 88 次语音样本且 p95 为 501ms，Pipeline 三次初始样本为 1.34–1.94 秒；扩大到完整同集比较的成本当前不会改变默认决策，因此只在准备更换默认运行时或 Qwen 的质量、费用、地域和稳定性证据恶化时恢复。此前真实锁屏、显示器睡眠和 Deep Idle 证据沿用，不在用户办公期间重复执行。
 
 **建设内容**
 
@@ -184,7 +186,7 @@ Violet/
 
 **实时运行时决策门**
 
-在真实语音运行时进入 1B 交付范围前，使用同一组中文、英文、中英混合、停顿、噪声、打断和连续追问样本，对至少一个 Pipeline 基线与一个端到端实时候选进行实测。记录并比较：
+Release 1B 进入交付范围前，至少需要一个 Pipeline 基线与一个端到端候选完成真实 canary，并验证协议、转写、音频、取消和审计边界。扩大到同一组中文、英文、中英混合、停顿、噪声、打断和连续追问样本，是更换默认运行时或宣称某一运行时整体更优之前的决策门。比较时记录：
 
 - 端到端首包和首段可听音频延迟。
 - VAD 误切断、用户打断和回声重触发。
@@ -194,6 +196,8 @@ Violet/
 - 弱网重连、取消、会话过期和供应商故障语义。
 
 若端到端候选不能稳定提供最终转写、执行 Violet 策略或完成审计，则不得因为延迟或音色更好而直接承载 Violet 会话；应退回 Pipeline 或只把它作为语音输入/输出能力。选型结果和证据必须写回总体架构与历史记录。
+
+2026-08-24 的 Release 1B 决策为：Qwen-Audio 3.0 Realtime Plus 是默认运行时；`Paraformer → DeepSeek → CosyVoice` 是手动降级和供应商替换基线。切换只能通过显式配置和重新部署完成，不在会话内自动回退到未经用户确认的供应商、地域或音色。
 
 **唤醒词决策门**
 
@@ -442,7 +446,7 @@ CI 必须验证协议兼容、TypeScript、Swift、数据库迁移、容器构�
 ### 4.5 第一阶段依赖与授权
 
 - 内部集成远端、GitHub 可迁移镜像和 DeepSeek `deepseek-v4-flash` 文字模型 API 已经就绪；1C 开始前再提供多模态模型。
-- Release 1B 已选定 Qwen-Audio 3.0 Realtime Plus 作为首个端到端 canary 候选，并完成真实合成请求及单次真实连续语音验收；最终默认运行时仍须通过批量设备验收并与至少一个 Pipeline 基线比较，不得把当前候选静默升级为最终选型。
+- Release 1B 已选定 Qwen-Audio 3.0 Realtime Plus 作为首个端到端 canary 候选，并完成真实合成请求、连续语音和批量设备验收；最终默认运行时仍须与至少一个 Pipeline 基线比较，不得把当前候选静默升级为最终选型。
 - Devbox SSH、Docker 和必要网络能力。
 - PostgreSQL。
 - 个人火山引擎 TOS 私有普通桶、北京地域 Endpoint、版本控制、SSE-TOS、生命周期和最小权限 IAM 用户已经建立；暴露凭证已轮换，真实备份与恢复验证已通过。
