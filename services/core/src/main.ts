@@ -44,6 +44,16 @@ const modelGateway: ModelGateway =
         userId: config.model.userId,
       })
     : new DeterministicModelGateway();
+const realtimeModelGateway: ModelGateway =
+  config.realtime.provider === "pipeline" && config.model.provider === "deepseek"
+    ? new DeepSeekModelGateway({
+        apiKey: config.model.apiKey,
+        baseUrl: config.model.baseUrl,
+        model: config.model.model,
+        thinking: false,
+        userId: `${config.model.userId}-realtime`,
+      })
+    : modelGateway;
 const realtimeConversationPort: RealtimeConversationPort =
   config.realtime.provider === "qwen-audio"
     ? new QwenAudioRealtimeConversationPort({
@@ -58,7 +68,7 @@ const realtimeConversationPort: RealtimeConversationPort =
           apiKey: config.realtime.apiKey,
           asrModel: config.realtime.asrModel,
           generateId: randomUUID,
-          modelGateway,
+          modelGateway: realtimeModelGateway,
           ttsModel: config.realtime.ttsModel,
           voice: config.realtime.voice,
           workspaceId: config.realtime.workspaceId,
