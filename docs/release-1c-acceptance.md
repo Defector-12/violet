@@ -1,6 +1,6 @@
 # Release 1C Violet Sight 验收
 
-> 状态：实现候选已完成；真实视觉 API、系统权限和办公环境验收待执行。
+> 状态：实现候选和真实视觉 API canary 已完成；系统权限、完整视觉矩阵和办公环境验收待执行。
 
 ## 自动门禁
 
@@ -20,6 +20,16 @@ VIOLET_SWIFTPM_DISABLE_SANDBOX=1 pnpm macos:app
 - Mac 本地测试覆盖绝对秘密、受控敏感信息、保密应用和截图区域遮挡。
 - Mac App 已完成资源打包、ad-hoc 签名和深度签名校验。
 
+## DeepSeek Vision Canary
+
+2026-08-24 使用本地生成、无真实用户数据的两张方向图执行真实
+`deepseek-v4-flash-vision-exp` canary：
+
+- 左侧 `SOURCE` 指向右侧 `TARGET 42`：文字、颜色、位置和从左向右方向全部正确，耗时 3.83 秒。
+- 右侧 `ORIGIN` 指向左侧 `RESULT 7`：文字、颜色、位置和从右向左方向全部正确，耗时 3.42 秒。
+
+第一次请求正确识别文字和颜色，但把箭头方向描述反了。Adapter 随后增加“先定位箭头头部，再核对来源和目标位置”的约束；同图复测和反向图交叉测试均通过。该结果证明 API、模型权限和当前 Adapter 可用，但不能替代 50 个真实场景的准确率门禁。
+
 ## 唤醒候选
 
 - 引擎：`sherpa-onnx v1.13.6`。
@@ -38,7 +48,7 @@ VIOLET_SWIFTPM_DISABLE_SANDBOX=1 pnpm macos:app
 
 ## 视觉真实验收
 
-在用户提供 DeepSeek API Key 并明确开始权限验收后执行：
+在用户明确开始系统权限验收后执行：
 
 1. 桌面文件或图标 10 次。
 2. 图片预览局部 10 次。

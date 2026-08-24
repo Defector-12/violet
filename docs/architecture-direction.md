@@ -6,7 +6,7 @@
 
 - Release 1A 已完成交付。当前 `main` 已包含 pnpm workspace、JSON Schema/OpenAPI 协议、TypeScript SDK、Swift 生成客户端边界、模块化 Core、`dev-cli`、PostgreSQL 迁移、应用层信封加密、DeepSeek Adapter、Docker Compose、可观测配置和加密备份恢复。
 - Release 1B 已完成实现、验收和合并。`RealtimeSession v1`、WebSocket、`RealtimeConversationPort`、确定性实时 Adapter 和最终事件落账可用；原生菜单栏 App、Keychain、可选 SSH 隧道、全局快捷键、系统生命周期和 `AudioIOPort` 边界已经构建。Qwen Adapter 已通过 MR !14 合并，持续会话、`smart_turn`、最近 20 轮上下文、点击与语音打断均已通过真实验收。2026-08-23 的批量设备验收通过 174 次触发、88 次语音、31 次打断和 54 次停止门禁，并覆盖 SSH 断线恢复、250ms 单向延迟和三类音频路由。`Paraformer → DeepSeek → CosyVoice` Pipeline 基线已通过 MR !15 合并，三次静默真实 canary 的断句到首音频为 1.34–1.94 秒且中文转写准确。Qwen 是默认运行时，Pipeline 只通过显式配置启用。
-- Release 1C 已形成待真实验收的实现候选：Context Envelope v1、短时 Context Session、DeepSeek `deepseek-v4-flash-vision-exp` Adapter、加密 TOS 临时对象、Mac 窗口/显示器选择、区域框选、Accessibility、Apple Vision OCR、本地敏感遮挡和文字/Realtime Context 注入已实现。本地 `sherpa-onnx v1.13.6` 唤醒 Adapter、`Violet` 开放词汇模型、显式启用开关和锁屏/睡眠停采也已实现。真实视觉 API、Screen Recording/Accessibility、办公环境误唤醒和完整 1C 验收尚未执行，因此 1C 尚未完成交付。
+- Release 1C 已形成待真实验收的实现候选：Context Envelope v1、短时 Context Session、DeepSeek `deepseek-v4-flash-vision-exp` Adapter、加密 TOS 临时对象、Mac 窗口/显示器选择、区域框选、Accessibility、Apple Vision OCR、本地敏感遮挡和文字/Realtime Context 注入已实现。本地 `sherpa-onnx v1.13.6` 唤醒 Adapter、`Violet` 开放词汇模型、显式启用开关和锁屏/睡眠停采也已实现。DeepSeek Vision 已通过两张方向相反的合成图片真实 canary；Screen Recording/Accessibility、办公环境误唤醒和完整 1C 验收尚未执行，因此 1C 尚未完成交付。
 - 已完成现有阅读工具 Sprinkle 的只读评估。Sprinkle 是 WXT、React、TypeScript 构建的浏览器扩展，可复用其页面提取、文字与图片选择、区域框选和浏览器内交互能力，但不能作为 Violet 本体。
 - 当前可使用一台公司 Devbox 作为临时云环境：32 核 CPU、128G 内存、120G 系统盘、500G 数据盘、veLinux 1.0。它足以支撑第一阶段的后端、数据库、Worker、沙箱和测试。
 - Violet 是单用户、云端智能优先、Mac 先行的绿地项目。

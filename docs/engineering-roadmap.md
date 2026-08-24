@@ -227,7 +227,7 @@ Release 1B 必须保留全局快捷键作为可靠入口。语音唤醒候选必
 
 #### Release 1C：Violet Sight
 
-> 实现状态（2026-08-24）：代码候选已完成，真实验收待执行。当前候选使用 DeepSeek `deepseek-v4-flash-vision-exp`、Mac 本地 Apple Vision OCR 和 `sherpa-onnx v1.13.6` 唤醒 Adapter；视觉 API Key 在 canary 前注入，不进入 Git 或磁盘明文。
+> 实现状态（2026-08-24）：代码候选和两张合成方向图的真实 DeepSeek Vision canary 已完成，系统权限与完整场景验收待执行。当前候选使用 DeepSeek `deepseek-v4-flash-vision-exp`、Mac 本地 Apple Vision OCR 和 `sherpa-onnx v1.13.6` 唤醒 Adapter；视觉 API Key 仅从本机秘密源注入，不进入 Git 或日志。
 
 **用户可获得**
 

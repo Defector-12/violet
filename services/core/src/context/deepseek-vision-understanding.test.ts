@@ -61,6 +61,7 @@ describe("DeepSeekVisionUnderstandingPort", () => {
     expect(body).toMatchObject({
       model: "deepseek-v4-flash-vision-exp",
     });
+    expect(JSON.stringify(body)).toContain("locate its arrowhead");
     expect(JSON.stringify(body)).toContain("data:image/png;base64,aW1hZ2U=");
   });
 });
