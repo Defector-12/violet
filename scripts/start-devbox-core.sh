@@ -87,7 +87,8 @@ case "$mode" in
     wait_until_healthy core-sealed
     run_compose --profile sealed stop core-sealed
     run_compose rm -sf core migrate postgres lgtm
-    run_compose up -d core lgtm
+    run_compose up -d --build core lgtm
+    wait_until_healthy core
     ;;
   sealed)
     run_compose stop core >/dev/null 2>&1 || true
