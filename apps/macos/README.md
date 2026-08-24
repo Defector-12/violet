@@ -1,6 +1,6 @@
 # Violet macOS
 
-Release 1B 的原生 Mac 身体。它负责菜单栏、全局快捷键、Keychain、连接状态和设备音频，不承载 Violet 的身份、记忆或固定模型供应商。
+Release 1B 已交付的原生 Mac 身体。它负责菜单栏、全局快捷键、Keychain、连接状态和设备音频，不承载 Violet 的身份、记忆或固定模型供应商。Qwen 是当前默认实时运行时，Pipeline 可由 Core 显式配置启用，Mac 状态机不随运行时改变。
 
 ## 验证
 
@@ -39,7 +39,7 @@ pnpm macos:migrate-token
 
 `VIOLET_TEST_MODE=1` 时使用静音音频、空全局快捷键和空 SSH 转发器。单元测试不会占用真实麦克风、播放声音、注册系统快捷键、锁屏或控制其他应用。
 
-当前确定性 Realtime Adapter 仅用于协议和状态机验证。真实 Pipeline 或端到端语音模型必须通过工程路线中的运行时决策门后再接入。
+确定性 Realtime Adapter 仅用于协议和状态机验证。Qwen 与 Pipeline 已通过工程路线中的 Release 1B 决策门；更换默认运行时仍需重新执行对应比较和验收。
 
 真实设备批量验收使用本地、默认关闭的元数据记录器。启动方式、30/30/50 样本矩阵和报告命令见 [Release 1B 实时语音验收](../../docs/release-1b-acceptance.md)。记录不包含音频、转写或回复内容。
 
