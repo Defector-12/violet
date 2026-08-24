@@ -110,4 +110,16 @@
 
 另一次长回复取消 canary 在首个音频分片后取消模型与 CosyVoice 任务，随后 1 秒内迟到音频为 0，且未产生取消后的完成事件。
 
-该结果证明 Pipeline 基线可运行并满足三次初始样本的 2 秒内部延迟门禁，但样本量不足以替代正式同集比较。Qwen 当前 88 次样本的 p95 为 501ms，仍是默认部署运行时。
+该结果证明 Pipeline 基线可运行并满足三次初始样本的 2 秒内部延迟门禁。Qwen 当前 88 次样本的 p95 为 501ms，且已通过更完整的设备、弱网和恢复矩阵，因此确定为 Release 1B 默认运行时；Pipeline 保留为显式配置的手动降级与供应商替换基线，不做静默自动切换。完整同集比较只在准备更换默认运行时，或 Qwen 的质量、费用、地域和稳定性证据恶化时恢复。
+
+## 8. 账本与隐私收尾
+
+在临时 PostgreSQL 数据库中执行了真实 `Pipeline → RealtimeSession → PostgresConversationLedger` 闭环：
+
+- 最终用户转写和助手回复生成并恢复为两条 `user`、`assistant` 事件。
+- 内容字段使用 AES-256-GCM 信封加密，数据库只保存密文、nonce、tag 和 wrapped key。
+- `conversation_events` 不包含 audio、transcript 或 reasoning 原文字段。
+- 原始 PCM 只存在于进程内存，未写入日志或磁盘。
+- 验证完成后临时数据库已删除，正式账本未写入测试事件。
+
+结合此前真实锁屏、显示器睡眠和 Deep Idle 证据，Release 1B 的当前交付范围验收完成。重复锁屏、整机睡眠和更大规模的 Pipeline 同集比较保留为后续回归，不阻塞 1C。
