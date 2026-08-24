@@ -5,11 +5,11 @@
 ## 1. 当前状态
 
 - Release 1A 已完成交付。当前 `main` 已包含 pnpm workspace、JSON Schema/OpenAPI 协议、TypeScript SDK、Swift 生成客户端边界、模块化 Core、`dev-cli`、PostgreSQL 迁移、应用层信封加密、DeepSeek Adapter、Docker Compose、可观测配置和加密备份恢复。
-- Release 1B 已完成实现和验收。`RealtimeSession v1`、WebSocket、`RealtimeConversationPort`、确定性实时 Adapter 和最终事件落账可用；原生菜单栏 App、Keychain、可选 SSH 隧道、全局快捷键、系统生命周期和 `AudioIOPort` 边界已经构建。Qwen Adapter 已通过 MR !14 合并，持续会话、`smart_turn`、最近 20 轮上下文、点击与语音打断均已通过真实验收。2026-08-23 的批量设备验收通过 174 次触发、88 次语音、31 次打断和 54 次停止门禁，并覆盖 SSH 断线恢复、250ms 单向延迟和三类音频路由。`Paraformer → DeepSeek → CosyVoice` Pipeline 基线也已实现，三次静默真实 canary 的断句到首音频为 1.34–1.94 秒且中文转写准确。
+- Release 1B 已完成实现、验收和合并。`RealtimeSession v1`、WebSocket、`RealtimeConversationPort`、确定性实时 Adapter 和最终事件落账可用；原生菜单栏 App、Keychain、可选 SSH 隧道、全局快捷键、系统生命周期和 `AudioIOPort` 边界已经构建。Qwen Adapter 已通过 MR !14 合并，持续会话、`smart_turn`、最近 20 轮上下文、点击与语音打断均已通过真实验收。2026-08-23 的批量设备验收通过 174 次触发、88 次语音、31 次打断和 54 次停止门禁，并覆盖 SSH 断线恢复、250ms 单向延迟和三类音频路由。`Paraformer → DeepSeek → CosyVoice` Pipeline 基线已通过 MR !15 合并，三次静默真实 canary 的断句到首音频为 1.34–1.94 秒且中文转写准确。Qwen 是默认运行时，Pipeline 只通过显式配置启用。
 - 已完成现有阅读工具 Sprinkle 的只读评估。Sprinkle 是 WXT、React、TypeScript 构建的浏览器扩展，可复用其页面提取、文字与图片选择、区域框选和浏览器内交互能力，但不能作为 Violet 本体。
 - 当前可使用一台公司 Devbox 作为临时云环境：32 核 CPU、128G 内存、120G 系统盘、500G 数据盘、veLinux 1.0。它足以支撑第一阶段的后端、数据库、Worker、沙箱和测试。
 - Violet 是单用户、云端智能优先、Mac 先行的绿地项目。
-- 当前 Pipeline 功能分支的格式、生成物、类型和构建门禁通过，TypeScript/JavaScript 53 个测试和 Swift 20 个测试通过；Release 1A 的真实模型 20 轮纵向验证、两次物理重启、加密备份、TOS 上传下载和空库恢复已经通过，Release 1B Core 的 ready/sealed、认证、Realtime 握手和遥测白名单验证通过。临时数据库中的真实 Pipeline 账本闭环生成且恢复了 `user`、`assistant` 两条加密事件，表结构没有原始音频、临时转写或模型推理字段，验证后临时数据库已删除。
+- `main` 的格式、生成物、类型和构建门禁通过，TypeScript/JavaScript 53 个测试和 Swift 20 个测试通过；Release 1A 的真实模型 20 轮纵向验证、两次物理重启、加密备份、TOS 上传下载和空库恢复已经通过，Release 1B Core 的 ready/sealed、认证、Realtime 握手和遥测白名单验证通过。临时数据库中的真实 Pipeline 账本闭环生成且恢复了 `user`、`assistant` 两条加密事件，表结构没有原始音频、临时转写或模型推理字段，验证后临时数据库已删除。Devbox 最终部署恢复既有数据目录并确认 411 条加密事件完整。
 
 ## 2. 架构目标
 
