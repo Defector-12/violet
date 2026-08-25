@@ -12,7 +12,7 @@ VIOLET_SWIFTPM_DISABLE_SANDBOX=1 pnpm macos:app
 
 当前基线：
 
-- TypeScript/JavaScript：74 项通过。
+- TypeScript/JavaScript：75 项通过。
 - Swift：31 项通过。
 - Context 协议覆盖未知字段、过期、超长 TTL、越权、乱序、哈希篡改和删除。
 - DeepSeek Vision 请求使用 OpenAI 兼容图片内容块，测试不访问真实 API。
@@ -58,6 +58,16 @@ VIOLET_SWIFTPM_DISABLE_SANDBOX=1 pnpm macos:app
 - TOS 写入约 0.1s；长尾几乎全部来自 DeepSeek Vision understanding。
 
 1280px 上传和输出 token 上限实验没有稳定降低供应商长尾，且 token 上限会让 thinking 模型耗尽内部推理预算后返回空响应，因此均未保留。用户决定不继续投入 DeepSeek 供应商延迟优化。浮窗在选择和 `Reading` 期间保持显示，完成后才恢复 transient 行为。
+
+随后按用户确认的交互边界将 DeepSeek Vision 移出 `Reading`：
+
+- `Reading` 只等待截图、OCR、本地隐私过滤和加密 TOS 写入，完成后立即返回 `Context ready`。
+- DeepSeek Vision 与上述步骤并发启动并在 Core 后台继续，不重复请求。
+- 首个文字或语音请求若早于 Vision 完成，会等待同一个后台任务；若已经完成则直接使用结果。
+- Context 删除、关闭或失效会取消对应后台任务，旧任务不能回写已删除或更新后的 session。
+- DeepSeek 失败时保留经过本地隐私处理的 OCR 证据作为降级结果，不再让已接受的 Context 变成 500。
+
+按当前真机数据估算，Window 的 `Reading` 将从约 22.5s 降至约 2.5s，Region 将从约 13.0s 降至约 3.7s；首个问题仍可能等待剩余的 DeepSeek 时间。真实用户复测待部署后执行。
 
 ## 唤醒候选
 
