@@ -10,6 +10,7 @@ export interface RealtimeAudioFormat {
 }
 
 export interface RealtimeSessionConfiguration {
+  readonly contextEvidence?: string;
   readonly history?: readonly RealtimeHistoryMessage[];
   readonly inputAudio?: RealtimeAudioFormat;
   readonly inputModalities: readonly RealtimeModality[];

@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://violet.local/schemas/v1/context-receipt.schema.json",
+  "title": "ContextReceipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["acceptedAt", "eventId", "expiresAt", "sessionId", "status"],
+  "properties": {
+    "acceptedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "eventId": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "expiresAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "sessionId": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "status": {
+      "const": "ready"
+    }
+  }
+}

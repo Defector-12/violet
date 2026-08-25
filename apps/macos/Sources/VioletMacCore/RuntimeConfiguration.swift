@@ -116,15 +116,18 @@ public struct RuntimeDeviceTokenProvider: DeviceTokenProvider {
 
 public struct VioletRuntimeConfiguration: Equatable, Sendable {
   public let coreURL: URL
+  public let excludedContextBundleIds: Set<String>
   public let sshTunnel: SSHTunnelConfiguration?
   public let testMode: Bool
 
   public init(
     coreURL: URL,
+    excludedContextBundleIds: Set<String> = [],
     testMode: Bool,
     sshTunnel: SSHTunnelConfiguration? = nil
   ) {
     self.coreURL = coreURL
+    self.excludedContextBundleIds = excludedContextBundleIds
     self.sshTunnel = sshTunnel
     self.testMode = testMode
   }
@@ -157,12 +160,14 @@ public struct VioletRuntimeConfiguration: Equatable, Sendable {
       throw VioletCoreClientError.invalidResponse
     }
     self.coreURL = coreURL
+    excludedContextBundleIds = Set(fileConfiguration?.excludedContextBundleIds ?? [])
     testMode = environment["VIOLET_TEST_MODE"] == "1"
   }
 }
 
 private struct ClientConfigurationFile: Decodable {
   let coreURL: String?
+  let excludedContextBundleIds: [String]?
   let sshTunnel: SSHTunnelConfiguration?
 }
 

@@ -26,6 +26,7 @@ describe("loadCoreRuntimeConfig", () => {
     expect(config.contentKey).toBeNull();
     expect(config.model.provider).toBe("deterministic");
     expect(config.realtime.provider).toBe("deterministic");
+    expect(config.vision.provider).toBe("deterministic");
   });
 
   it("requires a database when the content key is loaded", () => {
@@ -88,6 +89,55 @@ describe("loadCoreRuntimeConfig", () => {
       provider: "qwen-audio",
       voice: "longanqian",
       workspaceId: "ws-testworkspace",
+    });
+  });
+
+  it("loads DeepSeek vision through the existing secret boundary", () => {
+    const contentKeyFile = writeSecretFile(Buffer.alloc(32, 1).toString("base64"));
+    const modelKeyFile = writeSecretFile("test-deepseek-key");
+    const config = loadCoreRuntimeConfig({
+      VIOLET_CONTENT_KEY_FILE: contentKeyFile,
+      VIOLET_DATABASE_URL: "postgresql://violet:test@localhost/violet",
+      VIOLET_DEVICE_TOKEN_EXPIRES_AT: tokenExpiresAt,
+      VIOLET_DEVICE_TOKEN_SHA256: tokenHash,
+      VIOLET_MODEL_API_KEY_FILE: modelKeyFile,
+      VIOLET_VISION_PROVIDER: "deepseek",
+    });
+
+    expect(config.vision).toEqual({
+      apiKey: "test-deepseek-key",
+      baseUrl: "https://api.deepseek.com",
+      model: "deepseek-v4-flash-vision-exp",
+      provider: "deepseek",
+    });
+  });
+
+  it("loads ephemeral TOS context storage only after unsealing", () => {
+    const contentKeyFile = writeSecretFile(Buffer.alloc(32, 1).toString("base64"));
+    const accessKeyFile = writeSecretFile("test-access-key");
+    const secretKeyFile = writeSecretFile("test-secret-key");
+    const config = loadCoreRuntimeConfig({
+      TOS_ACCESS_KEY_ID_FILE: accessKeyFile,
+      TOS_BUCKET: "vio",
+      TOS_ENDPOINT: "https://tos-s3-cn-beijing.volces.com",
+      TOS_REGION: "cn-beijing",
+      TOS_SECRET_ACCESS_KEY_FILE: secretKeyFile,
+      VIOLET_CONTENT_KEY_FILE: contentKeyFile,
+      VIOLET_CONTEXT_STORAGE_PROVIDER: "tos",
+      VIOLET_DATABASE_URL: "postgresql://violet:test@localhost/violet",
+      VIOLET_DEVICE_TOKEN_EXPIRES_AT: tokenExpiresAt,
+      VIOLET_DEVICE_TOKEN_SHA256: tokenHash,
+    });
+
+    expect(config.contextStorage).toEqual({
+      accessKeyId: "test-access-key",
+      bucket: "vio",
+      endpoint: "https://tos-s3-cn-beijing.volces.com",
+      forcePathStyle: false,
+      prefix: "violet/tmp/context",
+      provider: "tos",
+      region: "cn-beijing",
+      secretAccessKey: "test-secret-key",
     });
   });
 

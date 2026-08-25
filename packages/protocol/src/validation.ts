@@ -5,6 +5,10 @@ import chatRequestSchema from "../schemas/v1/chat-request.schema.json" with { ty
 import chatStreamEventSchema from "../schemas/v1/chat-stream-event.schema.json" with {
   type: "json",
 };
+import contextEnvelopeSchema from "../schemas/v1/context-envelope.schema.json" with {
+  type: "json",
+};
+import contextReceiptSchema from "../schemas/v1/context-receipt.schema.json" with { type: "json" };
 import errorSchema from "../schemas/v1/error.schema.json" with { type: "json" };
 import healthSchema from "../schemas/v1/health.schema.json" with { type: "json" };
 import realtimeClientEventSchema from "../schemas/v1/realtime-client-event.schema.json" with {
@@ -17,6 +21,8 @@ import statusSchema from "../schemas/v1/status.schema.json" with { type: "json" 
 import type {
   ChatRequest,
   ChatStreamEvent,
+  ContextEnvelope,
+  ContextReceipt,
   CoreStatus,
   Health,
   RealtimeClientEvent,
@@ -33,6 +39,8 @@ ajv.addSchema(errorSchema);
 
 const chatRequestValidator = ajv.compile<ChatRequest>(chatRequestSchema);
 const chatStreamEventValidator = ajv.compile<ChatStreamEvent>(chatStreamEventSchema);
+const contextEnvelopeValidator = ajv.compile<ContextEnvelope>(contextEnvelopeSchema);
+const contextReceiptValidator = ajv.compile<ContextReceipt>(contextReceiptSchema);
 const coreStatusValidator = ajv.compile<CoreStatus>(statusSchema);
 const healthValidator = ajv.compile<Health>(healthSchema);
 const realtimeClientEventValidator = ajv.compile<RealtimeClientEvent>(realtimeClientEventSchema);
@@ -64,6 +72,14 @@ export function assertChatRequest(value: unknown): asserts value is ChatRequest 
 
 export function assertChatStreamEvent(value: unknown): asserts value is ChatStreamEvent {
   assertValid("ChatStreamEvent", chatStreamEventValidator, value);
+}
+
+export function assertContextEnvelope(value: unknown): asserts value is ContextEnvelope {
+  assertValid("ContextEnvelope", contextEnvelopeValidator, value);
+}
+
+export function assertContextReceipt(value: unknown): asserts value is ContextReceipt {
+  assertValid("ContextReceipt", contextReceiptValidator, value);
 }
 
 export function assertCoreStatus(value: unknown): asserts value is CoreStatus {

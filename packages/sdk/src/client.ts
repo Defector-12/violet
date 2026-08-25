@@ -1,10 +1,13 @@
 import {
   type ApiError,
   assertChatStreamEvent,
+  assertContextReceipt,
   assertCoreStatus,
   assertHealth,
   type ChatRequest,
   type ChatStreamEvent,
+  type ContextEnvelope,
+  type ContextReceipt,
   type CoreStatus,
   type Health,
 } from "@violet/protocol";
@@ -59,6 +62,35 @@ export class VioletClient {
     const value = await this.#json(response);
     assertCoreStatus(value);
     return value;
+  }
+
+  async submitContext(envelope: ContextEnvelope, signal?: AbortSignal): Promise<ContextReceipt> {
+    const response = await this.#fetch(this.#url("/v1/context/envelopes"), {
+      body: JSON.stringify(envelope),
+      headers: {
+        ...this.#headers(),
+        "content-type": "application/json",
+      },
+      method: "POST",
+      ...(signal ? { signal } : {}),
+    });
+    const value = await this.#json(response);
+    assertContextReceipt(value);
+    return value;
+  }
+
+  async deleteContext(sessionId: string, signal?: AbortSignal): Promise<void> {
+    const response = await this.#fetch(
+      this.#url(`/v1/context/sessions/${encodeURIComponent(sessionId)}`),
+      {
+        headers: this.#headers(),
+        method: "DELETE",
+        ...(signal ? { signal } : {}),
+      },
+    );
+    if (!response.ok) {
+      throw await this.#apiError(response);
+    }
   }
 
   async *streamChat(request: ChatRequest, signal?: AbortSignal): AsyncGenerator<ChatStreamEvent> {

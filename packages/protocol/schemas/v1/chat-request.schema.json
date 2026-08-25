@@ -6,6 +6,10 @@
   "additionalProperties": false,
   "required": ["message", "requestId"],
   "properties": {
+    "contextSessionId": {
+      "type": "string",
+      "format": "uuid"
+    },
     "message": {
       "type": "string",
       "minLength": 1,

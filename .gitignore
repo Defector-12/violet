@@ -5,9 +5,11 @@
 node_modules/
 dist/
 coverage/
+.vscode/
 .DS_Store
 .local-backups/
 .local-acceptance/
+.local-wake/
 .swiftpm/
 .build/
 .swift-home/

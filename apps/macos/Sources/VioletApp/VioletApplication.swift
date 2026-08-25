@@ -20,6 +20,7 @@ private final class VioletApplicationDelegate: NSObject, NSApplicationDelegate {
   private var model: PresenceModel?
   private var portForwarder: (any PortForwarderPort)?
   private var statusController: StatusItemController?
+  private var wakeWord: WakeWordCoordinator?
 
   func applicationDidFinishLaunching(_ notification: Notification) {
     let acceptanceRecorder = configuredRealtimeAcceptanceRecorder()
@@ -27,6 +28,7 @@ private final class VioletApplicationDelegate: NSObject, NSApplicationDelegate {
       (
         configuration: VioletRuntimeConfiguration,
         client: any VioletCoreClientPort,
+        contextClient: any ContextClientPort,
         realtimeClient: (any RealtimeSessionClientPort)?
       )
     do {
@@ -38,6 +40,12 @@ private final class VioletApplicationDelegate: NSObject, NSApplicationDelegate {
           serverURL: configuration.coreURL,
           deviceToken: token
         ),
+        configuration.testMode
+          ? SilentContextClient()
+          : URLSessionContextClient(
+            coreURL: configuration.coreURL,
+            deviceToken: token
+          ),
         configuration.testMode
           ? nil
           : URLSessionRealtimeClient(
@@ -56,6 +64,7 @@ private final class VioletApplicationDelegate: NSObject, NSApplicationDelegate {
           testMode: true
         ),
         UnavailableCoreClient(error: error),
+        SilentContextClient(),
         nil
       )
     }
@@ -64,9 +73,25 @@ private final class VioletApplicationDelegate: NSObject, NSApplicationDelegate {
       dependencies.configuration.testMode
       ? SilentAudioIO()
       : AVAudioEngineIO()
+    let contextCapture: any ContextCapturePort =
+      dependencies.configuration.testMode
+      ? SilentContextCapture()
+      : SystemContextCapture(
+        excludedBundleIds: defaultExcludedBundleIds.union(
+          dependencies.configuration.excludedContextBundleIds
+        )
+      )
     let model = PresenceModel(
       client: dependencies.client,
       audioIO: audioIO,
+      contextCapture: contextCapture,
+      contextClient: dependencies.contextClient,
+      contextPrivacyFilter: LocalContextPrivacyFilter(
+        excludedBundleIds: defaultExcludedBundleIds.union(
+          dependencies.configuration.excludedContextBundleIds
+        )
+      ),
+      deviceId: LocalDeviceIdentity().deviceId(),
       realtimeClient: dependencies.realtimeClient,
       acceptanceRecorder: acceptanceRecorder
     )
@@ -79,13 +104,24 @@ private final class VioletApplicationDelegate: NSObject, NSApplicationDelegate {
       ? SilentPortForwarder()
       : dependencies.configuration.sshTunnel.map(SSHPortForwarder.init)
         ?? SilentPortForwarder()
+    let wakeDetector: any WakeWordDetectorPort =
+      dependencies.configuration.testMode
+      ? SilentWakeWordDetector()
+      : SherpaWakeWordDetector(
+        assetsURL: Bundle.main.resourceURL?
+          .appendingPathComponent("WakeWord", isDirectory: true)
+          ?? URL(fileURLWithPath: "/nonexistent")
+      )
+    let wakeWord = WakeWordCoordinator(detector: wakeDetector)
 
     self.model = model
     self.acceptanceRecorder = acceptanceRecorder
     self.portForwarder = portForwarder
+    self.wakeWord = wakeWord
     statusController = StatusItemController(
       model: model,
       shortcut: shortcut,
+      wakeWord: wakeWord,
       acceptanceRecorder: acceptanceRecorder
     )
     registerSystemLifecycleObservers()
@@ -101,6 +137,7 @@ private final class VioletApplicationDelegate: NSObject, NSApplicationDelegate {
     model?.stop(reason: .appTermination)
     acceptanceRecorder?.flush()
     model?.stopMonitoring()
+    wakeWord?.suspend()
     portForwarder?.stop()
     statusController?.stop()
   }
@@ -135,6 +172,7 @@ private final class VioletApplicationDelegate: NSObject, NSApplicationDelegate {
 
   @objc
   private func stopSensitiveActivity() {
+    wakeWord?.suspend()
     model?.stop(reason: .systemLifecycle)
     acceptanceRecorder?.flush()
   }
@@ -145,6 +183,7 @@ private final class VioletApplicationDelegate: NSObject, NSApplicationDelegate {
     Task {
       await model?.refresh()
     }
+    wakeWord?.resume()
   }
 }
 
