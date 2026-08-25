@@ -53,6 +53,7 @@ export class ContextService {
     const now = this.#now();
     const capturedAt = new Date(envelope.capturedAt);
     const expiresAt = new Date(envelope.expiresAt);
+    const sessionId = envelope.sessionId.toLowerCase();
     const decision = evaluateContextAccess({
       capturedAt,
       controlledSensitiveAllowed: envelope.authorization.controlledSensitiveAllowed,
@@ -64,7 +65,7 @@ export class ContextService {
       throw new ContextServiceError(decision.code, decision.status);
     }
 
-    this.#assertSequence(envelope);
+    this.#assertSequence(envelope, sessionId);
     const payload = decodePayload(envelope.payload);
     const result = await resolvePayload(payload, envelope.eventId, this.#understanding, signal);
     if (payload.type === "focus.region" || payload.type === "screen.snapshot") {
@@ -73,14 +74,14 @@ export class ContextService {
         eventId: envelope.eventId,
         expiresAt,
         mediaType: payload.image.mediaType,
-        sessionId: envelope.sessionId,
+        sessionId,
         sha256: payload.image.sha256,
       });
     }
     const resolved: ResolvedContext = {
       eventId: envelope.eventId,
       expiresAt,
-      sessionId: envelope.sessionId,
+      sessionId,
       summary: [
         `Source modality: ${envelope.source.modality}.`,
         envelope.source.appBundleId
@@ -95,7 +96,7 @@ export class ContextService {
         .join("\n"),
     };
     await this.#repository.put(resolved);
-    this.#sessionVersions.set(envelope.sessionId, {
+    this.#sessionVersions.set(sessionId, {
       eventId: envelope.eventId,
       sequence: envelope.sequence,
     });
@@ -104,21 +105,23 @@ export class ContextService {
       acceptedAt: now.toISOString(),
       eventId: envelope.eventId,
       expiresAt: envelope.expiresAt,
-      sessionId: envelope.sessionId,
+      sessionId,
       status: "ready",
     };
   }
 
   async delete(sessionId: string): Promise<void> {
-    this.#sessionVersions.delete(sessionId);
+    const canonicalSessionId = sessionId.toLowerCase();
+    this.#sessionVersions.delete(canonicalSessionId);
     await Promise.all([
-      this.#artifactStore.deleteSession(sessionId),
-      this.#repository.delete(sessionId),
+      this.#artifactStore.deleteSession(canonicalSessionId),
+      this.#repository.delete(canonicalSessionId),
     ]);
   }
 
   async get(sessionId: string): Promise<ResolvedContext> {
-    const context = await this.#repository.get(sessionId);
+    const canonicalSessionId = sessionId.toLowerCase();
+    const context = await this.#repository.get(canonicalSessionId);
     if (!context) {
       throw new ContextServiceError("CONTEXT_NOT_FOUND", 404);
     }
@@ -129,8 +132,8 @@ export class ContextService {
     return context;
   }
 
-  #assertSequence(envelope: ContextEnvelope): void {
-    const current = this.#sessionVersions.get(envelope.sessionId);
+  #assertSequence(envelope: ContextEnvelope, sessionId: string): void {
+    const current = this.#sessionVersions.get(sessionId);
     if (!current) {
       if (envelope.sequence !== 1 || envelope.previousEventId !== undefined) {
         throw new ContextServiceError("CONTEXT_SEQUENCE_INVALID", 400);

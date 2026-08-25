@@ -167,7 +167,7 @@ public actor URLSessionContextClient: ContextClientPort {
       redactions: context.redactions,
       sensitivity: context.sensitivity,
       sequence: 1,
-      sessionId: sessionId,
+      sessionId: sessionId.uuidString.lowercased(),
       source: .init(
         appBundleId: context.appBundleId,
         deviceId: deviceId,
@@ -241,7 +241,7 @@ private struct ContextEnvelopeWire: Encodable {
   let redactions: [ContextRedaction]
   let sensitivity: String
   let sequence: Int
-  let sessionId: UUID
+  let sessionId: String
   let source: Source
 }
 

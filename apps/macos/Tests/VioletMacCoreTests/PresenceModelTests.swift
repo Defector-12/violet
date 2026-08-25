@@ -679,6 +679,8 @@ private final class FakeContextCapture: ContextCapturePort {
   }
 
   func cancel() {}
+
+  func prepareSelectedTextCapture() {}
 }
 
 private actor FakeContextClient: ContextClientPort {

@@ -38,6 +38,17 @@ describe("ContextService", () => {
     expect(JSON.stringify(resolved)).not.toContain(bytes.toString("base64"));
   });
 
+  it("canonicalizes UUID casing across context requests", async () => {
+    const service = createService();
+    const uppercaseSessionId = randomUUID().toUpperCase();
+
+    const receipt = await service.submit(envelope({ sessionId: uppercaseSessionId }));
+    const resolved = await service.get(uppercaseSessionId.toLowerCase());
+
+    expect(receipt.sessionId).toBe(uppercaseSessionId.toLowerCase());
+    expect(resolved.sessionId).toBe(uppercaseSessionId.toLowerCase());
+  });
+
   it("rejects modified image bytes", async () => {
     const service = createService();
 

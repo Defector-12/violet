@@ -49,7 +49,13 @@ install -m 0644 "${WAKE_ASSETS_DIR}/MODEL-LICENSE.md" "${RESOURCES_DIR}/WakeWord
 plutil -lint "${CONTENTS_DIR}/Info.plist"
 codesign --force --sign - "${RESOURCES_DIR}/WakeWord/lib/libonnxruntime.dylib"
 codesign --force --sign - "${RESOURCES_DIR}/WakeWord/lib/libsherpa-onnx-c-api.dylib"
-codesign --force --sign - "${APP_DIR}"
+bundle_identifier="$(plutil -extract CFBundleIdentifier raw "${CONTENTS_DIR}/Info.plist")"
+# Keep macOS privacy grants stable across ad-hoc development rebuilds.
+codesign \
+  --force \
+  --sign - \
+  --requirements "=designated => identifier \"${bundle_identifier}\"" \
+  "${APP_DIR}"
 codesign --verify --deep --strict "${APP_DIR}"
 
 printf '%s\n' "${APP_DIR}"
