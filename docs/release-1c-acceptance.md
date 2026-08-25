@@ -1,6 +1,6 @@
 # Release 1C Violet Sight 验收
 
-> 状态：实现候选和真实视觉 API canary 已完成；系统权限、完整视觉矩阵和办公环境验收待执行。
+> 状态：实现候选、真实视觉 API canary 和三种 Context 入口人工冒烟已完成；完整视觉矩阵和办公环境验收待执行。
 
 ## 自动门禁
 
@@ -12,8 +12,8 @@ VIOLET_SWIFTPM_DISABLE_SANDBOX=1 pnpm macos:app
 
 当前基线：
 
-- TypeScript/JavaScript：71 项通过。
-- Swift：29 项通过。
+- TypeScript/JavaScript：72 项通过。
+- Swift：30 项通过。
 - Context 协议覆盖未知字段、过期、超长 TTL、越权、乱序、哈希篡改和删除。
 - DeepSeek Vision 请求使用 OpenAI 兼容图片内容块，测试不访问真实 API。
 - TOS 测试确认对象正文不含截图明文，并删除全部版本与 delete marker。
@@ -29,6 +29,19 @@ VIOLET_SWIFTPM_DISABLE_SANDBOX=1 pnpm macos:app
 - 右侧 `ORIGIN` 指向左侧 `RESULT 7`：文字、颜色、位置和从右向左方向全部正确，耗时 3.42 秒。
 
 第一次请求正确识别文字和颜色，但把箭头方向描述反了。Adapter 随后增加“先定位箭头头部，再核对来源和目标位置”的约束；同图复测和反向图交叉测试均通过。该结果证明 API、模型权限和当前 Adapter 可用，但不能替代 50 个真实场景的准确率门禁。
+
+## Context 人工冒烟
+
+2026-08-25 用户在真实 macOS 权限环境中确认以下入口均可用：
+
+- `Selected Text` 可以读取 Trae/Electron 编辑器选区，并在首次操作时成功建立 Context。
+- `Window or Display` 可以选择完整窗口或显示器，并返回基于画面的回答。
+- `Region` 可以框选局部区域，并返回限定于该区域的回答。
+- 点击浮窗外部会关闭浮窗并清理短期 Context。
+
+冒烟期间修复了 Electron Accessibility 树延迟启用、浮窗外部点击不关闭、Swift UUID 大小写导致 Context 查询 404，以及 DeepSeek thinking 忽略后置 system Context 的问题。Context 现在作为 JSON 编码的非可信数据紧邻当前用户问题，同时由首条 system 消息约束不得执行其中的指令。
+
+窗口与区域入口仍有可感知的 `Reading` 等待。当前链路依次执行截图、Vision OCR、本地隐私遮挡、上传、DeepSeek Vision 推理和 Context 提交；优化前先分别记录各阶段耗时，再优先处理截图尺寸、OCR 和上传，不能通过跳过本地隐私门禁缩短延迟。
 
 ## 唤醒候选
 

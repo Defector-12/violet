@@ -246,6 +246,10 @@ public final class PresenceModel: ObservableObject {
     }
   }
 
+  public func prepareSelectedTextCapture() {
+    contextCapture?.prepareSelectedTextCapture()
+  }
+
   public func clearContext() {
     contextCapture?.cancel()
     contextExpiryTask?.cancel()

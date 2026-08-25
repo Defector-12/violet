@@ -9,6 +9,7 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
   private let model: PresenceModel
   private var acknowledgement: AVAudioPlayer?
   private var isStopping = false
+  private var outsideClickMonitor: Any?
   private var pendingTriggerId: UUID?
   private var wakeConversationPending = false
   private let popover = NSPopover()
@@ -54,6 +55,19 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
     popover.contentViewController = NSHostingController(
       rootView: PresenceView(model: model, wakeWord: wakeWord)
     )
+    NSWorkspace.shared.notificationCenter.addObserver(
+      self,
+      selector: #selector(activeApplicationDidChange),
+      name: NSWorkspace.didActivateApplicationNotification,
+      object: nil
+    )
+    outsideClickMonitor = NSEvent.addGlobalMonitorForEvents(
+      matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]
+    ) { [weak self] _ in
+      Task { @MainActor [weak self] in
+        self?.closePopoverAfterOutsideClick()
+      }
+    }
     model.onContextSelectionFinished = { [weak self] in
       self?.showPopover()
     }
@@ -83,6 +97,15 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
     shortcut.stop()
     popover.close()
     wakeWord.suspend()
+    if let outsideClickMonitor {
+      NSEvent.removeMonitor(outsideClickMonitor)
+      self.outsideClickMonitor = nil
+    }
+    NSWorkspace.shared.notificationCenter.removeObserver(
+      self,
+      name: NSWorkspace.didActivateApplicationNotification,
+      object: nil
+    )
     NSStatusBar.system.removeStatusItem(statusItem)
   }
 
@@ -112,6 +135,26 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
     toggle(source: .menuBar)
   }
 
+  @objc
+  private func activeApplicationDidChange(_ notification: Notification) {
+    guard
+      popover.isShown,
+      let application = notification.userInfo?[NSWorkspace.applicationUserInfoKey]
+        as? NSRunningApplication,
+      application.processIdentifier != ProcessInfo.processInfo.processIdentifier
+    else {
+      return
+    }
+    popover.performClose(nil)
+  }
+
+  private func closePopoverAfterOutsideClick() {
+    guard popover.isShown else {
+      return
+    }
+    popover.performClose(nil)
+  }
+
   private func toggle(source: RealtimeAcceptanceReason) {
     if popover.isShown {
       popover.performClose(nil)
@@ -123,6 +166,7 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
       .init(type: .presenceTriggered, reason: source, triggerId: triggerId)
     )
 
+    model.prepareSelectedTextCapture()
     showPopover()
     Task {
       await model.refresh()
@@ -142,6 +186,7 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
   }
 
   private func handleWakeWord() {
+    model.prepareSelectedTextCapture()
     showPopover()
     wakeConversationPending = true
     acknowledgement?.currentTime = 0

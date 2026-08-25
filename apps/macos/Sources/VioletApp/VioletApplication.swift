@@ -125,6 +125,7 @@ private final class VioletApplicationDelegate: NSObject, NSApplicationDelegate {
       acceptanceRecorder: acceptanceRecorder
     )
     registerSystemLifecycleObservers()
+    model.prepareSelectedTextCapture()
     try? portForwarder.start()
     model.startMonitoring()
     Task {
@@ -156,6 +157,12 @@ private final class VioletApplicationDelegate: NSObject, NSApplicationDelegate {
         object: nil
       )
     }
+    center.addObserver(
+      self,
+      selector: #selector(prepareSelectedTextCapture),
+      name: NSWorkspace.didActivateApplicationNotification,
+      object: nil
+    )
     for name in [
       NSWorkspace.didWakeNotification,
       NSWorkspace.screensDidWakeNotification,
@@ -184,6 +191,18 @@ private final class VioletApplicationDelegate: NSObject, NSApplicationDelegate {
       await model?.refresh()
     }
     wakeWord?.resume()
+  }
+
+  @objc
+  private func prepareSelectedTextCapture(_ notification: Notification) {
+    guard
+      let application = notification.userInfo?[NSWorkspace.applicationUserInfoKey]
+        as? NSRunningApplication,
+      application.processIdentifier != ProcessInfo.processInfo.processIdentifier
+    else {
+      return
+    }
+    model?.prepareSelectedTextCapture()
   }
 }
 

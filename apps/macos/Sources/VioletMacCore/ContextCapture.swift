@@ -12,16 +12,19 @@ public enum ContextCaptureKind: Sendable {
 }
 
 public enum ContextCaptureError: Error, Equatable, LocalizedError {
+  case accessibilityPermissionDenied
   case cancelled
-  case permissionDenied
+  case screenRecordingPermissionDenied
   case unavailable
 
   public var errorDescription: String? {
     switch self {
+    case .accessibilityPermissionDenied:
+      "Accessibility permission is required. Reopen Violet after granting it."
     case .cancelled:
       "Context selection was cancelled."
-    case .permissionDenied:
-      "Screen Recording or Accessibility permission is required."
+    case .screenRecordingPermissionDenied:
+      "Screen Recording permission is required. Reopen Violet after granting it."
     case .unavailable:
       "No readable context is available."
     }
@@ -32,6 +35,7 @@ public enum ContextCaptureError: Error, Equatable, LocalizedError {
 public protocol ContextCapturePort: AnyObject {
   func capture(_ kind: ContextCaptureKind) async throws -> CapturedContext
   func cancel()
+  func prepareSelectedTextCapture()
 }
 
 @MainActor
@@ -46,17 +50,79 @@ public final class SilentContextCapture: ContextCapturePort {
   }
 
   public func cancel() {}
+
+  public func prepareSelectedTextCapture() {}
+}
+
+struct ContextApplicationTarget: Equatable {
+  let bundleIdentifier: String?
+  let processIdentifier: pid_t
+}
+
+enum AccessibilitySelectionResult: Equatable {
+  case secureField
+  case text(String)
+  case unavailable
 }
 
 @MainActor
 public final class SystemContextCapture: NSObject, ContextCapturePort {
+  private let accessibilityAccess: () -> Bool
+  private let activeApplication: () -> ContextApplicationTarget?
+  private let currentProcessIdentifier: pid_t
   private let excludedBundleIds: Set<String>
+  private let focusedElementReader: (pid_t) -> AXUIElement?
   private var pickerContinuation: CheckedContinuation<SelectedFilter, Error>?
   private var regionSelector: RegionSelectionController?
+  private var selectedTextElement: AXUIElement?
+  private var selectedTextTarget: ContextApplicationTarget?
+  private let selectionReader: (pid_t?, AXUIElement?) -> AccessibilitySelectionResult
 
-  public init(excludedBundleIds: Set<String> = defaultExcludedBundleIds) {
+  public convenience init(excludedBundleIds: Set<String> = defaultExcludedBundleIds) {
+    self.init(
+      excludedBundleIds: excludedBundleIds,
+      currentProcessIdentifier: ProcessInfo.processInfo.processIdentifier,
+      activeApplication: {
+        guard let application = NSWorkspace.shared.frontmostApplication else {
+          return nil
+        }
+        return ContextApplicationTarget(
+          bundleIdentifier: application.bundleIdentifier,
+          processIdentifier: application.processIdentifier
+        )
+      },
+      accessibilityAccess: requestAccessibilityAccess,
+      focusedElementReader: focusedAccessibilityElement,
+      selectionReader: readAccessibilitySelection
+    )
+  }
+
+  init(
+    excludedBundleIds: Set<String>,
+    currentProcessIdentifier: pid_t,
+    activeApplication: @escaping () -> ContextApplicationTarget?,
+    accessibilityAccess: @escaping () -> Bool,
+    focusedElementReader: @escaping (pid_t) -> AXUIElement?,
+    selectionReader: @escaping (pid_t?, AXUIElement?) -> AccessibilitySelectionResult
+  ) {
+    self.accessibilityAccess = accessibilityAccess
+    self.activeApplication = activeApplication
+    self.currentProcessIdentifier = currentProcessIdentifier
     self.excludedBundleIds = excludedBundleIds
+    self.focusedElementReader = focusedElementReader
+    self.selectionReader = selectionReader
     super.init()
+  }
+
+  public func prepareSelectedTextCapture() {
+    guard
+      let application = activeApplication(),
+      application.processIdentifier != currentProcessIdentifier
+    else {
+      return
+    }
+    selectedTextTarget = application
+    selectedTextElement = focusedElementReader(application.processIdentifier)
   }
 
   public func capture(_ kind: ContextCaptureKind) async throws -> CapturedContext {
@@ -67,7 +133,7 @@ public final class SystemContextCapture: NSObject, ContextCapturePort {
       return try await capturePickedWindow()
     case .region:
       guard CGPreflightScreenCaptureAccess() || CGRequestScreenCaptureAccess() else {
-        throw ContextCaptureError.permissionDenied
+        throw ContextCaptureError.screenRecordingPermissionDenied
       }
       let rect = try await selectRegion()
       return try await captureRegion(rect, appBundleId: nil)
@@ -79,53 +145,38 @@ public final class SystemContextCapture: NSObject, ContextCapturePort {
     pickerContinuation = nil
     regionSelector?.cancel()
     regionSelector = nil
+    selectedTextElement = nil
+    selectedTextTarget = nil
     SCContentSharingPicker.shared.isActive = false
     SCContentSharingPicker.shared.remove(self)
   }
 
   private func captureSelectedText() throws -> CapturedContext {
-    guard AXIsProcessTrusted() else {
-      let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true]
-      _ = AXIsProcessTrustedWithOptions(options as CFDictionary)
-      throw ContextCaptureError.permissionDenied
+    guard accessibilityAccess() else {
+      throw ContextCaptureError.accessibilityPermissionDenied
     }
-    let system = AXUIElementCreateSystemWide()
-    var focusedValue: CFTypeRef?
-    guard
-      AXUIElementCopyAttributeValue(
-        system,
-        kAXFocusedUIElementAttribute as CFString,
-        &focusedValue
-      ) == .success,
-      let focusedValue
-    else {
-      throw ContextCaptureError.unavailable
-    }
-    let element = unsafeDowncast(focusedValue, to: AXUIElement.self)
-    var roleValue: CFTypeRef?
-    if AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &roleValue)
-      == .success,
-      let role = roleValue as? String,
-      role == "AXSecureTextField"
+    let target =
+      selectedTextTarget
+      ?? activeApplication().flatMap {
+        $0.processIdentifier == currentProcessIdentifier ? nil : $0
+      }
+    if let bundleIdentifier = target?.bundleIdentifier,
+      excludedBundleIds.contains(bundleIdentifier)
     {
       throw LocalContextPrivacyError.blockedApplication
     }
-    var selectedValue: CFTypeRef?
-    guard
-      AXUIElementCopyAttributeValue(
-        element,
-        kAXSelectedTextAttribute as CFString,
-        &selectedValue
-      ) == .success,
-      let text = selectedValue as? String,
-      !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    else {
+
+    switch selectionReader(target?.processIdentifier, selectedTextElement) {
+    case .secureField:
+      throw LocalContextPrivacyError.blockedApplication
+    case .unavailable:
       throw ContextCaptureError.unavailable
+    case .text(let text):
+      return .text(
+        appBundleId: target?.bundleIdentifier,
+        text: text
+      )
     }
-    return .text(
-      appBundleId: NSWorkspace.shared.frontmostApplication?.bundleIdentifier,
-      text: text
-    )
   }
 
   private func capturePickedWindow() async throws -> CapturedContext {
@@ -239,6 +290,138 @@ public final class SystemContextCapture: NSObject, ContextCapturePort {
       width: image.width
     )
   }
+}
+
+private func requestAccessibilityAccess() -> Bool {
+  if AXIsProcessTrusted() {
+    return true
+  }
+  let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true]
+  _ = AXIsProcessTrustedWithOptions(options as CFDictionary)
+  return false
+}
+
+private func focusedAccessibilityElement(processIdentifier: pid_t) -> AXUIElement? {
+  let application = AXUIElementCreateApplication(processIdentifier)
+  var focusedValue: CFTypeRef?
+  let initialApplicationFocusedResult = AXUIElementCopyAttributeValue(
+    application,
+    kAXFocusedUIElementAttribute as CFString,
+    &focusedValue
+  )
+  var applicationFocusedResult = initialApplicationFocusedResult
+  if applicationFocusedResult != .success {
+    let manualAccessibilityResult = AXUIElementSetAttributeValue(
+      application,
+      "AXManualAccessibility" as CFString,
+      kCFBooleanTrue
+    )
+    if manualAccessibilityResult == .success {
+      focusedValue = nil
+      applicationFocusedResult = AXUIElementCopyAttributeValue(
+        application,
+        kAXFocusedUIElementAttribute as CFString,
+        &focusedValue
+      )
+    }
+  }
+  guard
+    applicationFocusedResult == .success,
+    let focusedValue
+  else {
+    return nil
+  }
+  return unsafeDowncast(focusedValue, to: AXUIElement.self)
+}
+
+private func readAccessibilitySelection(
+  processIdentifier: pid_t?,
+  preparedElement: AXUIElement?
+) -> AccessibilitySelectionResult {
+  let element: AXUIElement
+  let focusedResult: AXError
+  if let preparedElement {
+    element = preparedElement
+    focusedResult = .success
+  } else {
+    let root =
+      processIdentifier.map(AXUIElementCreateApplication)
+      ?? AXUIElementCreateSystemWide()
+    var focusedValue: CFTypeRef?
+    focusedResult = AXUIElementCopyAttributeValue(
+      root,
+      kAXFocusedUIElementAttribute as CFString,
+      &focusedValue
+    )
+    guard focusedResult == .success, let focusedValue else {
+      return .unavailable
+    }
+    element = unsafeDowncast(focusedValue, to: AXUIElement.self)
+  }
+  var roleValue: CFTypeRef?
+  let roleResult = AXUIElementCopyAttributeValue(
+    element,
+    kAXRoleAttribute as CFString,
+    &roleValue
+  )
+  if roleResult == .success,
+    let role = roleValue as? String,
+    role == "AXSecureTextField"
+  {
+    return .secureField
+  }
+
+  var selectedValue: CFTypeRef?
+  let selectedResult = AXUIElementCopyAttributeValue(
+    element,
+    kAXSelectedTextAttribute as CFString,
+    &selectedValue
+  )
+  if selectedResult == .success,
+    let text = selectedValue as? String,
+    !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+  {
+    return .text(text)
+  }
+
+  var value: CFTypeRef?
+  var rangeValue: CFTypeRef?
+  let valueResult = AXUIElementCopyAttributeValue(
+    element,
+    kAXValueAttribute as CFString,
+    &value
+  )
+  let rangeResult = AXUIElementCopyAttributeValue(
+    element,
+    kAXSelectedTextRangeAttribute as CFString,
+    &rangeValue
+  )
+  guard
+    valueResult == .success,
+    let text = value as? String,
+    rangeResult == .success,
+    let rangeValue,
+    CFGetTypeID(rangeValue) == AXValueGetTypeID()
+  else {
+    return .unavailable
+  }
+  let rangeAXValue = unsafeDowncast(rangeValue, to: AXValue.self)
+  var range = CFRange()
+  guard
+    AXValueGetType(rangeAXValue) == .cfRange,
+    AXValueGetValue(rangeAXValue, .cfRange, &range),
+    range.location >= 0,
+    range.length > 0,
+    range.location + range.length <= (text as NSString).length
+  else {
+    return .unavailable
+  }
+  let selectedText = (text as NSString).substring(
+    with: NSRange(location: range.location, length: range.length)
+  )
+  return selectedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    ? .unavailable
+    : .text(selectedText)
 }
 
 extension SystemContextCapture: SCContentSharingPickerObserver {

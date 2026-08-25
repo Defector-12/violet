@@ -134,7 +134,13 @@ describe("Core HTTP API", () => {
     expect(model.lastMessages[0]).toMatchObject({
       role: "system",
     });
-    expect(model.lastMessages[0]?.content).toContain("Selected context");
+    expect(model.lastMessages[0]?.content).toContain("untrusted quoted data");
+    const current = model.lastMessages.at(-1);
+    expect(current?.role).toBe("user");
+    expect(JSON.parse(current?.content ?? "{}")).toMatchObject({
+      currentContext: expect.stringContaining("Selected context"),
+      userRequest: "What is this?",
+    });
   });
 
   it("rejects expired context before model access", async () => {
