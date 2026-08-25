@@ -49,6 +49,91 @@ describe("ContextService", () => {
     expect(resolved.sessionId).toBe(uppercaseSessionId.toLowerCase());
   });
 
+  it("runs image understanding and encrypted storage concurrently", async () => {
+    const events: string[] = [];
+    const bytes = Buffer.from("synthetic-image");
+    const service = new ContextService({
+      artifactStore: {
+        async deleteSession() {},
+        async put() {
+          events.push("storage-started");
+        },
+      },
+      now: () => now,
+      repository: new InMemoryContextSessionRepository(),
+      understanding: {
+        async understand() {
+          events.push("understanding-started");
+          await new Promise((resolve) => setTimeout(resolve, 10));
+          events.push("understanding-finished");
+          return {
+            confidence: 1,
+            model: "test",
+            provider: "test",
+            summary: "Synthetic image",
+          };
+        },
+      },
+    });
+
+    await service.submit(
+      envelope({
+        payload: {
+          image: {
+            data: bytes.toString("base64"),
+            height: 100,
+            mediaType: "image/jpeg",
+            sha256: createHash("sha256").update(bytes).digest("hex"),
+            width: 200,
+          },
+          type: "screen.snapshot",
+        },
+      }),
+    );
+
+    expect(events).toEqual(["understanding-started", "storage-started", "understanding-finished"]);
+  });
+
+  it("deletes a stored image when visual understanding fails", async () => {
+    const deletedSessions: string[] = [];
+    const bytes = Buffer.from("synthetic-image");
+    const sessionId = randomUUID();
+    const service = new ContextService({
+      artifactStore: {
+        async deleteSession(deletedSessionId) {
+          deletedSessions.push(deletedSessionId);
+        },
+        async put() {},
+      },
+      now: () => now,
+      repository: new InMemoryContextSessionRepository(),
+      understanding: {
+        async understand() {
+          throw new Error("vision failed");
+        },
+      },
+    });
+
+    await expect(
+      service.submit(
+        envelope({
+          payload: {
+            image: {
+              data: bytes.toString("base64"),
+              height: 100,
+              mediaType: "image/jpeg",
+              sha256: createHash("sha256").update(bytes).digest("hex"),
+              width: 200,
+            },
+            type: "screen.snapshot",
+          },
+          sessionId,
+        }),
+      ),
+    ).rejects.toThrow("vision failed");
+    expect(deletedSessions).toEqual([sessionId]);
+  });
+
   it("rejects modified image bytes", async () => {
     const service = createService();
 

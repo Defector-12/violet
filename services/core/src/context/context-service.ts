@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { performance } from "node:perf_hooks";
 import type {
   ContextArtifactStore,
   ContextPayload,
@@ -8,6 +9,8 @@ import type {
 } from "@violet/domain";
 import { evaluateContextAccess } from "@violet/policy";
 import type { ContextEnvelope, ContextReceipt } from "@violet/protocol";
+
+import { recordContextStageDuration } from "../telemetry-signals.js";
 
 export class ContextServiceError extends Error {
   constructor(
@@ -50,6 +53,7 @@ export class ContextService {
   }
 
   async submit(envelope: ContextEnvelope, signal?: AbortSignal): Promise<ContextReceipt> {
+    const startedAt = performance.now();
     const now = this.#now();
     const capturedAt = new Date(envelope.capturedAt);
     const expiresAt = new Date(envelope.expiresAt);
@@ -67,17 +71,35 @@ export class ContextService {
 
     this.#assertSequence(envelope, sessionId);
     const payload = decodePayload(envelope.payload);
-    const result = await resolvePayload(payload, envelope.eventId, this.#understanding, signal);
-    if (payload.type === "focus.region" || payload.type === "screen.snapshot") {
-      await this.#artifactStore.put({
-        bytes: payload.image.bytes,
-        eventId: envelope.eventId,
-        expiresAt,
-        mediaType: payload.image.mediaType,
-        sessionId,
-        sha256: payload.image.sha256,
-      });
+    const imagePayload =
+      payload.type === "focus.region" || payload.type === "screen.snapshot" ? payload : undefined;
+    const [understandingResult, storageResult] = await Promise.allSettled([
+      measureContextStage("understanding", () =>
+        resolvePayload(payload, envelope.eventId, this.#understanding, signal),
+      ),
+      imagePayload
+        ? measureContextStage("artifact_store", () =>
+            this.#artifactStore.put({
+              bytes: imagePayload.image.bytes,
+              eventId: envelope.eventId,
+              expiresAt,
+              mediaType: imagePayload.image.mediaType,
+              sessionId,
+              sha256: imagePayload.image.sha256,
+            }),
+          )
+        : Promise.resolve(),
+    ]);
+    if (understandingResult.status === "rejected") {
+      if (imagePayload && storageResult.status === "fulfilled") {
+        await this.#artifactStore.deleteSession(sessionId).catch(() => {});
+      }
+      throw understandingResult.reason;
     }
+    if (storageResult.status === "rejected") {
+      throw storageResult.reason;
+    }
+    const result = understandingResult.value;
     const resolved: ResolvedContext = {
       eventId: envelope.eventId,
       expiresAt,
@@ -99,6 +121,11 @@ export class ContextService {
     this.#sessionVersions.set(sessionId, {
       eventId: envelope.eventId,
       sequence: envelope.sequence,
+    });
+    recordContextStageDuration({
+      durationMs: performance.now() - startedAt,
+      stage: "total",
+      status: "ok",
     });
 
     return {
@@ -146,6 +173,29 @@ export class ContextService {
     ) {
       throw new ContextServiceError("CONTEXT_SEQUENCE_INVALID", 400);
     }
+  }
+}
+
+async function measureContextStage<T>(
+  stage: "artifact_store" | "understanding",
+  operation: () => Promise<T>,
+): Promise<T> {
+  const startedAt = performance.now();
+  try {
+    const result = await operation();
+    recordContextStageDuration({
+      durationMs: performance.now() - startedAt,
+      stage,
+      status: "ok",
+    });
+    return result;
+  } catch (error) {
+    recordContextStageDuration({
+      durationMs: performance.now() - startedAt,
+      stage,
+      status: "error",
+    });
+    throw error;
   }
 }
 

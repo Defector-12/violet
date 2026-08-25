@@ -248,7 +248,7 @@ public final class SystemContextCapture: NSObject, ContextCapturePort {
         configuration: configuration
       )
     }
-    return try makeCapturedImage(
+    return try await makeCapturedImage(
       image,
       appBundleId: appBundleId,
       region: normalized(rect)
@@ -269,25 +269,31 @@ public final class SystemContextCapture: NSObject, ContextCapturePort {
       contentFilter: filter,
       configuration: configuration
     )
-    return try makeCapturedImage(image, appBundleId: nil, region: region)
+    return try await makeCapturedImage(image, appBundleId: nil, region: region)
   }
 
   private func makeCapturedImage(
     _ image: CGImage,
     appBundleId: String?,
     region: NormalizedContextRect?
-  ) throws -> CapturedContext {
-    let bitmap = NSBitmapImageRep(cgImage: image)
-    guard let data = bitmap.representation(using: .png, properties: [:]) else {
-      throw LocalContextPrivacyError.imageEncodingFailed
-    }
+  ) async throws -> CapturedContext {
+    let preparedImage = contextSizedImage(image)
+    let sendableImage = SendableCGImage(value: preparedImage)
+    async let data = Task.detached(priority: .userInitiated) {
+      try encodeContextImage(sendableImage.value)
+    }.value
+    async let recognizedText = Task.detached(priority: .userInitiated) {
+      recognizeText(in: sendableImage.value)
+    }.value
+    let encodedData = try await data
+    let observations = await recognizedText
     return .image(
       appBundleId: appBundleId,
-      data: data,
-      height: image.height,
-      recognizedText: recognizeText(in: image),
+      data: encodedData,
+      height: preparedImage.height,
+      recognizedText: observations,
       region: region,
-      width: image.width
+      width: preparedImage.width
     )
   }
 }
@@ -461,6 +467,50 @@ extension SystemContextCapture: SCContentSharingPickerObserver {
 
 private struct SelectedFilter: @unchecked Sendable {
   let value: SCContentFilter
+}
+
+private struct SendableCGImage: @unchecked Sendable {
+  let value: CGImage
+}
+
+private func contextSizedImage(_ image: CGImage) -> CGImage {
+  let maximumDimension = 2_048
+  let largestDimension = max(image.width, image.height)
+  guard largestDimension > maximumDimension else {
+    return image
+  }
+  let scale = Double(maximumDimension) / Double(largestDimension)
+  let width = max(1, Int((Double(image.width) * scale).rounded()))
+  let height = max(1, Int((Double(image.height) * scale).rounded()))
+  guard
+    let context = CGContext(
+      data: nil,
+      width: width,
+      height: height,
+      bitsPerComponent: 8,
+      bytesPerRow: 0,
+      space: CGColorSpaceCreateDeviceRGB(),
+      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+    )
+  else {
+    return image
+  }
+  context.interpolationQuality = .high
+  context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+  return context.makeImage() ?? image
+}
+
+private func encodeContextImage(_ image: CGImage) throws -> Data {
+  guard
+    let data = NSBitmapImageRep(cgImage: image).representation(
+      using: .jpeg,
+      properties: [.compressionFactor: 0.85]
+    ),
+    data.count <= 8 * 1024 * 1024
+  else {
+    throw LocalContextPrivacyError.imageEncodingFailed
+  }
+  return data
 }
 
 private func recognizeText(in image: CGImage) -> [RecognizedContextText] {

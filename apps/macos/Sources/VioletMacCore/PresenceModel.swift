@@ -76,6 +76,7 @@ public final class PresenceModel: ObservableObject {
   public var onAudioSessionEnded: (@MainActor @Sendable () -> Void)?
   public var onAudioSessionStarted: (@MainActor @Sendable () -> Void)?
   public var onContextSelectionFinished: (@MainActor @Sendable () -> Void)?
+  public var onContextSelectionStarted: (@MainActor @Sendable () -> Void)?
 
   public init(
     client: any VioletCoreClientPort,
@@ -211,6 +212,7 @@ public final class PresenceModel: ObservableObject {
     contextTask?.cancel()
     let previousContextSessionId = activeContextSessionId
     activeContextSessionId = nil
+    onContextSelectionStarted?()
     contextState = .selecting
     contextTask = Task { [weak self, contextCapture, contextClient] in
       guard let self else {

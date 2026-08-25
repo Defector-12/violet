@@ -68,8 +68,15 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
         self?.closePopoverAfterOutsideClick()
       }
     }
+    model.onContextSelectionStarted = { [weak self] in
+      self?.popover.behavior = .applicationDefined
+    }
     model.onContextSelectionFinished = { [weak self] in
-      self?.showPopover()
+      guard let self else {
+        return
+      }
+      self.showPopover()
+      self.popover.behavior = .transient
     }
     model.onAudioSessionStarted = { [weak wakeWord] in
       wakeWord?.suspend()
@@ -139,6 +146,7 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
   private func activeApplicationDidChange(_ notification: Notification) {
     guard
       popover.isShown,
+      !model.isSelectingContext,
       let application = notification.userInfo?[NSWorkspace.applicationUserInfoKey]
         as? NSRunningApplication,
       application.processIdentifier != ProcessInfo.processInfo.processIdentifier
@@ -149,7 +157,7 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
   }
 
   private func closePopoverAfterOutsideClick() {
-    guard popover.isShown else {
+    guard popover.isShown, !model.isSelectingContext else {
       return
     }
     popover.performClose(nil)

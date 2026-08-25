@@ -12,8 +12,8 @@ VIOLET_SWIFTPM_DISABLE_SANDBOX=1 pnpm macos:app
 
 当前基线：
 
-- TypeScript/JavaScript：72 项通过。
-- Swift：30 项通过。
+- TypeScript/JavaScript：74 项通过。
+- Swift：31 项通过。
 - Context 协议覆盖未知字段、过期、超长 TTL、越权、乱序、哈希篡改和删除。
 - DeepSeek Vision 请求使用 OpenAI 兼容图片内容块，测试不访问真实 API。
 - TOS 测试确认对象正文不含截图明文，并删除全部版本与 delete marker。
@@ -42,6 +42,22 @@ VIOLET_SWIFTPM_DISABLE_SANDBOX=1 pnpm macos:app
 冒烟期间修复了 Electron Accessibility 树延迟启用、浮窗外部点击不关闭、Swift UUID 大小写导致 Context 查询 404，以及 DeepSeek thinking 忽略后置 system Context 的问题。Context 现在作为 JSON 编码的非可信数据紧邻当前用户问题，同时由首条 system 消息约束不得执行其中的指令。
 
 窗口与区域入口仍有可感知的 `Reading` 等待。当前链路依次执行截图、Vision OCR、本地隐私遮挡、上传、DeepSeek Vision 推理和 Context 提交；优化前先分别记录各阶段耗时，再优先处理截图尺寸、OCR 和上传，不能通过跳过本地隐私门禁缩短延迟。
+
+2026-08-25 的延迟优化候选完成：
+
+- 截图统一限制为最长边 2048px，OCR 与 JPEG 编码并行执行。
+- 无敏感区域时复用已编码 JPEG，不再执行 PNG 编码、解码和 JPEG 二次编码。
+- 本地门禁完成后，DeepSeek Vision 与加密 TOS 写入并行执行；Vision 失败时主动删除已写对象。
+- Core 新增 `violet.context.stage.duration` 指标，仅记录 understanding、artifact store 和 total 耗时，不记录内容。
+- 同一张 640×360 合成图片的完整 Core 提交基线为 `2984 / 2435 / 1914ms`，优化后为 `2059 / 2404 / 1987ms`；中位数由 2435ms 降至 2059ms，约降低 15%。
+
+真实窗口与区域复测确认：
+
+- Window：截图约 82ms，OCR 与编码约 1.40s，本地捕获合计约 2.40s，本地隐私过滤约 4ms，DeepSeek/Core 请求约 20.07s。
+- Region：截图约 40ms，OCR 与编码约 564ms，本地捕获合计约 3.58s（包含系统框选器返回），本地隐私过滤约 1ms，DeepSeek/Core 请求约 9.37s。
+- TOS 写入约 0.1s；长尾几乎全部来自 DeepSeek Vision understanding。
+
+1280px 上传和输出 token 上限实验没有稳定降低供应商长尾，且 token 上限会让 thinking 模型耗尽内部推理预算后返回空响应，因此均未保留。用户决定不继续投入 DeepSeek 供应商延迟优化。浮窗在选择和 `Reading` 期间保持显示，完成后才恢复 transient 行为。
 
 ## 唤醒候选
 

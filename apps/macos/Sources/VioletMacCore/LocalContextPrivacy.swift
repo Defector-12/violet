@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import ImageIO
+import UniformTypeIdentifiers
 
 public struct RecognizedContextText: Equatable, Sendable {
   public let confidence: Double
@@ -104,12 +105,15 @@ public struct LocalContextPrivacyFilter: LocalContextPrivacyFiltering {
           normalizedBounds: observation.normalizedBounds
         )
       }
-      let redactedImage = try redactImage(
-        data,
-        height: height,
-        regions: sensitiveRegions,
-        width: width
-      )
+      let redactedImage =
+        sensitiveRegions.isEmpty && isBoundedJPEG(data)
+        ? data
+        : try redactImage(
+          data,
+          height: height,
+          regions: sensitiveRegions,
+          width: width
+        )
       let safeText =
         recognizedText
         .map { redact($0.text).value }
@@ -258,6 +262,17 @@ private func redactImage(
     throw LocalContextPrivacyError.imageEncodingFailed
   }
   return encoded
+}
+
+private func isBoundedJPEG(_ data: Data) -> Bool {
+  guard
+    data.count <= 8 * 1024 * 1024,
+    let source = CGImageSourceCreateWithData(data as CFData, nil),
+    let type = CGImageSourceGetType(source)
+  else {
+    return false
+  }
+  return UTType(type as String)?.conforms(to: .jpeg) == true
 }
 
 private func regex(_ pattern: String) -> NSRegularExpression {
