@@ -1,6 +1,7 @@
 # Release 1C Violet Sight 验收
 
-> 状态：实现候选、真实视觉 API canary 和三种 Context 入口人工冒烟已完成；完整视觉矩阵和办公环境验收待执行。
+> 状态：实现候选、真实视觉 API canary、后台 Vision 真实复测和三种 Context
+> 入口人工冒烟已完成；完整视觉矩阵、Context 生命周期矩阵和办公环境唤醒验收待执行。
 
 ## 自动门禁
 
@@ -13,7 +14,7 @@ VIOLET_SWIFTPM_DISABLE_SANDBOX=1 pnpm macos:app
 当前基线：
 
 - TypeScript/JavaScript：75 项通过。
-- Swift：31 项通过。
+- Swift：32 项通过。
 - Context 协议覆盖未知字段、过期、超长 TTL、越权、乱序、哈希篡改和删除。
 - DeepSeek Vision 请求使用 OpenAI 兼容图片内容块，测试不访问真实 API。
 - TOS 测试确认对象正文不含截图明文，并删除全部版本与 delete marker。
@@ -67,7 +68,33 @@ VIOLET_SWIFTPM_DISABLE_SANDBOX=1 pnpm macos:app
 - Context 删除、关闭或失效会取消对应后台任务，旧任务不能回写已删除或更新后的 session。
 - DeepSeek 失败时保留经过本地隐私处理的 OCR 证据作为降级结果，不再让已接受的 Context 变成 500。
 
-按当前真机数据估算，Window 的 `Reading` 将从约 22.5s 降至约 2.5s，Region 将从约 13.0s 降至约 3.7s；首个问题仍可能等待剩余的 DeepSeek 时间。真实用户复测待部署后执行。
+按优化前真机数据估算，Window 的 `Reading` 从约 22.5s 降至约 2.5s，Region
+从约 13.0s 降至约 3.7s；首个问题仍可能等待剩余的 DeepSeek 时间。
+
+2026-08-26 完成部署和真实复测：
+
+- 生产配置合成 canary 的 Context 提交耗时 373ms，提交后立即发起的聊天耗时
+  4424ms，提交和聊天均返回 HTTP 200，证明首问复用了同一后台 Vision 任务。
+- 用户真实使用 `Region` 后确认 `Reading` 速度可接受。
+- 初次内容校验发现 Region 截到了选区垂直镜像位置。运行时证据确认旧 Window
+  Context 已返回 HTTP 204 删除，新 Region 的提交 session、回执 session 和聊天
+  session 完全一致，排除了上下文混用。
+- 根因是 AppKit 使用左下原点，而 `SCScreenshotManager.captureImage(in:)` 使用左上
+  原点；Mac 端现已在截图前转换 Y 坐标，并同时覆盖 macOS 15.2 直接截图路径和旧版
+  content-filter 路径。
+- 用户完成修复后复测，确认 Region 框选内容与回答一致。该结果关闭当前坐标缺陷，
+  但不替代下方 50 个真实场景的正式门禁。
+
+## 当前交付状态
+
+- 分支：`feat/1c-sight-wake`。
+- 最新提交：`8363333 fix: correct region capture coordinates`。
+- Codebase Draft MR：
+  [!19](https://code.byted.org/user/violet/merge_requests/19)，当前 4/4 检查通过。
+- Codebase 与 GitHub 的同名分支均已核对指向
+  `83633331fa754bcd9bdbd41a844f415fd76c5557`。
+- Devbox Core 继续运行 `87a4306`；最新提交只修改 Mac Region 坐标转换和单元测试，
+  不需要重新部署服务端。
 
 ## 唤醒候选
 
