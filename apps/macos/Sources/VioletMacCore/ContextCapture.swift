@@ -222,27 +222,34 @@ public final class SystemContextCapture: NSObject, ContextCapturePort {
     _ rect: CGRect,
     appBundleId: String?
   ) async throws -> CapturedContext {
+    guard let primaryScreenFrame = NSScreen.screens.first?.frame else {
+      throw ContextCaptureError.unavailable
+    }
+    let captureRect = screenCaptureRect(
+      from: rect,
+      primaryScreenFrame: primaryScreenFrame
+    )
     let image: CGImage
     if #available(macOS 15.2, *) {
-      image = try await SCScreenshotManager.captureImage(in: rect)
+      image = try await SCScreenshotManager.captureImage(in: captureRect)
     } else {
       let content = try await SCShareableContent.excludingDesktopWindows(
         false,
         onScreenWindowsOnly: true
       )
-      guard let display = content.displays.first(where: { $0.frame.intersects(rect) }) else {
+      guard let display = content.displays.first(where: { $0.frame.intersects(captureRect) }) else {
         throw ContextCaptureError.unavailable
       }
       let filter = SCContentFilter(display: display, excludingWindows: [])
       let configuration = SCStreamConfiguration()
       configuration.sourceRect = CGRect(
-        x: rect.minX - display.frame.minX,
-        y: rect.minY - display.frame.minY,
-        width: rect.width,
-        height: rect.height
+        x: captureRect.minX - display.frame.minX,
+        y: captureRect.minY - display.frame.minY,
+        width: captureRect.width,
+        height: captureRect.height
       )
-      configuration.width = min(Int(rect.width * 2), 2048)
-      configuration.height = min(Int(rect.height * 2), 2048)
+      configuration.width = min(Int(captureRect.width * 2), 2048)
+      configuration.height = min(Int(captureRect.height * 2), 2048)
       image = try await SCScreenshotManager.captureImage(
         contentFilter: filter,
         configuration: configuration
@@ -555,6 +562,18 @@ private func normalized(_ rect: CGRect) -> NormalizedContextRect {
     y: (rect.minY - screen.frame.minY) / screen.frame.height,
     width: rect.width / screen.frame.width,
     height: rect.height / screen.frame.height
+  )
+}
+
+func screenCaptureRect(
+  from appKitRect: CGRect,
+  primaryScreenFrame: CGRect
+) -> CGRect {
+  CGRect(
+    x: appKitRect.minX,
+    y: primaryScreenFrame.maxY - appKitRect.maxY,
+    width: appKitRect.width,
+    height: appKitRect.height
   )
 }
 
