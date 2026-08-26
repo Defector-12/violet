@@ -88,7 +88,7 @@ VIOLET_SWIFTPM_DISABLE_SANDBOX=1 pnpm macos:app
 ## 当前交付状态
 
 - 分支：`feat/1c-sight-wake`。
-- 最新提交：`8363333 fix: correct region capture coordinates`。
+- Region 修复提交：`8363333 fix: correct region capture coordinates`。
 - Codebase Draft MR：
   [!19](https://code.byted.org/user/violet/merge_requests/19)，当前 4/4 检查通过。
 - Codebase 与 GitHub 的同名分支均已核对指向
