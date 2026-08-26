@@ -91,7 +91,7 @@ VIOLET_SWIFTPM_DISABLE_SANDBOX=1 pnpm macos:app
 - Region 修复提交：`8363333 fix: correct region capture coordinates`。
 - Codebase Draft MR：
   [!19](https://code.byted.org/user/violet/merge_requests/19)，当前 4/4 检查通过。
-- Codebase 与 GitHub 的同名分支均已核对指向
+- Region 修复推送时，Codebase 与 GitHub 的同名分支均已核对包含
   `83633331fa754bcd9bdbd41a844f415fd76c5557`。
 - Devbox Core 继续运行 `87a4306`；最新提交只修改 Mac Region 坐标转换和单元测试，
   不需要重新部署服务端。
@@ -115,6 +115,19 @@ VIOLET_SWIFTPM_DISABLE_SANDBOX=1 pnpm macos:app
 5. 唤醒前 PCM 写盘、上传和日志记录为 0。
 
 调参后的第一轮人工门禁先执行 20 次正常距离唤醒：至少成功 19 次且无误触发才继续扩大样本。若仍不足 19 次，不继续降低 threshold，而是更换针对用户发音的定制 KWS 模型。
+
+2026-08-26 完成第一轮真实人工门禁：
+
+- 用户在正常工作位、正常音量和距离下主动唤醒 20 次，成功 15 次、漏唤醒 5 次，
+  成功率 75%，未报告测试窗口内的误触发。
+- 结果低于 19/20 门槛，因此不执行后续 100 次正样本、1000 条负样本和 8 小时
+  办公环境验收，也不继续降低 threshold。
+- 隐私安全的本地验收日志记录了 9 次 `session.start.requested`；当前 schema 没有独立
+  `wake.detected` 事件，且部分成功唤醒未进入 Realtime，因此日志不能替代用户的
+  15/20 人工计数。后续定制 KWS 验收前需补充独立唤醒检测事件。
+- 测试结束后 Wake 已恢复关闭，Violet 已恢复普通 LaunchServices 启动。
+- 下一候选方向是针对用户真实发音的定制 KWS 模型，而不是继续放宽当前
+  GigaSpeech 开放词汇模型阈值。
 
 ## 视觉真实验收
 
