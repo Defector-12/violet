@@ -22,7 +22,7 @@
     "macos:app": "./scripts/build-macos-app.sh debug",
     "macos:configure": "node scripts/configure-macos-client.mjs",
     "macos:migrate-token": "./scripts/migrate-device-token-to-keychain.sh",
-    "macos:test": "TMPDIR=\"$PWD/apps/macos/.swift-tmp\" swift test --package-path apps/macos --disable-index-store -j 4",
+    "macos:test": "mkdir -p apps/macos/.swift-tmp/cache apps/macos/.swift-tmp/config apps/macos/.swift-tmp/security && TMPDIR=\"$PWD/apps/macos/.swift-tmp\" swift test --package-path apps/macos --cache-path apps/macos/.swift-tmp/cache --config-path apps/macos/.swift-tmp/config --security-path apps/macos/.swift-tmp/security --disable-index-store -j 4",
     "macos:wake-assets": "./scripts/fetch-wake-word-assets.sh",
     "test": "vitest run",
     "typecheck": "pnpm -r build && pnpm -r typecheck"
