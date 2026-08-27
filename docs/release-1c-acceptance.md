@@ -1,7 +1,9 @@
 # Release 1C Violet Sight 验收
 
-> 状态：实现候选、真实视觉 API canary、后台 Vision 真实复测和三种 Context
-> 入口人工冒烟已完成；完整视觉矩阵、Context 生命周期矩阵和办公环境唤醒验收待执行。
+> 状态：实现候选，代码已集成到主线。真实视觉 API canary、后台 Vision 真实复测、三种 Context
+> 入口人工冒烟和视觉矩阵 20/50 已完成。用户当前未遇到其他 Bug，2026-08-27
+> 主动暂停剩余验收；后续主功能开发完成后统一恢复，也可由用户随时发起专项测试。
+> 暂停不等于通过，Release 1C 仍不标记为正式交付。
 
 ## 自动门禁
 
@@ -14,7 +16,7 @@ VIOLET_SWIFTPM_DISABLE_SANDBOX=1 pnpm macos:app
 当前基线：
 
 - TypeScript/JavaScript：75 项通过。
-- Swift：32 项通过。
+- Swift：33 项通过。
 - Context 协议覆盖未知字段、过期、超长 TTL、越权、乱序、哈希篡改和删除。
 - DeepSeek Vision 请求使用 OpenAI 兼容图片内容块，测试不访问真实 API。
 - TOS 测试确认对象正文不含截图明文，并删除全部版本与 delete marker。
@@ -58,7 +60,7 @@ VIOLET_SWIFTPM_DISABLE_SANDBOX=1 pnpm macos:app
 - Region：截图约 40ms，OCR 与编码约 564ms，本地捕获合计约 3.58s（包含系统框选器返回），本地隐私过滤约 1ms，DeepSeek/Core 请求约 9.37s。
 - TOS 写入约 0.1s；长尾几乎全部来自 DeepSeek Vision understanding。
 
-1280px 上传和输出 token 上限实验没有稳定降低供应商长尾，且 token 上限会让 thinking 模型耗尽内部推理预算后返回空响应，因此均未保留。用户决定不继续投入 DeepSeek 供应商延迟优化。浮窗在选择和 `Reading` 期间保持显示，完成后才恢复 transient 行为。
+1280px 上传和输出 token 上限实验没有稳定降低供应商长尾，且 token 上限会让 thinking 模型耗尽内部推理预算后返回空响应，因此均未保留。用户决定不继续投入 DeepSeek 供应商延迟优化。Selected Text 和 Window/Display 选择期间浮窗保持显示；Region 框选期间浮窗隐藏，框选完成后自动恢复，并在 `Reading` 期间保持显示。
 
 随后按用户确认的交互边界将 DeepSeek Vision 移出 `Reading`：
 
@@ -85,16 +87,16 @@ VIOLET_SWIFTPM_DISABLE_SANDBOX=1 pnpm macos:app
 - 用户完成修复后复测，确认 Region 框选内容与回答一致。该结果关闭当前坐标缺陷，
   但不替代下方 50 个真实场景的正式门禁。
 
-## 当前交付状态
+## 当前集成状态
 
-- 分支：`feat/1c-sight-wake`。
+- 功能基线：`752b4ad fix: hide popover during region selection`。
 - Region 修复提交：`8363333 fix: correct region capture coordinates`。
-- Codebase Draft MR：
-  [!19](https://code.byted.org/user/violet/merge_requests/19)，当前 4/4 检查通过。
-- Region 修复推送时，Codebase 与 GitHub 的同名分支均已核对包含
-  `83633331fa754bcd9bdbd41a844f415fd76c5557`。
-- Devbox Core 继续运行 `87a4306`；最新提交只修改 Mac Region 坐标转换和单元测试，
-  不需要重新部署服务端。
+- Region 框选浮窗修复提交：`752b4ad fix: hide popover during region selection`。
+- Codebase MR [!19](https://code.byted.org/user/violet/merge_requests/19) 的 4/4 检查通过，
+  并在 2026-08-27 的仓库收口中集成到主线。
+- Codebase 与 GitHub 主线保持相同内容；平台生成的 merge commit 可以不同。
+- Devbox 使用同一主线代码，Core、PostgreSQL、LGTM 和 Collector 健康。
+- 代码集成不改变验收结论：Release 1C 仍是实现候选。
 
 ## 唤醒候选
 
@@ -138,6 +140,64 @@ VIOLET_SWIFTPM_DISABLE_SANDBOX=1 pnpm macos:app
 3. PDF 当前页或选区 10 次。
 4. IDE 选中代码或窗口 10 次。
 5. 无浏览器适配器的页面 10 次。
+
+2026-08-27 完成无浏览器适配器页面组：
+
+- 使用本地合成页面和 `Region` 完成 10 次测试，覆盖精确文字、颜色、形状、数量、
+  相对位置和状态识别。
+- 用户逐项核对标准答案，10/10 正确，当前组识别准确率 100%。
+- 10 次框选内容均与回答一致，当前组 Region 坐标准确率 100%。
+- 失败样本 0；本组只使用合成内容，不包含私人或工作数据。
+
+2026-08-27 完成桌面文件或图标组：
+
+- 使用本地验收目录中的 5 个空白测试文件和 1 个空文件夹完成 10 次 `Region`
+  测试，覆盖文件名、文件类型、对象数量、选中状态和相对位置。
+- 用户逐项核对标准答案，10/10 正确，当前组识别准确率和 Region 坐标准确率均为
+  100%，失败样本 0。
+- 视觉真实矩阵累计完成 20/50，剩余图片预览、PDF 和 IDE 共 30 次。
+
+## 验收暂停与待测清单
+
+2026-08-27 用户确认当前实际使用未遇到其他 Bug，决定暂停剩余测试，先继续后续主功能
+开发。以下事项保留为明确的验收债务；后续主功能完成后统一恢复，也可由用户随时发起
+其中任一专项测试。
+
+视觉准确率：
+
+- 图片预览局部 10 次。
+- PDF 当前页或选区 10 次。
+- IDE 选中代码或窗口 10 次。
+- 当前累计 20/50，已完成的浏览器和桌面组均为 10/10，剩余 30 次未执行。
+
+Context 隐私：
+
+- 保密应用、密码字段和绝对秘密合成测试，要求内容出境数量为 0。
+- 受控敏感信息默认遮挡测试，要求召回率至少 95%。
+- 验证原始截图、敏感 OCR 原文和临时明文不进入日志、长期记忆或持久账本。
+
+Context 生命周期：
+
+- 覆盖浮窗关闭、主动清除、新 Context 替换、5 分钟超时、锁屏、睡眠、权限撤销和
+  App 退出。
+- 上述场景累计执行 50 次，要求过期或已删除 Context 被云端接受的数量为 0。
+- 验证删除会取消后台 Vision，旧任务不能在删除或替换后回写。
+
+语音唤醒：
+
+- 当前候选真实短门禁为 15/20，低于 19/20，不继续降低 threshold。
+- 后续先增加不含音频和转写的独立 `wake.detected` 事件，并评估针对用户真实发音的
+  定制 KWS。
+- 新候选先重新执行 20 次短门禁；通过后再执行 100 次主动唤醒、1000 条负样本、
+  8 小时办公环境，以及锁屏、睡眠、切换用户和 Realtime 会话期间停采验证。
+- 唤醒前 PCM 写盘、上传和日志记录数量必须为 0。
+
+暂停期间保持的结论：
+
+- 当前没有由用户实际使用发现但尚未修复的 1C Bug。
+- 上述功能已有实现和自动测试；未完成项是扩大样本后的真实交付证据。
+- 代码可以进入主线供后续阶段复用；只有恢复并通过原定门槛后，才能标记 Release 1C
+  正式交付。
 
 通过标准：
 
