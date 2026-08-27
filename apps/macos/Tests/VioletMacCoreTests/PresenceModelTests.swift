@@ -588,6 +588,52 @@ struct PresenceModelTests {
 
   @Test
   @MainActor
+  func reportsRegionSelectionBeforeContextProcessingCompletes() async throws {
+    let capture = FakeContextCapture(
+      result: .text(appBundleId: nil, text: "Selected region")
+    )
+    let model = PresenceModel(
+      client: FakeCoreClient(statusValue: .init(state: .ready, version: "test")),
+      contextCapture: capture,
+      contextClient: FakeContextClient()
+    )
+    let callbacks = ContextCallbackRecorder()
+    model.onContextSelectionStarted = { kind in
+      guard case .region = kind else {
+        Issue.record("Expected Region selection")
+        return
+      }
+      #expect(model.isSelectingContext)
+      callbacks.events.append("selection-started")
+    }
+    model.onContextSelectionFinished = { kind in
+      guard case .region = kind else {
+        Issue.record("Expected Region selection")
+        return
+      }
+      callbacks.events.append("selection-finished")
+    }
+    model.onContextProcessingFinished = {
+      callbacks.events.append("processing-finished")
+    }
+    await model.refresh()
+
+    model.captureContext(.region)
+    try await waitUntil {
+      if case .ready = model.contextState {
+        return true
+      }
+      return false
+    }
+
+    #expect(
+      callbacks.events
+        == ["selection-started", "selection-finished", "processing-finished"]
+    )
+  }
+
+  @Test
+  @MainActor
   func capturesFiltersAndDeletesAnExplicitContextSession() async throws {
     let capture = FakeContextCapture(
       result: .text(
@@ -626,6 +672,11 @@ struct PresenceModelTests {
     #expect(await contextClient.deletedSessionCount == 1)
     #expect(model.contextState == .idle)
   }
+}
+
+@MainActor
+private final class ContextCallbackRecorder {
+  var events: [String] = []
 }
 
 private struct FakeCoreClient: VioletCoreClientPort {

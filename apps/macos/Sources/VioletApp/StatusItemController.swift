@@ -68,10 +68,22 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
         self?.closePopoverAfterOutsideClick()
       }
     }
-    model.onContextSelectionStarted = { [weak self] in
-      self?.popover.behavior = .applicationDefined
+    model.onContextSelectionStarted = { [weak self] kind in
+      guard let self else {
+        return
+      }
+      self.popover.behavior = .applicationDefined
+      if case .region = kind {
+        self.popover.performClose(nil)
+      }
     }
-    model.onContextSelectionFinished = { [weak self] in
+    model.onContextSelectionFinished = { [weak self] kind in
+      guard let self, case .region = kind else {
+        return
+      }
+      self.showPopover()
+    }
+    model.onContextProcessingFinished = { [weak self] in
       guard let self else {
         return
       }

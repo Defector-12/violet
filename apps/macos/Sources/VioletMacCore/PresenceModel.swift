@@ -75,8 +75,9 @@ public final class PresenceModel: ObservableObject {
   private var recordedAudioResponseIds = Set<UUID>()
   public var onAudioSessionEnded: (@MainActor @Sendable () -> Void)?
   public var onAudioSessionStarted: (@MainActor @Sendable () -> Void)?
-  public var onContextSelectionFinished: (@MainActor @Sendable () -> Void)?
-  public var onContextSelectionStarted: (@MainActor @Sendable () -> Void)?
+  public var onContextProcessingFinished: (@MainActor @Sendable () -> Void)?
+  public var onContextSelectionFinished: (@MainActor @Sendable (ContextCaptureKind) -> Void)?
+  public var onContextSelectionStarted: (@MainActor @Sendable (ContextCaptureKind) -> Void)?
 
   public init(
     client: any VioletCoreClientPort,
@@ -212,8 +213,8 @@ public final class PresenceModel: ObservableObject {
     contextTask?.cancel()
     let previousContextSessionId = activeContextSessionId
     activeContextSessionId = nil
-    onContextSelectionStarted?()
     contextState = .selecting
+    onContextSelectionStarted?(kind)
     contextTask = Task { [weak self, contextCapture, contextClient] in
       guard let self else {
         return
@@ -223,6 +224,7 @@ public final class PresenceModel: ObservableObject {
           await contextClient.deleteContext(sessionId: previous)
         }
         let captured = try await contextCapture.capture(kind)
+        onContextSelectionFinished?(kind)
         try Task.checkCancellation()
         let filtered = try contextPrivacyFilter.filter(captured)
         let sessionId = UUID()
@@ -244,7 +246,7 @@ public final class PresenceModel: ObservableObject {
         contextState = .failed(message: contextUserFacingMessage(error))
       }
       contextTask = nil
-      onContextSelectionFinished?()
+      onContextProcessingFinished?()
     }
   }
 
