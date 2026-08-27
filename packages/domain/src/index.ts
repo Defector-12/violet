@@ -1,3 +1,14 @@
+export type {
+  ContextArtifactStore,
+  ContextImage,
+  ContextPayload,
+  ContextSessionRepository,
+  ContextUnderstandingPort,
+  ContextUnderstandingRequest,
+  ContextUnderstandingResult,
+  NormalizedRect,
+  ResolvedContext,
+} from "./context.js";
 export {
   Conversation,
   type ConversationMessage,

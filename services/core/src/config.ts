@@ -1,6 +1,20 @@
 import { readFileSync } from "node:fs";
 
 export interface CoreRuntimeConfig {
+  readonly contextStorage:
+    | {
+        readonly provider: "memory";
+      }
+    | {
+        readonly accessKeyId: string;
+        readonly bucket: string;
+        readonly endpoint: string;
+        readonly forcePathStyle: boolean;
+        readonly prefix: string;
+        readonly provider: "tos";
+        readonly region: string;
+        readonly secretAccessKey: string;
+      };
   readonly contentKey: Buffer | null;
   readonly contentKeyVersion: string;
   readonly databaseUrl: string | undefined;
@@ -38,6 +52,16 @@ export interface CoreRuntimeConfig {
         readonly voice: string;
         readonly workspaceId: string;
       };
+  readonly vision:
+    | {
+        readonly provider: "deterministic";
+      }
+    | {
+        readonly apiKey: string;
+        readonly baseUrl: string;
+        readonly model: string;
+        readonly provider: "deepseek";
+      };
   readonly version: string;
 }
 
@@ -63,11 +87,14 @@ export function loadCoreRuntimeConfig(env: NodeJS.ProcessEnv): CoreRuntimeConfig
 
   const model = loadModelConfig(env, contentKey !== null);
   const realtime = loadRealtimeConfig(env, contentKey !== null);
+  const vision = loadVisionConfig(env, contentKey !== null);
+  const contextStorage = loadContextStorageConfig(env, contentKey !== null);
   if (realtime.provider === "pipeline" && model.provider !== "deepseek") {
     throw new Error("The realtime pipeline requires the DeepSeek model provider");
   }
 
   return {
+    contextStorage,
     contentKey,
     contentKeyVersion: env["VIOLET_CONTENT_KEY_VERSION"] ?? "content-v1",
     databaseUrl,
@@ -77,7 +104,37 @@ export function loadCoreRuntimeConfig(env: NodeJS.ProcessEnv): CoreRuntimeConfig
     model,
     port: parsePort(env["VIOLET_PORT"] ?? "4310"),
     realtime,
+    vision,
     version: env["VIOLET_VERSION"] ?? "0.1.0-dev",
+  };
+}
+
+function loadContextStorageConfig(
+  env: NodeJS.ProcessEnv,
+  enabled: boolean,
+): CoreRuntimeConfig["contextStorage"] {
+  if (!enabled) {
+    return { provider: "memory" };
+  }
+  const provider = env["VIOLET_CONTEXT_STORAGE_PROVIDER"] ?? "memory";
+  if (provider === "memory") {
+    return { provider };
+  }
+  if (provider !== "tos") {
+    throw new Error("VIOLET_CONTEXT_STORAGE_PROVIDER must be memory or tos");
+  }
+  return {
+    accessKeyId: readSecretFile(required(env, "TOS_ACCESS_KEY_ID_FILE"), "TOS access key ID"),
+    bucket: required(env, "TOS_BUCKET"),
+    endpoint: required(env, "TOS_ENDPOINT"),
+    forcePathStyle: parseBoolean(env["TOS_FORCE_PATH_STYLE"] ?? "false"),
+    prefix: env["VIOLET_CONTEXT_TOS_PREFIX"] ?? "violet/tmp/context",
+    provider,
+    region: required(env, "TOS_REGION"),
+    secretAccessKey: readSecretFile(
+      required(env, "TOS_SECRET_ACCESS_KEY_FILE"),
+      "TOS secret access key",
+    ),
   };
 }
 
@@ -142,12 +199,45 @@ function loadRealtimeConfig(
   };
 }
 
+function loadVisionConfig(env: NodeJS.ProcessEnv, enabled: boolean): CoreRuntimeConfig["vision"] {
+  if (!enabled) {
+    return { provider: "deterministic" };
+  }
+  const provider = env["VIOLET_VISION_PROVIDER"] ?? "deterministic";
+  if (provider === "deterministic") {
+    return { provider };
+  }
+  if (provider !== "deepseek") {
+    throw new Error("VIOLET_VISION_PROVIDER must be deterministic or deepseek");
+  }
+
+  return {
+    apiKey: readSecretFile(
+      requiredOneOf(env, "VIOLET_VISION_API_KEY_FILE", "VIOLET_MODEL_API_KEY_FILE"),
+      "vision API key",
+    ),
+    baseUrl: env["DEEPSEEK_VISION_BASE_URL"] ?? "https://api.deepseek.com",
+    model: env["DEEPSEEK_VISION_MODEL"] ?? "deepseek-v4-flash-vision-exp",
+    provider,
+  };
+}
+
 function parsePort(value: string): number {
   const port = Number.parseInt(value, 10);
   if (!Number.isInteger(port) || port < 1 || port > 65535) {
     throw new Error("VIOLET_PORT must be an integer between 1 and 65535");
   }
   return port;
+}
+
+function parseBoolean(value: string): boolean {
+  if (value === "true") {
+    return true;
+  }
+  if (value === "false") {
+    return false;
+  }
+  throw new Error("Boolean configuration must be true or false");
 }
 
 function required(env: NodeJS.ProcessEnv, name: string): string {

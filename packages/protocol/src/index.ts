@@ -3,6 +3,8 @@ export type {
   ApiError,
   ChatRequest,
   ChatStreamEvent,
+  ContextEnvelope,
+  ContextReceipt,
   CoreStatus,
   Health,
   RealtimeClientEvent,
@@ -11,6 +13,8 @@ export type {
 export {
   assertChatRequest,
   assertChatStreamEvent,
+  assertContextEnvelope,
+  assertContextReceipt,
   assertCoreStatus,
   assertHealth,
   assertRealtimeClientEvent,

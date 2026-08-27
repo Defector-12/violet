@@ -19,6 +19,7 @@ writeFileSync(
   `${JSON.stringify(
     {
       coreURL: "http://127.0.0.1:14310",
+      excludedContextBundleIds: [],
       sshTunnel: {
         host,
         localPort: 14310,

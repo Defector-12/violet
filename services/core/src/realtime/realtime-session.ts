@@ -8,8 +8,11 @@ import type {
 } from "@violet/domain";
 import type { RealtimeClientEvent, RealtimeServerEvent } from "@violet/protocol";
 
+import { type ContextService, ContextServiceError } from "../context/context-service.js";
+
 export interface RealtimeSessionOptions {
   readonly conversationPort: RealtimeConversationPort;
+  readonly contextService: ContextService;
   readonly generateId: () => string;
   readonly ledger: ConversationLedger;
   readonly now?: () => Date;
@@ -17,6 +20,7 @@ export interface RealtimeSessionOptions {
 
 export class RealtimeSession {
   readonly #conversationPort: RealtimeConversationPort;
+  readonly #contextService: ContextService;
   readonly #generateId: () => string;
   readonly #ledger: ConversationLedger;
   readonly #now: () => Date;
@@ -31,6 +35,7 @@ export class RealtimeSession {
 
   constructor(options: RealtimeSessionOptions) {
     this.#conversationPort = options.conversationPort;
+    this.#contextService = options.contextService;
     this.#generateId = options.generateId;
     this.#ledger = options.ledger;
     this.#now = options.now ?? (() => new Date());
@@ -105,9 +110,23 @@ export class RealtimeSession {
       const history = (await this.#ledger.list())
         .slice(-40)
         .map(({ content, role }) => ({ content, role }));
+      let contextEvidence: string | undefined;
+      if (event.configuration.contextSessionId) {
+        try {
+          contextEvidence = (await this.#contextService.get(event.configuration.contextSessionId))
+            .summary;
+        } catch (error) {
+          if (error instanceof ContextServiceError) {
+            yield this.#error(event.sessionId, error.code, "The requested context is unavailable");
+            return;
+          }
+          throw error;
+        }
+      }
       this.#conversation = await this.#conversationPort.open(
         {
           ...mapConfiguration(event.configuration),
+          ...(contextEvidence ? { contextEvidence } : {}),
           history,
         },
         signal,

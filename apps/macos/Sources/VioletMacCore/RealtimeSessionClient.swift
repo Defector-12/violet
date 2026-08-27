@@ -92,7 +92,7 @@ public enum RealtimeSessionClientError: Error, Equatable, LocalizedError {
 public protocol RealtimeSessionClientPort: Sendable {
   func cancelResponse() async
   func close() async
-  func connect() async throws -> RealtimeCapabilities
+  func connect(contextSessionId: UUID?) async throws -> RealtimeCapabilities
   func streamAudio(
     _ frames: AsyncStream<VioletAudioFrame>
   ) async -> AsyncThrowingStream<RealtimeServerEvent, Error>
@@ -120,7 +120,7 @@ public actor URLSessionRealtimeClient: RealtimeSessionClientPort {
     self.session = session
   }
 
-  public func connect() async throws -> RealtimeCapabilities {
+  public func connect(contextSessionId: UUID?) async throws -> RealtimeCapabilities {
     if socket != nil {
       throw RealtimeSessionClientError.invalidEvent
     }
@@ -140,6 +140,7 @@ public actor URLSessionRealtimeClient: RealtimeSessionClientPort {
       try await send(
         ConfigureEvent(
           configuration: .init(
+            contextSessionId: contextSessionId,
             inputAudio: .init(sampleRate: 16_000),
             inputModalities: ["audio", "text"],
             outputAudio: .init(sampleRate: 24_000),
@@ -425,6 +426,7 @@ public actor URLSessionRealtimeClient: RealtimeSessionClientPort {
 
 private struct ConfigureEvent: Encodable {
   struct Configuration: Encodable {
+    let contextSessionId: UUID?
     let inputAudio: RealtimeAudioFormatEvent
     let inputModalities: [String]
     let outputAudio: RealtimeAudioFormatEvent

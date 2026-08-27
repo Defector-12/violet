@@ -585,6 +585,98 @@ struct PresenceModelTests {
 
     #expect(model.connectionState == .offline(message: "Violet Core is offline."))
   }
+
+  @Test
+  @MainActor
+  func reportsRegionSelectionBeforeContextProcessingCompletes() async throws {
+    let capture = FakeContextCapture(
+      result: .text(appBundleId: nil, text: "Selected region")
+    )
+    let model = PresenceModel(
+      client: FakeCoreClient(statusValue: .init(state: .ready, version: "test")),
+      contextCapture: capture,
+      contextClient: FakeContextClient()
+    )
+    let callbacks = ContextCallbackRecorder()
+    model.onContextSelectionStarted = { kind in
+      guard case .region = kind else {
+        Issue.record("Expected Region selection")
+        return
+      }
+      #expect(model.isSelectingContext)
+      callbacks.events.append("selection-started")
+    }
+    model.onContextSelectionFinished = { kind in
+      guard case .region = kind else {
+        Issue.record("Expected Region selection")
+        return
+      }
+      callbacks.events.append("selection-finished")
+    }
+    model.onContextProcessingFinished = {
+      callbacks.events.append("processing-finished")
+    }
+    await model.refresh()
+
+    model.captureContext(.region)
+    try await waitUntil {
+      if case .ready = model.contextState {
+        return true
+      }
+      return false
+    }
+
+    #expect(
+      callbacks.events
+        == ["selection-started", "selection-finished", "processing-finished"]
+    )
+  }
+
+  @Test
+  @MainActor
+  func capturesFiltersAndDeletesAnExplicitContextSession() async throws {
+    let capture = FakeContextCapture(
+      result: .text(
+        appBundleId: "com.apple.Preview",
+        text: "Read this ID: 11010519491231002X"
+      )
+    )
+    let contextClient = FakeContextClient()
+    let model = PresenceModel(
+      client: FakeCoreClient(statusValue: .init(state: .ready, version: "test")),
+      contextCapture: capture,
+      contextClient: contextClient,
+      contextPrivacyFilter: LocalContextPrivacyFilter(excludedBundleIds: []),
+      deviceId: UUID()
+    )
+    await model.refresh()
+
+    model.captureContext(.selectedText)
+    try await waitUntil {
+      if case .ready = model.contextState {
+        return true
+      }
+      return false
+    }
+
+    let submitted = await contextClient.submittedContexts
+    guard case .text(let text) = submitted.first?.payload else {
+      Issue.record("Expected one text context")
+      return
+    }
+    #expect(text == "Read this ID: [REDACTED]")
+    #expect(capture.captureCount == 1)
+
+    model.clearContext()
+    try await Task.sleep(for: .milliseconds(20))
+    #expect(await contextClient.deletedSessionCount == 1)
+    #expect(model.contextState == .idle)
+  }
+}
+
+@MainActor
+private final class ContextCallbackRecorder {
+  var events: [String] = []
 }
 
 private struct FakeCoreClient: VioletCoreClientPort {
@@ -620,6 +712,46 @@ private struct FailingCoreClient: VioletCoreClientPort {
     AsyncThrowingStream { continuation in
       continuation.finish(throwing: URLError(.cannotConnectToHost))
     }
+  }
+}
+
+@MainActor
+private final class FakeContextCapture: ContextCapturePort {
+  private let result: CapturedContext
+  private(set) var captureCount = 0
+
+  init(result: CapturedContext) {
+    self.result = result
+  }
+
+  func capture(_ kind: ContextCaptureKind) async throws -> CapturedContext {
+    captureCount += 1
+    return result
+  }
+
+  func cancel() {}
+
+  func prepareSelectedTextCapture() {}
+}
+
+private actor FakeContextClient: ContextClientPort {
+  private(set) var deletedSessionCount = 0
+  private(set) var submittedContexts: [FilteredContext] = []
+
+  func deleteContext(sessionId: UUID) async {
+    deletedSessionCount += 1
+  }
+
+  func submitContext(
+    _ context: FilteredContext,
+    deviceId: UUID,
+    sessionId: UUID
+  ) async throws -> ContextReceipt {
+    submittedContexts.append(context)
+    return ContextReceipt(
+      expiresAt: Date().addingTimeInterval(300),
+      sessionId: sessionId
+    )
   }
 }
 
@@ -715,7 +847,7 @@ private actor FakeRealtimeSessionClient: RealtimeSessionClientPort {
 
   func close() async {}
 
-  func connect() async throws -> RealtimeCapabilities {
+  func connect(contextSessionId: UUID?) async throws -> RealtimeCapabilities {
     connectCount += 1
     return capabilities
   }

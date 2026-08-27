@@ -1,0 +1,272 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://violet.local/schemas/v1/context-envelope.schema.json",
+  "title": "ContextEnvelope",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "authorization",
+    "capturedAt",
+    "completeness",
+    "confidence",
+    "eventId",
+    "expiresAt",
+    "payload",
+    "protocolVersion",
+    "redactions",
+    "sensitivity",
+    "sequence",
+    "sessionId",
+    "source"
+  ],
+  "properties": {
+    "authorization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["controlledSensitiveAllowed", "grantId", "mode", "purpose", "retention"],
+      "properties": {
+        "controlledSensitiveAllowed": {
+          "type": "boolean"
+        },
+        "grantId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "mode": {
+          "const": "explicit"
+        },
+        "purpose": {
+          "const": "conversation"
+        },
+        "retention": {
+          "const": "ephemeral"
+        }
+      }
+    },
+    "capturedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "completeness": {
+      "$ref": "#/$defs/probability"
+    },
+    "confidence": {
+      "$ref": "#/$defs/probability"
+    },
+    "eventId": {
+      "$ref": "#/$defs/uuid"
+    },
+    "expiresAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "payload": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["text", "type"],
+          "properties": {
+            "text": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 65536
+            },
+            "type": {
+              "const": "focus.text"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["appBundleId", "type"],
+          "properties": {
+            "appBundleId": {
+              "$ref": "#/$defs/bundleId"
+            },
+            "appName": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "type": {
+              "const": "app.state"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["image", "type"],
+          "properties": {
+            "image": {
+              "$ref": "#/$defs/image"
+            },
+            "localText": {
+              "type": "string",
+              "maxLength": 65536
+            },
+            "type": {
+              "const": "screen.snapshot"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["image", "region", "type"],
+          "properties": {
+            "image": {
+              "$ref": "#/$defs/image"
+            },
+            "localText": {
+              "type": "string",
+              "maxLength": 65536
+            },
+            "region": {
+              "$ref": "#/$defs/normalizedRect"
+            },
+            "type": {
+              "const": "focus.region"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["transcript", "type"],
+          "properties": {
+            "transcript": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 65536
+            },
+            "type": {
+              "const": "audio.utterance"
+            }
+          }
+        }
+      ]
+    },
+    "previousEventId": {
+      "$ref": "#/$defs/uuid"
+    },
+    "protocolVersion": {
+      "const": "1"
+    },
+    "redactions": {
+      "type": "array",
+      "maxItems": 128,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["category", "count"],
+        "properties": {
+          "category": {
+            "type": "string",
+            "enum": ["absolute_secret", "controlled_sensitive", "secure_field"]
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      }
+    },
+    "sensitivity": {
+      "type": "string",
+      "enum": ["public", "personal", "controlled"]
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "sessionId": {
+      "$ref": "#/$defs/uuid"
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["deviceId", "modality"],
+      "properties": {
+        "appBundleId": {
+          "$ref": "#/$defs/bundleId"
+        },
+        "deviceId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "modality": {
+          "type": "string",
+          "enum": ["accessibility", "audio", "screen"]
+        }
+      }
+    }
+  },
+  "$defs": {
+    "bundleId": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 255,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9.-]+$"
+    },
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["data", "height", "mediaType", "sha256", "width"],
+      "properties": {
+        "data": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 11184812,
+          "pattern": "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$"
+        },
+        "height": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8192
+        },
+        "mediaType": {
+          "type": "string",
+          "enum": ["image/jpeg", "image/png"]
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "width": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8192
+        }
+      }
+    },
+    "normalizedRect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["height", "width", "x", "y"],
+      "properties": {
+        "height": {
+          "$ref": "#/$defs/probability"
+        },
+        "width": {
+          "$ref": "#/$defs/probability"
+        },
+        "x": {
+          "$ref": "#/$defs/probability"
+        },
+        "y": {
+          "$ref": "#/$defs/probability"
+        }
+      }
+    },
+    "probability": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "uuid": {
+      "type": "string",
+      "format": "uuid"
+    }
+  }
+}

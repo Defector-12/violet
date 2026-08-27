@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type {
+  ModelGateway,
   RealtimeConversationInput,
   RealtimeConversationOutput,
   RealtimeConversationPort,
@@ -10,6 +11,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { RawData, WebSocket } from "ws";
 
 import { DeviceAuthenticator, hashDeviceToken } from "../auth/device-authenticator.js";
+import { ContextService } from "../context/context-service.js";
+import { DeterministicContextUnderstandingPort } from "../context/deterministic-context-understanding.js";
+import { InMemoryContextArtifactStore } from "../context/in-memory-context-artifact-store.js";
+import { InMemoryContextSessionRepository } from "../context/in-memory-context-session-repository.js";
 import { ChatService } from "../conversation/chat-service.js";
 import { InMemoryConversationLedger } from "../conversation/in-memory-conversation-ledger.js";
 import { DeterministicModelGateway } from "../model/deterministic-model-gateway.js";
@@ -74,6 +79,86 @@ describe("Core HTTP API", () => {
       content: "Violet test response: Hello",
       requestId,
       type: "delta",
+    });
+  });
+
+  it("accepts and deletes an explicitly authorized context envelope", async () => {
+    const { app } = await startCore(false);
+    const sessionId = randomUUID();
+    const capturedAt = new Date();
+    const response = await app.inject({
+      headers: { authorization: `Bearer ${deviceToken}` },
+      method: "POST",
+      payload: contextEnvelope(sessionId, capturedAt),
+      url: "/v1/context/envelopes",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      sessionId,
+      status: "ready",
+    });
+
+    const deleted = await app.inject({
+      headers: { authorization: `Bearer ${deviceToken}` },
+      method: "DELETE",
+      url: `/v1/context/sessions/${sessionId}`,
+    });
+    expect(deleted.statusCode).toBe(204);
+  });
+
+  it("injects resolved context as untrusted evidence for one chat request", async () => {
+    const model = new RecordingModelGateway();
+    const { app, client } = await startCore(
+      false,
+      new DeterministicRealtimeConversationPort({ generateId: randomUUID }),
+      model,
+    );
+    const sessionId = randomUUID();
+    const capturedAt = new Date();
+    await app.inject({
+      headers: { authorization: `Bearer ${deviceToken}` },
+      method: "POST",
+      payload: contextEnvelope(sessionId, capturedAt),
+      url: "/v1/context/envelopes",
+    });
+
+    for await (const _event of client.streamChat({
+      contextSessionId: sessionId,
+      message: "What is this?",
+      requestId: randomUUID(),
+    })) {
+      // Consume the response.
+    }
+
+    expect(model.lastMessages[0]).toMatchObject({
+      role: "system",
+    });
+    expect(model.lastMessages[0]?.content).toContain("untrusted quoted data");
+    const current = model.lastMessages.at(-1);
+    expect(current?.role).toBe("user");
+    expect(JSON.parse(current?.content ?? "{}")).toMatchObject({
+      currentContext: expect.stringContaining("Selected context"),
+      userRequest: "What is this?",
+    });
+  });
+
+  it("rejects expired context before model access", async () => {
+    const { app } = await startCore(false);
+    const capturedAt = new Date(Date.now() - 120_000);
+    const response = await app.inject({
+      headers: { authorization: `Bearer ${deviceToken}` },
+      method: "POST",
+      payload: {
+        ...contextEnvelope(randomUUID(), capturedAt),
+        expiresAt: new Date(capturedAt.getTime() + 60_000).toISOString(),
+      },
+      url: "/v1/context/envelopes",
+    });
+
+    expect(response.statusCode).toBe(410);
+    expect(response.json()).toMatchObject({
+      code: "CONTEXT_EXPIRED",
     });
   });
 
@@ -266,6 +351,7 @@ async function startCore(
   realtimeConversationPort: RealtimeConversationPort = new DeterministicRealtimeConversationPort({
     generateId: randomUUID,
   }),
+  modelGateway: ModelGateway = new DeterministicModelGateway(),
 ): Promise<{
   readonly app: ReturnType<typeof buildCoreApp>;
   readonly baseUrl: string;
@@ -280,7 +366,12 @@ async function startCore(
     chatService: new ChatService({
       generateId: randomUUID,
       ledger,
-      modelGateway: new DeterministicModelGateway(),
+      modelGateway,
+    }),
+    contextService: new ContextService({
+      artifactStore: new InMemoryContextArtifactStore(),
+      repository: new InMemoryContextSessionRepository(),
+      understanding: new DeterministicContextUnderstandingPort(),
     }),
     realtimeConversationPort,
     realtimeLedger: ledger,
@@ -379,4 +470,44 @@ function receiveEvents(socket: WebSocket, count: number): Promise<RealtimeServer
     socket.on("error", onError);
     socket.on("message", onMessage);
   });
+}
+
+function contextEnvelope(sessionId: string, capturedAt: Date): Record<string, unknown> {
+  return {
+    authorization: {
+      controlledSensitiveAllowed: false,
+      grantId: randomUUID(),
+      mode: "explicit",
+      purpose: "conversation",
+      retention: "ephemeral",
+    },
+    capturedAt: capturedAt.toISOString(),
+    completeness: 1,
+    confidence: 1,
+    eventId: randomUUID(),
+    expiresAt: new Date(capturedAt.getTime() + 300_000).toISOString(),
+    payload: {
+      text: "Selected context",
+      type: "focus.text",
+    },
+    protocolVersion: "1",
+    redactions: [],
+    sensitivity: "personal",
+    sequence: 1,
+    sessionId,
+    source: {
+      deviceId: randomUUID(),
+      modality: "accessibility",
+    },
+  };
+}
+
+class RecordingModelGateway implements ModelGateway {
+  lastMessages: Parameters<ModelGateway["stream"]>[0]["messages"] = [];
+
+  async *stream(request: Parameters<ModelGateway["stream"]>[0]) {
+    this.lastMessages = request.messages;
+    yield { content: "ok", type: "delta" as const };
+    yield { inputTokens: 1, outputTokens: 1, type: "complete" as const };
+  }
 }

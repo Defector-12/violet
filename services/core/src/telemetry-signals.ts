@@ -6,6 +6,21 @@ const logger = logs.getLogger("violet-core");
 const requestCounter = meter.createCounter("violet.http.requests", {
   description: "Count of Core HTTP requests by route and status.",
 });
+const contextStageDuration = meter.createHistogram("violet.context.stage.duration", {
+  description: "Duration of Context processing stages.",
+  unit: "ms",
+});
+
+export function recordContextStageDuration(input: {
+  readonly durationMs: number;
+  readonly stage: "artifact_store" | "total" | "understanding";
+  readonly status: "error" | "ok";
+}): void {
+  contextStageDuration.record(input.durationMs, {
+    "operation.name": `context.${input.stage}`,
+    status: input.status,
+  });
+}
 
 export function recordHttpRequest(input: {
   readonly method: string;

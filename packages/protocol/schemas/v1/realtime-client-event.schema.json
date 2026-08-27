@@ -13,6 +13,9 @@
           "additionalProperties": false,
           "required": ["inputModalities", "outputModalities", "protocolVersion"],
           "properties": {
+            "contextSessionId": {
+              "$ref": "#/$defs/uuid"
+            },
             "inputAudio": {
               "$ref": "#/$defs/audioFormat"
             },

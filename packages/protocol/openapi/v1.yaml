@@ -32,6 +32,69 @@ paths:
                 $ref: ../schemas/v1/status.schema.json
         "401":
           $ref: "#/components/responses/Unauthorized"
+  /v1/context/envelopes:
+    post:
+      operationId: submitContextEnvelope
+      summary: Validate and resolve one explicitly authorized context envelope.
+      security:
+        - deviceToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/v1/context-envelope.schema.json
+      responses:
+        "200":
+          description: The context is available to the active conversation.
+          content:
+            application/json:
+              schema:
+                $ref: ../schemas/v1/context-receipt.schema.json
+        "400":
+          description: The context envelope is invalid or violates local-policy assertions.
+          content:
+            application/json:
+              schema:
+                $ref: ../schemas/v1/error.schema.json
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "410":
+          description: The context envelope has expired.
+          content:
+            application/json:
+              schema:
+                $ref: ../schemas/v1/error.schema.json
+        "423":
+          description: Core is sealed.
+          content:
+            application/json:
+              schema:
+                $ref: ../schemas/v1/error.schema.json
+  /v1/context/sessions/{sessionId}:
+    delete:
+      operationId: deleteContextSession
+      summary: End a context session and discard all ephemeral evidence.
+      security:
+        - deviceToken: []
+      parameters:
+        - in: path
+          name: sessionId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "204":
+          description: The context session was removed or had already expired.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "423":
+          description: Core is sealed.
+          content:
+            application/json:
+              schema:
+                $ref: ../schemas/v1/error.schema.json
   /v1/chat/stream:
     post:
       operationId: streamChat
@@ -86,6 +149,10 @@ components:
   schemas:
     ChatStreamEvent:
       $ref: ../schemas/v1/chat-stream-event.schema.json
+    ContextEnvelope:
+      $ref: ../schemas/v1/context-envelope.schema.json
+    ContextReceipt:
+      $ref: ../schemas/v1/context-receipt.schema.json
     RealtimeClientEvent:
       $ref: ../schemas/v1/realtime-client-event.schema.json
     RealtimeServerEvent:

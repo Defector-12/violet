@@ -17,6 +17,14 @@ public enum PresenceAudioState: Equatable, Sendable {
   case unavailable(message: String)
 }
 
+public enum PresenceContextState: Equatable, Sendable {
+  case blocked(message: String)
+  case failed(message: String)
+  case idle
+  case ready(expiresAt: Date)
+  case selecting
+}
+
 public struct PresenceMessage: Equatable, Identifiable, Sendable {
   public enum Role: Equatable, Sendable {
     case assistant
@@ -38,13 +46,19 @@ public struct PresenceMessage: Equatable, Identifiable, Sendable {
 public final class PresenceModel: ObservableObject {
   @Published public private(set) var audioState: PresenceAudioState = .idle
   @Published public private(set) var connectionState: PresenceConnectionState = .checking
+  @Published public private(set) var contextState: PresenceContextState = .idle
   @Published public private(set) var isResponding = false
   @Published public private(set) var messages: [PresenceMessage] = []
 
   private let acceptanceRecorder: any RealtimeAcceptanceRecording
   private let audioIO: any AudioIOPort
   private let client: any VioletCoreClientPort
+  private let contextCapture: (any ContextCapturePort)?
+  private let contextClient: (any ContextClientPort)?
+  private let contextPrivacyFilter: any LocalContextPrivacyFiltering
+  private let deviceId: UUID
   private let realtimeClient: (any RealtimeSessionClientPort)?
+  private var activeContextSessionId: UUID?
   private var activeRealtimeResponseId: UUID?
   private var audioFrameContinuation: AsyncStream<VioletAudioFrame>.Continuation?
   private var audioOutputFormat: VioletAudioFormat?
@@ -53,14 +67,25 @@ public final class PresenceModel: ObservableObject {
   private var audioTask: Task<Void, Never>?
   private var audioTranscriptMessageId: UUID?
   private var chatTask: Task<Void, Never>?
+  private var contextExpiryTask: Task<Void, Never>?
+  private var contextTask: Task<Void, Never>?
   private var ignoredRealtimeResponseIds = Set<UUID>()
   private var localBargeInFrameCount = 0
   private var monitoringTask: Task<Void, Never>?
   private var recordedAudioResponseIds = Set<UUID>()
+  public var onAudioSessionEnded: (@MainActor @Sendable () -> Void)?
+  public var onAudioSessionStarted: (@MainActor @Sendable () -> Void)?
+  public var onContextProcessingFinished: (@MainActor @Sendable () -> Void)?
+  public var onContextSelectionFinished: (@MainActor @Sendable (ContextCaptureKind) -> Void)?
+  public var onContextSelectionStarted: (@MainActor @Sendable (ContextCaptureKind) -> Void)?
 
   public init(
     client: any VioletCoreClientPort,
     audioIO: any AudioIOPort = SilentAudioIO(),
+    contextCapture: (any ContextCapturePort)? = nil,
+    contextClient: (any ContextClientPort)? = nil,
+    contextPrivacyFilter: any LocalContextPrivacyFiltering = LocalContextPrivacyFilter(),
+    deviceId: UUID = UUID(),
     realtimeClient: (any RealtimeSessionClientPort)? = nil,
     acceptanceRecorder: any RealtimeAcceptanceRecording =
       NoopRealtimeAcceptanceRecorder()
@@ -68,12 +93,18 @@ public final class PresenceModel: ObservableObject {
     self.acceptanceRecorder = acceptanceRecorder
     self.audioIO = audioIO
     self.client = client
+    self.contextCapture = contextCapture
+    self.contextClient = contextClient
+    self.contextPrivacyFilter = contextPrivacyFilter
+    self.deviceId = deviceId
     self.realtimeClient = realtimeClient
   }
 
   deinit {
     audioTask?.cancel()
     chatTask?.cancel()
+    contextExpiryTask?.cancel()
+    contextTask?.cancel()
     monitoringTask?.cancel()
   }
 
@@ -84,6 +115,10 @@ public final class PresenceModel: ObservableObject {
     case .failed, .idle, .unavailable:
       false
     }
+  }
+
+  public var isSelectingContext: Bool {
+    contextState == .selecting
   }
 
   public func startMonitoring(retryInterval: Duration = .seconds(10)) {
@@ -136,10 +171,15 @@ public final class PresenceModel: ObservableObject {
     messages.append(PresenceMessage(role: .user, text: message))
     messages.append(PresenceMessage(id: responseId, role: .assistant, text: ""))
     isResponding = true
+    let contextSessionId = activeContextSessionId
 
     chatTask = Task { [weak self, client] in
       do {
-        for try await delta in client.streamChat(message: message, requestId: UUID()) {
+        for try await delta in client.streamChat(
+          message: message,
+          requestId: UUID(),
+          contextSessionId: contextSessionId
+        ) {
           guard let self else {
             return
           }
@@ -156,6 +196,89 @@ public final class PresenceModel: ObservableObject {
         self.connectionState = .offline(message: userFacingMessage(error))
         self.finishResponse()
       }
+    }
+  }
+
+  public func captureContext(_ kind: ContextCaptureKind) {
+    guard
+      case .ready = connectionState,
+      let contextCapture,
+      let contextClient,
+      !isSelectingContext
+    else {
+      return
+    }
+
+    cancelAudioSession(reason: .userStop)
+    contextTask?.cancel()
+    let previousContextSessionId = activeContextSessionId
+    activeContextSessionId = nil
+    contextState = .selecting
+    onContextSelectionStarted?(kind)
+    contextTask = Task { [weak self, contextCapture, contextClient] in
+      guard let self else {
+        return
+      }
+      do {
+        if let previous = previousContextSessionId {
+          await contextClient.deleteContext(sessionId: previous)
+        }
+        let captured = try await contextCapture.capture(kind)
+        onContextSelectionFinished?(kind)
+        try Task.checkCancellation()
+        let filtered = try contextPrivacyFilter.filter(captured)
+        let sessionId = UUID()
+        let receipt = try await contextClient.submitContext(
+          filtered,
+          deviceId: deviceId,
+          sessionId: sessionId
+        )
+        activeContextSessionId = receipt.sessionId
+        contextState = .ready(expiresAt: receipt.expiresAt)
+        scheduleContextExpiry(receipt)
+      } catch is CancellationError {
+        contextState = .idle
+      } catch let error as LocalContextPrivacyError {
+        contextState = .blocked(
+          message: error.errorDescription ?? "Context was blocked by local policy."
+        )
+      } catch {
+        contextState = .failed(message: contextUserFacingMessage(error))
+      }
+      contextTask = nil
+      onContextProcessingFinished?()
+    }
+  }
+
+  public func prepareSelectedTextCapture() {
+    contextCapture?.prepareSelectedTextCapture()
+  }
+
+  public func clearContext() {
+    contextCapture?.cancel()
+    contextExpiryTask?.cancel()
+    contextExpiryTask = nil
+    contextTask?.cancel()
+    contextTask = nil
+    let sessionId = activeContextSessionId
+    activeContextSessionId = nil
+    contextState = .idle
+    if let sessionId, let contextClient {
+      Task {
+        await contextClient.deleteContext(sessionId: sessionId)
+      }
+    }
+  }
+
+  private func scheduleContextExpiry(_ receipt: ContextReceipt) {
+    contextExpiryTask?.cancel()
+    let delay = max(0, receipt.expiresAt.timeIntervalSinceNow)
+    contextExpiryTask = Task { [weak self] in
+      try? await Task.sleep(for: .seconds(delay))
+      guard !Task.isCancelled else {
+        return
+      }
+      self?.clearContext()
     }
   }
 
@@ -186,6 +309,7 @@ public final class PresenceModel: ObservableObject {
     }
 
     let sessionId = UUID()
+    onAudioSessionStarted?()
     audioSessionId = sessionId
     audioOutputFormat = nil
     audioResponseMessageId = nil
@@ -205,7 +329,9 @@ public final class PresenceModel: ObservableObject {
       }
 
       do {
-        let capabilities = try await realtimeClient.connect()
+        let capabilities = try await realtimeClient.connect(
+          contextSessionId: self.activeContextSessionId
+        )
         guard self.audioSessionId == sessionId else {
           await realtimeClient.close()
           return
@@ -337,6 +463,7 @@ public final class PresenceModel: ObservableObject {
       acceptanceRecorder.record(
         .init(type: .sessionEnded, reason: reason, sessionId: sessionId)
       )
+      onAudioSessionEnded?()
     }
     if let realtimeClient {
       Task {
@@ -396,6 +523,9 @@ public final class PresenceModel: ObservableObject {
     chatTask = nil
     isResponding = false
     cancelAudioSession(reason: reason)
+    if reason != .userStop {
+      clearContext()
+    }
   }
 
   private func handleAudioEvent(_ event: RealtimeServerEvent) throws {
@@ -568,6 +698,7 @@ public final class PresenceModel: ObservableObject {
       acceptanceRecorder.record(
         .init(type: .sessionEnded, reason: reason, sessionId: sessionId)
       )
+      onAudioSessionEnded?()
     }
   }
 
@@ -621,6 +752,19 @@ private func audioUserFacingMessage(_ error: Error) -> String {
     return "The microphone is unavailable."
   }
   return userFacingMessage(error)
+}
+
+private func contextUserFacingMessage(_ error: Error) -> String {
+  if let error = error as? ContextCaptureError {
+    return error.errorDescription ?? "Context capture failed."
+  }
+  if let error = error as? LocalContextPrivacyError {
+    return error.errorDescription ?? "Context was blocked by local policy."
+  }
+  if let error = error as? VioletCoreClientError {
+    return error.errorDescription ?? "Violet could not process this context."
+  }
+  return "Violet could not process this context."
 }
 
 private func userFacingMessage(_ error: Error) -> String {
