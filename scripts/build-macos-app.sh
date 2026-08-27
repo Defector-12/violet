@@ -9,16 +9,24 @@ CONTENTS_DIR="${APP_DIR}/Contents"
 MACOS_DIR="${CONTENTS_DIR}/MacOS"
 RESOURCES_DIR="${CONTENTS_DIR}/Resources"
 WAKE_ASSETS_DIR="${PACKAGE_DIR}/.local-wake"
+SWIFT_TMP_DIR="${PACKAGE_DIR}/.swift-tmp"
 
-mkdir -p "${PACKAGE_DIR}/.swift-tmp"
+mkdir -p \
+  "${SWIFT_TMP_DIR}/cache" \
+  "${SWIFT_TMP_DIR}/config" \
+  "${SWIFT_TMP_DIR}/security"
 "${ROOT_DIR}/scripts/fetch-wake-word-assets.sh" >/dev/null
 
-swift_flags=()
+swift_flags=(
+  --cache-path "${SWIFT_TMP_DIR}/cache"
+  --config-path "${SWIFT_TMP_DIR}/config"
+  --security-path "${SWIFT_TMP_DIR}/security"
+)
 if [[ "${VIOLET_SWIFTPM_DISABLE_SANDBOX:-0}" == "1" ]]; then
   swift_flags+=(--disable-sandbox)
 fi
 
-TMPDIR="${PACKAGE_DIR}/.swift-tmp" swift build \
+TMPDIR="${SWIFT_TMP_DIR}" swift build \
   --package-path "${PACKAGE_DIR}" \
   --configuration "${CONFIGURATION}" \
   --product Violet \
@@ -27,7 +35,7 @@ TMPDIR="${PACKAGE_DIR}/.swift-tmp" swift build \
   --jobs 4
 
 BIN_DIR="$(
-  TMPDIR="${PACKAGE_DIR}/.swift-tmp" swift build \
+  TMPDIR="${SWIFT_TMP_DIR}" swift build \
     --package-path "${PACKAGE_DIR}" \
     --configuration "${CONFIGURATION}" \
     "${swift_flags[@]}" \

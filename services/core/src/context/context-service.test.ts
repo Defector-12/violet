@@ -49,6 +49,158 @@ describe("ContextService", () => {
     expect(resolved.sessionId).toBe(uppercaseSessionId.toLowerCase());
   });
 
+  it("returns after encrypted storage while image understanding continues", async () => {
+    const events: string[] = [];
+    const bytes = Buffer.from("synthetic-image");
+    let finishUnderstanding: (() => void) | undefined;
+    const service = new ContextService({
+      artifactStore: {
+        async deleteSession() {},
+        async put() {
+          events.push("storage-started");
+        },
+      },
+      now: () => now,
+      repository: new InMemoryContextSessionRepository(),
+      understanding: {
+        async understand() {
+          events.push("understanding-started");
+          await new Promise<void>((resolve) => {
+            finishUnderstanding = resolve;
+          });
+          events.push("understanding-finished");
+          return {
+            confidence: 1,
+            model: "test",
+            provider: "test",
+            summary: "Synthetic image",
+          };
+        },
+      },
+    });
+
+    const receipt = await service.submit(
+      envelope({
+        payload: {
+          image: {
+            data: bytes.toString("base64"),
+            height: 100,
+            mediaType: "image/jpeg",
+            sha256: createHash("sha256").update(bytes).digest("hex"),
+            width: 200,
+          },
+          type: "screen.snapshot",
+        },
+      }),
+    );
+
+    expect(receipt.status).toBe("ready");
+    expect(events).toEqual(["understanding-started", "storage-started"]);
+    let questionUnblocked = false;
+    const resolvedContext = service.get(receipt.sessionId).then((resolved) => {
+      questionUnblocked = true;
+      return resolved;
+    });
+    await Promise.resolve();
+    expect(questionUnblocked).toBe(false);
+    finishUnderstanding?.();
+    const resolved = await resolvedContext;
+    expect(resolved.summary).toContain("Synthetic image");
+    expect(events).toEqual(["understanding-started", "storage-started", "understanding-finished"]);
+  });
+
+  it("falls back to local OCR when visual understanding fails", async () => {
+    const deletedSessions: string[] = [];
+    const bytes = Buffer.from("synthetic-image");
+    const sessionId = randomUUID();
+    const service = new ContextService({
+      artifactStore: {
+        async deleteSession(deletedSessionId) {
+          deletedSessions.push(deletedSessionId);
+        },
+        async put() {},
+      },
+      now: () => now,
+      repository: new InMemoryContextSessionRepository(),
+      understanding: {
+        async understand() {
+          throw new Error("vision failed");
+        },
+      },
+    });
+
+    const receipt = await service.submit(
+      envelope({
+        payload: {
+          image: {
+            data: bytes.toString("base64"),
+            height: 100,
+            mediaType: "image/jpeg",
+            sha256: createHash("sha256").update(bytes).digest("hex"),
+            width: 200,
+          },
+          localText: "Fallback OCR text",
+          type: "screen.snapshot",
+        },
+        sessionId,
+      }),
+    );
+    const resolved = await service.get(receipt.sessionId);
+
+    expect(resolved.summary).toContain("Fallback OCR text");
+    expect(resolved.summary).toContain("violet-device/vision-ocr-v1");
+    expect(deletedSessions).toEqual([]);
+
+    await service.delete(sessionId);
+    expect(deletedSessions).toEqual([sessionId]);
+  });
+
+  it("cancels background understanding when the session is deleted", async () => {
+    let aborted = false;
+    const bytes = Buffer.from("synthetic-image");
+    const service = new ContextService({
+      artifactStore: new InMemoryContextArtifactStore(),
+      now: () => now,
+      repository: new InMemoryContextSessionRepository(),
+      understanding: {
+        async understand(_request, signal) {
+          await new Promise<void>((_resolve, reject) => {
+            signal?.addEventListener(
+              "abort",
+              () => {
+                aborted = true;
+                reject(new Error("aborted"));
+              },
+              { once: true },
+            );
+          });
+          throw new Error("unreachable");
+        },
+      },
+    });
+    const receipt = await service.submit(
+      envelope({
+        payload: {
+          image: {
+            data: bytes.toString("base64"),
+            height: 100,
+            mediaType: "image/jpeg",
+            sha256: createHash("sha256").update(bytes).digest("hex"),
+            width: 200,
+          },
+          type: "screen.snapshot",
+        },
+      }),
+    );
+
+    await service.delete(receipt.sessionId);
+
+    expect(aborted).toBe(true);
+    await expect(service.get(receipt.sessionId)).rejects.toMatchObject({
+      code: "CONTEXT_NOT_FOUND",
+    });
+  });
+
   it("rejects modified image bytes", async () => {
     const service = createService();
 

@@ -70,6 +70,44 @@ struct LocalContextPrivacyTests {
   }
 
   @Test
+  func preservesBoundedJPEGWhenNoRedactionIsNeeded() throws {
+    let bitmap = NSBitmapImageRep(
+      bitmapDataPlanes: nil,
+      pixelsWide: 32,
+      pixelsHigh: 32,
+      bitsPerSample: 8,
+      samplesPerPixel: 4,
+      hasAlpha: true,
+      isPlanar: false,
+      colorSpaceName: .deviceRGB,
+      bytesPerRow: 0,
+      bitsPerPixel: 0
+    )
+    let source = try #require(
+      bitmap?.representation(using: .jpeg, properties: [.compressionFactor: 0.85])
+    )
+    let filter = LocalContextPrivacyFilter(excludedBundleIds: [])
+
+    let result = try filter.filter(
+      .image(
+        appBundleId: "com.apple.Preview",
+        data: source,
+        height: 32,
+        recognizedText: [],
+        region: nil,
+        width: 32
+      )
+    )
+
+    guard case .image(let data, _, _, let mediaType, _, _, _) = result.payload else {
+      Issue.record("Expected a filtered image")
+      return
+    }
+    #expect(data == source)
+    #expect(mediaType == "image/jpeg")
+  }
+
+  @Test
   func masksSensitiveImageRegionsAndBoundsTheUploadFormat() throws {
     let bitmap = NSBitmapImageRep(
       bitmapDataPlanes: nil,

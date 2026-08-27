@@ -7,6 +7,19 @@ import Testing
 @Suite("Context capture")
 struct ContextCaptureTests {
   @Test
+  func convertsAppKitRegionToTopOriginDisplaySpace() {
+    let result = screenCaptureRect(
+      from: CGRect(x: 54.45703125, y: 781.4609375, width: 236.66015625, height: 33.83984375),
+      primaryScreenFrame: CGRect(x: 0, y: 0, width: 1470, height: 956)
+    )
+
+    #expect(
+      result
+        == CGRect(x: 54.45703125, y: 140.69921875, width: 236.66015625, height: 33.83984375)
+    )
+  }
+
+  @Test
   @MainActor
   func readsSelectionFromApplicationPreparedBeforeVioletTakesFocus() async throws {
     let source = ContextApplicationTarget(
