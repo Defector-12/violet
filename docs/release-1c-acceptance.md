@@ -4,7 +4,7 @@
 > 入口人工冒烟和视觉矩阵 20/50 已完成。用户当前未遇到其他 Bug，2026-08-27
 > 主动暂停剩余验收；后续主功能开发完成后统一恢复，也可由用户随时发起专项测试。
 > 暂停不等于通过，Release 1C 仍不标记为正式交付。2026-08-28 增加的 1C.1
-> Natural Pointing 已形成本地实现候选，仍待真实环境验收。
+> Natural Pointing 候选已部署，仍待真实环境验收。
 
 ## 自动门禁
 
@@ -98,6 +98,10 @@ VIOLET_SWIFTPM_DISABLE_SANDBOX=1 pnpm macos:app
 - Codebase 与 GitHub 主线保持相同内容；平台生成的 merge commit 可以不同。
 - Devbox 使用同一主线代码，Core、PostgreSQL、LGTM 和 Collector 健康。
 - 代码集成不改变验收结论：Release 1C 仍是实现候选。
+- 1C.1 功能提交 `3ea3afc` 已推送至 Codebase/GitHub 的
+  `feat/1c1-natural-pointing`；Draft MR !20 的 4/4 检查通过。
+- Devbox Core 已部署 `3ea3afc` 并保持健康，数据库仍为连续的 567 条事件；本地新版
+  Mac App 已启动。
 
 ## 唤醒候选
 
