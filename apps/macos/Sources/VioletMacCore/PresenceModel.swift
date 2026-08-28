@@ -47,6 +47,7 @@ public final class PresenceModel: ObservableObject {
   @Published public private(set) var audioState: PresenceAudioState = .idle
   @Published public private(set) var connectionState: PresenceConnectionState = .checking
   @Published public private(set) var contextState: PresenceContextState = .idle
+  @Published public private(set) var isNaturalPointingEnabled: Bool
   @Published public private(set) var isResponding = false
   @Published public private(set) var messages: [PresenceMessage] = []
 
@@ -57,6 +58,8 @@ public final class PresenceModel: ObservableObject {
   private let contextClient: (any ContextClientPort)?
   private let contextPrivacyFilter: any LocalContextPrivacyFiltering
   private let deviceId: UUID
+  private let defaults: UserDefaults
+  private let naturalPointingPreferenceKey: String
   private let realtimeClient: (any RealtimeSessionClientPort)?
   private var activeContextSessionId: UUID?
   private var activeRealtimeResponseId: UUID?
@@ -86,6 +89,8 @@ public final class PresenceModel: ObservableObject {
     contextClient: (any ContextClientPort)? = nil,
     contextPrivacyFilter: any LocalContextPrivacyFiltering = LocalContextPrivacyFilter(),
     deviceId: UUID = UUID(),
+    defaults: UserDefaults = .standard,
+    naturalPointingPreferenceKey: String = "violet.natural-pointing-enabled",
     realtimeClient: (any RealtimeSessionClientPort)? = nil,
     acceptanceRecorder: any RealtimeAcceptanceRecording =
       NoopRealtimeAcceptanceRecorder()
@@ -97,6 +102,9 @@ public final class PresenceModel: ObservableObject {
     self.contextClient = contextClient
     self.contextPrivacyFilter = contextPrivacyFilter
     self.deviceId = deviceId
+    self.defaults = defaults
+    self.naturalPointingPreferenceKey = naturalPointingPreferenceKey
+    self.isNaturalPointingEnabled = defaults.bool(forKey: naturalPointingPreferenceKey)
     self.realtimeClient = realtimeClient
   }
 
@@ -200,6 +208,21 @@ public final class PresenceModel: ObservableObject {
   }
 
   public func captureContext(_ kind: ContextCaptureKind) {
+    startContextCapture(kind, cancelsAudio: true, reportsSelection: true)
+  }
+
+  public func captureNaturalPointingContext() {
+    guard isNaturalPointingEnabled else {
+      return
+    }
+    startContextCapture(.naturalPointing, cancelsAudio: false, reportsSelection: false)
+  }
+
+  private func startContextCapture(
+    _ kind: ContextCaptureKind,
+    cancelsAudio: Bool,
+    reportsSelection: Bool
+  ) {
     guard
       case .ready = connectionState,
       let contextCapture,
@@ -209,12 +232,16 @@ public final class PresenceModel: ObservableObject {
       return
     }
 
-    cancelAudioSession(reason: .userStop)
+    if cancelsAudio {
+      cancelAudioSession(reason: .userStop)
+    }
     contextTask?.cancel()
     let previousContextSessionId = activeContextSessionId
     activeContextSessionId = nil
     contextState = .selecting
-    onContextSelectionStarted?(kind)
+    if reportsSelection {
+      onContextSelectionStarted?(kind)
+    }
     contextTask = Task { [weak self, contextCapture, contextClient] in
       guard let self else {
         return
@@ -224,7 +251,9 @@ public final class PresenceModel: ObservableObject {
           await contextClient.deleteContext(sessionId: previous)
         }
         let captured = try await contextCapture.capture(kind)
-        onContextSelectionFinished?(kind)
+        if reportsSelection {
+          onContextSelectionFinished?(kind)
+        }
         try Task.checkCancellation()
         let filtered = try contextPrivacyFilter.filter(captured)
         let sessionId = UUID()
@@ -250,8 +279,31 @@ public final class PresenceModel: ObservableObject {
     }
   }
 
+  public func prepareNaturalPointingCapture() {
+    guard isNaturalPointingEnabled else {
+      return
+    }
+    contextCapture?.prepareNaturalPointingCapture()
+  }
+
   public func prepareSelectedTextCapture() {
     contextCapture?.prepareSelectedTextCapture()
+  }
+
+  public func setNaturalPointingEnabled(_ enabled: Bool) {
+    isNaturalPointingEnabled = enabled
+    defaults.set(enabled, forKey: naturalPointingPreferenceKey)
+    if !enabled, contextState == .selecting {
+      clearContext()
+    }
+  }
+
+  public func waitForContextPreparation(timeout: Duration = .seconds(4)) async {
+    let clock = ContinuousClock()
+    let deadline = clock.now.advanced(by: timeout)
+    while contextTask != nil, clock.now < deadline {
+      try? await Task.sleep(for: .milliseconds(20))
+    }
   }
 
   public func clearContext() {

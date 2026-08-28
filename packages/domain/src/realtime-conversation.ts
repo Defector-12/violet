@@ -11,6 +11,7 @@ export interface RealtimeAudioFormat {
 
 export interface RealtimeSessionConfiguration {
   readonly contextEvidence?: string;
+  readonly contextLookupAvailable?: boolean;
   readonly history?: readonly RealtimeHistoryMessage[];
   readonly inputAudio?: RealtimeAudioFormat;
   readonly inputModalities: readonly RealtimeModality[];
@@ -56,6 +57,11 @@ export type RealtimeConversationInput =
   | {
       readonly responseId: string;
       readonly type: "cancel";
+    }
+  | {
+      readonly callId: string;
+      readonly output: string;
+      readonly type: "context-result";
     };
 
 export type RealtimeConversationOutput =
@@ -106,6 +112,12 @@ export type RealtimeConversationOutput =
       readonly message: string;
       readonly retryable: boolean;
       readonly type: "error";
+    }
+  | {
+      readonly callId: string;
+      readonly query: string;
+      readonly turnId: string;
+      readonly type: "context-request";
     };
 
 export interface RealtimeConversation {
@@ -116,6 +128,7 @@ export interface RealtimeConversation {
 }
 
 export interface RealtimeConversationPort {
+  readonly supportsContextLookup?: boolean;
   open(
     configuration: RealtimeSessionConfiguration,
     signal?: AbortSignal,

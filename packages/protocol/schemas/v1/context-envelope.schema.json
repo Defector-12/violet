@@ -99,6 +99,9 @@
           "additionalProperties": false,
           "required": ["image", "type"],
           "properties": {
+            "focusPoint": {
+              "$ref": "#/$defs/normalizedPoint"
+            },
             "image": {
               "$ref": "#/$defs/image"
             },
@@ -116,6 +119,9 @@
           "additionalProperties": false,
           "required": ["image", "region", "type"],
           "properties": {
+            "focusPoint": {
+              "$ref": "#/$defs/normalizedPoint"
+            },
             "image": {
               "$ref": "#/$defs/image"
             },
@@ -251,6 +257,19 @@
         "width": {
           "$ref": "#/$defs/probability"
         },
+        "x": {
+          "$ref": "#/$defs/probability"
+        },
+        "y": {
+          "$ref": "#/$defs/probability"
+        }
+      }
+    },
+    "normalizedPoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["x", "y"],
+      "properties": {
         "x": {
           "$ref": "#/$defs/probability"
         },

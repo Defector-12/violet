@@ -96,6 +96,8 @@ describe("ContextService", () => {
 
     expect(receipt.status).toBe("ready");
     expect(events).toEqual(["understanding-started", "storage-started"]);
+    const available = await service.getAvailable(receipt.sessionId);
+    expect(available.summary).toContain("no local text was recognized");
     let questionUnblocked = false;
     const resolvedContext = service.get(receipt.sessionId).then((resolved) => {
       questionUnblocked = true;

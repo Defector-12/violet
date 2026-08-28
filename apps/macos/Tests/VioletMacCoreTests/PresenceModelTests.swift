@@ -672,6 +672,43 @@ struct PresenceModelTests {
     #expect(await contextClient.deletedSessionCount == 1)
     #expect(model.contextState == .idle)
   }
+
+  @Test
+  @MainActor
+  func preparesNaturalPointingContextBeforeStartingRealtime() async throws {
+    let defaults = isolatedPresenceDefaults()
+    let capture = FakeContextCapture(
+      result: .text(appBundleId: "com.apple.Safari", text: "Pointed article")
+    )
+    let realtime = FakeRealtimeSessionClient(capabilities: audioCapabilities)
+    let model = PresenceModel(
+      client: FakeCoreClient(statusValue: .init(state: .ready, version: "test")),
+      audioIO: FakeAudioIO(),
+      contextCapture: capture,
+      contextClient: FakeContextClient(),
+      defaults: defaults,
+      realtimeClient: realtime
+    )
+    await model.refresh()
+    #expect(!model.isNaturalPointingEnabled)
+    model.prepareNaturalPointingCapture()
+    model.captureNaturalPointingContext()
+    try await Task.sleep(for: .milliseconds(20))
+    #expect(capture.captureCount == 0)
+    model.setNaturalPointingEnabled(true)
+    #expect(defaults.bool(forKey: "violet.natural-pointing-enabled"))
+
+    model.prepareNaturalPointingCapture()
+    model.captureNaturalPointingContext()
+    await model.waitForContextPreparation()
+    model.startAudioSession()
+    try await waitUntil { model.audioState == .listening }
+
+    #expect(capture.naturalPointingPreparationCount == 1)
+    #expect(capture.capturedKinds == [.naturalPointing])
+    #expect(await realtime.connectedContextSessionIds().compactMap { $0 }.count == 1)
+    model.cancelAudioSession()
+  }
 }
 
 @MainActor
@@ -719,6 +756,8 @@ private struct FailingCoreClient: VioletCoreClientPort {
 private final class FakeContextCapture: ContextCapturePort {
   private let result: CapturedContext
   private(set) var captureCount = 0
+  private(set) var capturedKinds: [ContextCaptureKind] = []
+  private(set) var naturalPointingPreparationCount = 0
 
   init(result: CapturedContext) {
     self.result = result
@@ -726,10 +765,15 @@ private final class FakeContextCapture: ContextCapturePort {
 
   func capture(_ kind: ContextCaptureKind) async throws -> CapturedContext {
     captureCount += 1
+    capturedKinds.append(kind)
     return result
   }
 
   func cancel() {}
+
+  func prepareNaturalPointingCapture() {
+    naturalPointingPreparationCount += 1
+  }
 
   func prepareSelectedTextCapture() {}
 }
@@ -826,6 +870,7 @@ private actor FakeRealtimeSessionClient: RealtimeSessionClientPort {
   let events: [RealtimeServerEvent]
   private(set) var cancelResponseCount = 0
   private(set) var connectCount = 0
+  private var contextSessionIds: [UUID?] = []
   private var frames: [VioletAudioFrame] = []
   private var streamFailureCount: Int
 
@@ -849,7 +894,12 @@ private actor FakeRealtimeSessionClient: RealtimeSessionClientPort {
 
   func connect(contextSessionId: UUID?) async throws -> RealtimeCapabilities {
     connectCount += 1
+    contextSessionIds.append(contextSessionId)
     return capabilities
+  }
+
+  func connectedContextSessionIds() -> [UUID?] {
+    contextSessionIds
   }
 
   func receivedFrames() -> [VioletAudioFrame] {
@@ -940,4 +990,11 @@ private func waitUntil(
 private enum TestError: Error {
   case streamFailure
   case timeout
+}
+
+private func isolatedPresenceDefaults() -> UserDefaults {
+  let name = "violet-presence-tests-\(UUID().uuidString)"
+  let defaults = UserDefaults(suiteName: name) ?? .standard
+  defaults.removePersistentDomain(forName: name)
+  return defaults
 }

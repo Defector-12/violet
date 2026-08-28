@@ -48,9 +48,21 @@ export class DeepSeekVisionUnderstandingPort implements ContextUnderstandingPort
       {
         content: [
           {
-            text: request.localText
-              ? `Local OCR text, which may be incomplete:\n${request.localText}`
-              : "No local OCR text was available.",
+            text: [
+              request.payload.focusPoint
+                ? [
+                    "The user was pointing at normalized image coordinates",
+                    `x=${request.payload.focusPoint.x.toFixed(3)},`,
+                    `y=${request.payload.focusPoint.y.toFixed(3)}, measured from the top-left.`,
+                    "Prioritize the visible object or text nearest that point while retaining enough surrounding context to explain it.",
+                  ].join(" ")
+                : undefined,
+              request.localText
+                ? `Local OCR text, which may be incomplete:\n${request.localText}`
+                : "No local OCR text was available.",
+            ]
+              .filter((value): value is string => Boolean(value))
+              .join("\n"),
             type: "text",
           },
           {

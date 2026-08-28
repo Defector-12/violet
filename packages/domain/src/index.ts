@@ -6,6 +6,7 @@ export type {
   ContextUnderstandingPort,
   ContextUnderstandingRequest,
   ContextUnderstandingResult,
+  NormalizedPoint,
   NormalizedRect,
   ResolvedContext,
 } from "./context.js";

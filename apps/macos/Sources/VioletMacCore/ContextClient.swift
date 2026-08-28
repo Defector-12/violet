@@ -5,6 +5,7 @@ public enum ContextPayload: Equatable, Sendable {
   case appState(bundleId: String, appName: String?)
   case image(
     data: Data,
+    focusPoint: NormalizedContextPoint?,
     height: Int,
     localText: String?,
     mediaType: String,
@@ -13,6 +14,16 @@ public enum ContextPayload: Equatable, Sendable {
     width: Int
   )
   case text(String)
+}
+
+public struct NormalizedContextPoint: Codable, Equatable, Sendable {
+  public let x: Double
+  public let y: Double
+
+  public init(x: Double, y: Double) {
+    self.x = x
+    self.y = y
+  }
 }
 
 public struct NormalizedContextRect: Codable, Equatable, Sendable {
@@ -249,6 +260,7 @@ private enum ContextPayloadWire: Encodable {
   case appState(bundleId: String, appName: String?)
   case image(
     data: Data,
+    focusPoint: NormalizedContextPoint?,
     height: Int,
     localText: String?,
     mediaType: String,
@@ -263,9 +275,17 @@ private enum ContextPayloadWire: Encodable {
     case .appState(let bundleId, let appName):
       self = .appState(bundleId: bundleId, appName: appName)
     case .image(
-      let data, let height, let localText, let mediaType, let region, let sha256, let width):
+      let data,
+      let focusPoint,
+      let height,
+      let localText,
+      let mediaType,
+      let region,
+      let sha256,
+      let width):
       self = .image(
         data: data,
+        focusPoint: focusPoint,
         height: height,
         localText: localText,
         mediaType: mediaType,
@@ -286,7 +306,15 @@ private enum ContextPayloadWire: Encodable {
       try container.encodeIfPresent(appName, forKey: .appName)
       try container.encode("app.state", forKey: .type)
     case .image(
-      let data, let height, let localText, let mediaType, let region, let sha256, let width):
+      let data,
+      let focusPoint,
+      let height,
+      let localText,
+      let mediaType,
+      let region,
+      let sha256,
+      let width):
+      try container.encodeIfPresent(focusPoint, forKey: .focusPoint)
       try container.encode(
         ImageWire(
           data: data.base64EncodedString(),
@@ -313,6 +341,7 @@ private enum ContextPayloadWire: Encodable {
   private enum CodingKeys: String, CodingKey {
     case appBundleId
     case appName
+    case focusPoint
     case image
     case localText
     case region

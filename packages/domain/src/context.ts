@@ -9,11 +9,13 @@ export type ContextPayload =
       readonly type: "app.state";
     }
   | {
+      readonly focusPoint?: NormalizedPoint;
       readonly image: ContextImage;
       readonly localText?: string;
       readonly type: "screen.snapshot";
     }
   | {
+      readonly focusPoint?: NormalizedPoint;
       readonly image: ContextImage;
       readonly localText?: string;
       readonly region: NormalizedRect;
@@ -35,6 +37,11 @@ export interface ContextImage {
 export interface NormalizedRect {
   readonly height: number;
   readonly width: number;
+  readonly x: number;
+  readonly y: number;
+}
+
+export interface NormalizedPoint {
   readonly x: number;
   readonly y: number;
 }

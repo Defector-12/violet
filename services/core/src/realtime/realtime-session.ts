@@ -29,6 +29,7 @@ export class RealtimeSession {
   readonly #persistedTurns = new Set<string>();
   #closed = false;
   #conversation: RealtimeConversation | null = null;
+  #contextSessionId: string | null = null;
   #expectedClientSequence = 1;
   #serverSequence = 1;
   #sessionId: string | null = null;
@@ -58,6 +59,7 @@ export class RealtimeSession {
     this.#assistantContent.clear();
     this.#clientEventIds.clear();
     this.#persistedTurns.clear();
+    this.#contextSessionId = null;
   }
 
   async *handle(
@@ -113,8 +115,11 @@ export class RealtimeSession {
       let contextEvidence: string | undefined;
       if (event.configuration.contextSessionId) {
         try {
-          contextEvidence = (await this.#contextService.get(event.configuration.contextSessionId))
-            .summary;
+          this.#contextSessionId = event.configuration.contextSessionId.toLowerCase();
+          const context = this.#conversationPort.supportsContextLookup
+            ? await this.#contextService.getAvailable(this.#contextSessionId)
+            : await this.#contextService.get(this.#contextSessionId);
+          contextEvidence = context.summary;
         } catch (error) {
           if (error instanceof ContextServiceError) {
             yield this.#error(event.sessionId, error.code, "The requested context is unavailable");
@@ -127,6 +132,9 @@ export class RealtimeSession {
         {
           ...mapConfiguration(event.configuration),
           ...(contextEvidence ? { contextEvidence } : {}),
+          ...(this.#contextSessionId && this.#conversationPort.supportsContextLookup
+            ? { contextLookupAvailable: true }
+            : {}),
           history,
         },
         signal,
@@ -188,12 +196,55 @@ export class RealtimeSession {
       return;
     }
     for await (const output of conversation.outputs(signal)) {
+      if (output.type === "context-request") {
+        void this.#resolveContextRequest(conversation, output, signal).catch(() => undefined);
+        continue;
+      }
       await this.#persistOutput(output);
       if (!this.#sessionId) {
         return;
       }
       yield this.#mapOutput(this.#sessionId, output);
     }
+  }
+
+  async #resolveContextRequest(
+    conversation: RealtimeConversation,
+    output: Extract<RealtimeConversationOutput, { readonly type: "context-request" }>,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const contextSessionId = this.#contextSessionId;
+    let result: string;
+    if (!contextSessionId) {
+      result = JSON.stringify({
+        message: "No active visual context is available.",
+        status: "unavailable",
+      });
+    } else {
+      try {
+        const context = await this.#contextService.get(contextSessionId);
+        result = JSON.stringify({
+          evidence: context.summary,
+          status: "ready",
+        });
+      } catch (error) {
+        result = JSON.stringify({
+          message:
+            error instanceof ContextServiceError
+              ? "The visual context expired or was cleared."
+              : "The visual context could not be resolved.",
+          status: "unavailable",
+        });
+      }
+    }
+    await conversation.send(
+      {
+        callId: output.callId,
+        output: result,
+        type: "context-result",
+      },
+      signal,
+    );
   }
 
   async #persistOutput(output: RealtimeConversationOutput): Promise<void> {
@@ -233,6 +284,7 @@ export class RealtimeSession {
         this.#assistantContent.delete(output.responseId);
         break;
       case "error":
+      case "context-request":
       case "response-audio":
         break;
     }
@@ -345,6 +397,8 @@ export class RealtimeSession {
           ...base,
           type: "error",
         };
+      case "context-request":
+        throw new Error("Context requests must be resolved inside the realtime session");
     }
   }
 }

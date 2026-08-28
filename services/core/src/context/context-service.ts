@@ -142,18 +142,23 @@ export class ContextService {
 
   async get(sessionId: string): Promise<ResolvedContext> {
     const canonicalSessionId = sessionId.toLowerCase();
-    let context = await this.#repository.get(canonicalSessionId);
+    await this.#getAvailable(canonicalSessionId);
+    await this.#pendingUnderstanding.get(canonicalSessionId)?.completion;
+    return this.#getAvailable(canonicalSessionId);
+  }
+
+  async getAvailable(sessionId: string): Promise<ResolvedContext> {
+    return this.#getAvailable(sessionId.toLowerCase());
+  }
+
+  async #getAvailable(canonicalSessionId: string): Promise<ResolvedContext> {
+    const context = await this.#repository.get(canonicalSessionId);
     if (!context) {
       throw new ContextServiceError("CONTEXT_NOT_FOUND", 404);
     }
     if (context.expiresAt <= this.#now()) {
-      await this.delete(sessionId);
+      await this.delete(canonicalSessionId);
       throw new ContextServiceError("CONTEXT_EXPIRED", 410);
-    }
-    await this.#pendingUnderstanding.get(canonicalSessionId)?.completion;
-    context = await this.#repository.get(canonicalSessionId);
-    if (!context) {
-      throw new ContextServiceError("CONTEXT_NOT_FOUND", 404);
     }
     return context;
   }
@@ -338,6 +343,7 @@ function decodePayload(payload: ContextEnvelope["payload"]): ContextPayload {
     case "screen.snapshot": {
       const image = decodeImage(payload.image);
       return {
+        ...(payload.focusPoint ? { focusPoint: payload.focusPoint } : {}),
         image,
         ...(payload.localText !== undefined ? { localText: payload.localText } : {}),
         type: payload.type,
@@ -352,6 +358,7 @@ function decodePayload(payload: ContextEnvelope["payload"]): ContextPayload {
         throw new ContextServiceError("CONTEXT_PAYLOAD_INVALID", 400);
       }
       return {
+        ...(payload.focusPoint ? { focusPoint: payload.focusPoint } : {}),
         image,
         ...(payload.localText !== undefined ? { localText: payload.localText } : {}),
         region: payload.region,

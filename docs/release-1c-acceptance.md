@@ -3,7 +3,8 @@
 > 状态：实现候选，代码已集成到主线。真实视觉 API canary、后台 Vision 真实复测、三种 Context
 > 入口人工冒烟和视觉矩阵 20/50 已完成。用户当前未遇到其他 Bug，2026-08-27
 > 主动暂停剩余验收；后续主功能开发完成后统一恢复，也可由用户随时发起专项测试。
-> 暂停不等于通过，Release 1C 仍不标记为正式交付。
+> 暂停不等于通过，Release 1C 仍不标记为正式交付。2026-08-28 增加的 1C.1
+> Natural Pointing 已形成本地实现候选，仍待真实环境验收。
 
 ## 自动门禁
 
@@ -15,8 +16,8 @@ VIOLET_SWIFTPM_DISABLE_SANDBOX=1 pnpm macos:app
 
 当前基线：
 
-- TypeScript/JavaScript：75 项通过。
-- Swift：33 项通过。
+- TypeScript/JavaScript：79 项通过。
+- Swift：36 项通过。
 - Context 协议覆盖未知字段、过期、超长 TTL、越权、乱序、哈希篡改和删除。
 - DeepSeek Vision 请求使用 OpenAI 兼容图片内容块，测试不访问真实 API。
 - TOS 测试确认对象正文不含截图明文，并删除全部版本与 delete marker。
@@ -130,6 +131,41 @@ VIOLET_SWIFTPM_DISABLE_SANDBOX=1 pnpm macos:app
 - 测试结束后 Wake 已恢复关闭，Violet 已恢复普通 LaunchServices 启动。
 - 下一候选方向是针对用户真实发音的定制 KWS 模型，而不是继续放宽当前
   GigaSpeech 开放词汇模型阈值。
+
+## Natural Pointing 候选
+
+2026-08-28 增加 1C.1 Natural Pointing：
+
+- Mac 浮窗增加默认关闭的 `Look` 开关；只有用户主动开启后，语音唤醒才自动建立
+  Context。
+- 唤醒时在浮窗夺取焦点前保存前台应用、Accessibility 焦点元素和鼠标位置。
+- 有可读选区时优先提交 `focus.text`；否则自动捕获前台应用窗口，并在
+  `screen.snapshot` 中携带左上原点的归一化 `focusPoint`。
+- 截图继续先执行 Apple Vision OCR、绝对秘密阻断、受控敏感信息遮挡和保密应用隔离。
+- Context 提交后 Realtime 使用本地 OCR 证据启动，不等待后台 DeepSeek Vision。
+- Qwen 仅在存在活动 Context 时注册只读 `inspect_current_context`；模型判断问题依赖当前
+  画面时，由 Core 等待并返回同一后台 Vision 结果，不重复请求。
+- 用户开始新一轮语音时会取消旧回复并丢弃迟到的 Context 工具结果。
+- 自动 Context 沿用 5 分钟 TTL；关闭浮窗、锁屏、睡眠、撤权或退出 App 时继续执行既有
+  清理逻辑。
+
+本地自动测试已覆盖：
+
+- `Look` 偏好默认关闭并可持久化。
+- Natural Pointing 优先使用浮窗出现前保存的选中文字。
+- AppKit 鼠标坐标转换与窗口内归一化焦点坐标。
+- 焦点坐标通过协议、本地隐私过滤和 DeepSeek Vision 提示完整传递。
+- Realtime Context 工具注册、结果回传、Core 内部消费和打断后迟到结果丢弃。
+
+真实验收仍需完成：
+
+1. `Look` 关闭时 20 次唤醒不得产生任何自动 Context。
+2. `Look` 开启后，选中文字、鼠标附近文字、文章、图片和图表各 10 次；正确率至少
+   90%，错误窗口或旧 Context 命中为 0。
+3. 唤醒后 Realtime 不等待 DeepSeek Vision；本地 Context 超过 4 秒时仍能进入语音，
+   并明确显示 Context 未就绪。
+4. 普通聊天不调用 Context 工具；视觉问题只产生一次后台 Vision 请求。
+5. 保密应用和绝对秘密内容出境为 0，生命周期结束后自动 Context 接受数量为 0。
 
 ## 视觉真实验收
 

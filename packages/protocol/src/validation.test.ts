@@ -100,6 +100,47 @@ describe("protocol validation", () => {
     ).toThrow(ProtocolValidationError);
   });
 
+  it("accepts a normalized pointer location on image context", () => {
+    const capturedAt = new Date("2026-08-24T00:00:00.000Z");
+
+    expect(() =>
+      assertContextEnvelope({
+        authorization: {
+          controlledSensitiveAllowed: false,
+          grantId: randomUUID(),
+          mode: "explicit",
+          purpose: "conversation",
+          retention: "ephemeral",
+        },
+        capturedAt: capturedAt.toISOString(),
+        completeness: 1,
+        confidence: 0.8,
+        eventId: randomUUID(),
+        expiresAt: new Date(capturedAt.getTime() + 300_000).toISOString(),
+        payload: {
+          focusPoint: { x: 0.25, y: 0.75 },
+          image: {
+            data: Buffer.from("image").toString("base64"),
+            height: 100,
+            mediaType: "image/jpeg",
+            sha256: "0".repeat(64),
+            width: 200,
+          },
+          type: "screen.snapshot",
+        },
+        protocolVersion: "1",
+        redactions: [],
+        sensitivity: "personal",
+        sequence: 1,
+        sessionId: randomUUID(),
+        source: {
+          deviceId: randomUUID(),
+          modality: "screen",
+        },
+      }),
+    ).not.toThrow();
+  });
+
   it("accepts every stream event shape", () => {
     const requestId = randomUUID();
 

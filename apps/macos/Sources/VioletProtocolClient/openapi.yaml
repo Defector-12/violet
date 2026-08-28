@@ -844,6 +844,17 @@ components:
       minLength: 3
       maxLength: 255
       pattern: ^[A-Za-z0-9][A-Za-z0-9.-]+$
+    normalizedPoint:
+      type: object
+      additionalProperties: false
+      required:
+        - x
+        - 'y'
+      properties:
+        x:
+          $ref: '#/components/schemas/probability'
+        'y':
+          $ref: '#/components/schemas/probability'
     image:
       type: object
       additionalProperties: false
@@ -979,6 +990,8 @@ components:
                 - image
                 - type
               properties:
+                focusPoint:
+                  $ref: '#/components/schemas/normalizedPoint'
                 image:
                   $ref: '#/components/schemas/image'
                 localText:
@@ -993,6 +1006,8 @@ components:
                 - region
                 - type
               properties:
+                focusPoint:
+                  $ref: '#/components/schemas/normalizedPoint'
                 image:
                   $ref: '#/components/schemas/image'
                 localText:
@@ -1115,6 +1130,17 @@ components:
               $ref: '#/components/schemas/probability'
             width:
               $ref: '#/components/schemas/probability'
+            x:
+              $ref: '#/components/schemas/probability'
+            'y':
+              $ref: '#/components/schemas/probability'
+        normalizedPoint:
+          type: object
+          additionalProperties: false
+          required:
+            - x
+            - 'y'
+          properties:
             x:
               $ref: '#/components/schemas/probability'
             'y':

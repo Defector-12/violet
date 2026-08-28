@@ -23,6 +23,7 @@ public enum CapturedContext: Equatable, Sendable {
   case image(
     appBundleId: String?,
     data: Data,
+    focusPoint: NormalizedContextPoint?,
     height: Int,
     recognizedText: [RecognizedContextText],
     region: NormalizedContextRect?,
@@ -85,6 +86,7 @@ public struct LocalContextPrivacyFilter: LocalContextPrivacyFiltering {
     case .image(
       let appBundleId,
       let data,
+      let focusPoint,
       let height,
       let recognizedText,
       let region,
@@ -126,6 +128,7 @@ public struct LocalContextPrivacyFilter: LocalContextPrivacyFiltering {
         confidence: recognizedText.map(\.confidence).max() ?? 0.5,
         payload: .image(
           data: redactedImage,
+          focusPoint: focusPoint,
           height: height,
           localText: safeText.isEmpty ? nil : safeText,
           mediaType: "image/jpeg",

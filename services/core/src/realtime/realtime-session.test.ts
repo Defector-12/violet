@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { RealtimeConversationInput } from "@violet/domain";
 import { describe, expect, it } from "vitest";
 import { ContextService } from "../context/context-service.js";
 import { DeterministicContextUnderstandingPort } from "../context/deterministic-context-understanding.js";
@@ -238,6 +239,7 @@ describe("RealtimeSession", () => {
     const session = new RealtimeSession({
       contextService,
       conversationPort: {
+        supportsContextLookup: true,
         async open(configuration, signal) {
           observedConfiguration = configuration;
           return deterministic.open(configuration, signal);
@@ -264,7 +266,123 @@ describe("RealtimeSession", () => {
 
     expect(observedConfiguration).toMatchObject({
       contextEvidence: expect.stringContaining("Current selected evidence"),
+      contextLookupAvailable: true,
     });
+  });
+
+  it("resolves provider context requests without exposing them to the client", async () => {
+    const sessionId = randomUUID();
+    const contextSessionId = randomUUID();
+    const contextService = createContextService();
+    const capturedAt = new Date();
+    await contextService.submit({
+      authorization: {
+        controlledSensitiveAllowed: false,
+        grantId: randomUUID(),
+        mode: "explicit",
+        purpose: "conversation",
+        retention: "ephemeral",
+      },
+      capturedAt: capturedAt.toISOString(),
+      completeness: 1,
+      confidence: 1,
+      eventId: randomUUID(),
+      expiresAt: new Date(capturedAt.getTime() + 300_000).toISOString(),
+      payload: {
+        text: "The pointed word is continuity.",
+        type: "focus.text",
+      },
+      protocolVersion: "1",
+      redactions: [],
+      sensitivity: "personal",
+      sequence: 1,
+      sessionId: contextSessionId,
+      source: {
+        deviceId: randomUUID(),
+        modality: "accessibility",
+      },
+    });
+    const receivedInputs: RealtimeConversationInput[] = [];
+    const responseId = randomUUID();
+    const turnId = randomUUID();
+    const session = new RealtimeSession({
+      contextService,
+      conversationPort: {
+        supportsContextLookup: true,
+        async open() {
+          return {
+            capabilities: {
+              inputModalities: ["audio"],
+              interruption: true,
+              outputModalities: ["audio", "text"],
+              runtimeKind: "integrated",
+              transcription: true,
+              turnDetection: "smart_turn",
+              voiceKind: "preset",
+            },
+            async close() {},
+            async *outputs() {
+              yield {
+                callId: "call-context",
+                query: "What does this word mean?",
+                turnId,
+                type: "context-request",
+              } as const;
+              yield { responseId, turnId, type: "response-started" } as const;
+              yield {
+                responseId,
+                text: "It means continuity.",
+                turnId,
+                type: "response-text",
+              } as const;
+              yield {
+                inputTokens: 4,
+                outputTokens: 4,
+                responseId,
+                turnId,
+                type: "response-completed",
+              } as const;
+            },
+            async send(input) {
+              receivedInputs.push(input);
+            },
+          };
+        },
+      },
+      generateId: randomUUID,
+      ledger: new InMemoryConversationLedger(),
+    });
+    await collect(
+      session.handle({
+        configuration: {
+          contextSessionId,
+          inputModalities: ["audio"],
+          outputModalities: ["audio", "text"],
+          protocolVersion: "1",
+          turnDetection: "smart_turn",
+        },
+        eventId: randomUUID(),
+        sequence: 1,
+        sessionId,
+        type: "session.configure",
+      }),
+    );
+
+    const output = await collect(session.outputs());
+    await waitUntil(() => receivedInputs.length === 1);
+
+    expect(output.map((event) => event.type)).toEqual([
+      "response.started",
+      "response.text",
+      "response.completed",
+    ]);
+    expect(receivedInputs).toMatchObject([
+      {
+        callId: "call-context",
+        output: expect.stringContaining("The pointed word is continuity."),
+        type: "context-result",
+      },
+    ]);
   });
 
   it("rejects out-of-order and mismatched events without advancing client state", async () => {
@@ -426,6 +544,16 @@ async function collect<T>(events: AsyncIterable<T>): Promise<T[]> {
     collected.push(event);
   }
   return collected;
+}
+
+async function waitUntil(condition: () => boolean): Promise<void> {
+  const deadline = Date.now() + 1_000;
+  while (!condition()) {
+    if (Date.now() >= deadline) {
+      throw new Error("Condition was not met");
+    }
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
 }
 
 async function take<T>(events: AsyncIterable<T>, count: number): Promise<T[]> {

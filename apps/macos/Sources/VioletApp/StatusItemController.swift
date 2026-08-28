@@ -12,6 +12,7 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
   private var outsideClickMonitor: Any?
   private var pendingTriggerId: UUID?
   private var wakeConversationPending = false
+  private var wakeStartTask: Task<Void, Never>?
   private let popover = NSPopover()
   private let shortcut: any GlobalShortcutPort
   private let wakeWord: WakeWordCoordinator
@@ -116,6 +117,8 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
     shortcut.stop()
     popover.close()
     wakeWord.suspend()
+    wakeStartTask?.cancel()
+    wakeStartTask = nil
     if let outsideClickMonitor {
       NSEvent.removeMonitor(outsideClickMonitor)
       self.outsideClickMonitor = nil
@@ -206,7 +209,8 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
   }
 
   private func handleWakeWord() {
-    model.prepareSelectedTextCapture()
+    model.prepareNaturalPointingCapture()
+    model.captureNaturalPointingContext()
     showPopover()
     wakeConversationPending = true
     acknowledgement?.currentTime = 0
@@ -217,6 +221,8 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
 
   private func cancelWakeAcknowledgement() {
     wakeConversationPending = false
+    wakeStartTask?.cancel()
+    wakeStartTask = nil
     acknowledgement?.stop()
     acknowledgement?.currentTime = 0
   }
@@ -226,9 +232,20 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
       return
     }
     wakeConversationPending = false
-    model.startAudioSession()
-    if !model.isAudioSessionActive {
-      wakeWord.resume()
+    wakeStartTask?.cancel()
+    wakeStartTask = Task { [weak self] in
+      guard let self else {
+        return
+      }
+      await self.model.waitForContextPreparation()
+      guard !Task.isCancelled, self.popover.isShown else {
+        return
+      }
+      self.model.startAudioSession()
+      if !self.model.isAudioSessionActive {
+        self.wakeWord.resume()
+      }
+      self.wakeStartTask = nil
     }
   }
 }

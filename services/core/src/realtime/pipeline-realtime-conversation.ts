@@ -274,6 +274,12 @@ class PipelineRealtimeConversation implements RealtimeConversation {
           "The realtime pipeline uses server-side turn detection",
           false,
         );
+      case "context-result":
+        throw new PipelineAdapterError(
+          "UNSUPPORTED_REALTIME_INPUT",
+          "The realtime pipeline does not accept context tool results",
+          false,
+        );
       case "text":
         this.#appendHistory({ content: input.text, role: "user" });
         await this.#startResponse(input.turnId);

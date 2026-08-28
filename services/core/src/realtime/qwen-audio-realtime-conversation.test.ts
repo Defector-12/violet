@@ -70,6 +70,164 @@ describe("QwenAudioRealtimeConversationPort", () => {
     });
   });
 
+  it("registers and completes the read-only context tool when context is available", async () => {
+    const transport = new FakeTransport([
+      { type: "session.created" },
+      { type: "session.updated" },
+      {
+        response: { id: "resp-context", status: "in_progress" },
+        type: "response.created",
+      },
+      {
+        arguments: '{"question":"What is this chart?"}',
+        call_id: "call-context",
+        name: "inspect_current_context",
+        response_id: "resp-context",
+        type: "response.function_call_arguments.done",
+      },
+      {
+        response: { id: "resp-context", status: "completed" },
+        type: "response.done",
+      },
+      {
+        response: { id: "resp-answer", status: "in_progress" },
+        type: "response.created",
+      },
+      {
+        delta: "The chart rises.",
+        response_id: "resp-answer",
+        type: "response.audio_transcript.delta",
+      },
+      {
+        response: {
+          id: "resp-answer",
+          status: "completed",
+          usage: { input_tokens: 8, output_tokens: 4 },
+        },
+        type: "response.done",
+      },
+    ]);
+    let id = 0;
+    const port = new QwenAudioRealtimeConversationPort({
+      apiKey: "test-qwen-api-key",
+      createTransport: () => transport,
+      generateId: () => `id-${++id}`,
+      model: "qwen-audio-3.0-realtime-plus",
+      voice: "longanqian",
+      workspaceId: "ws-jvh4fvlcktrjvtbj",
+    });
+    const conversation = await port.open({
+      ...configuration(),
+      contextEvidence: "Local OCR is ready.",
+      contextLookupAvailable: true,
+    });
+
+    const outputs = conversation.outputs()[Symbol.asyncIterator]();
+    const started = await outputs.next();
+    const contextRequest = await outputs.next();
+    await conversation.send({
+      callId: "call-context",
+      output: '{"status":"ready","evidence":"The chart rises."}',
+      type: "context-result",
+    });
+    const answered = [await outputs.next(), await outputs.next(), await outputs.next()].map(
+      (result) => result.value,
+    );
+
+    expect(transport.sent[0]).toMatchObject({
+      session: {
+        tools: [
+          {
+            function: {
+              name: "inspect_current_context",
+            },
+            type: "function",
+          },
+        ],
+      },
+      type: "session.update",
+    });
+    expect(started.value).toMatchObject({ type: "response-started" });
+    expect(contextRequest.value).toEqual({
+      callId: "call-context",
+      query: "What is this chart?",
+      turnId: "id-2",
+      type: "context-request",
+    });
+    expect(answered.map((event) => event?.type)).toEqual([
+      "response-started",
+      "response-text",
+      "response-completed",
+    ]);
+    expect(transport.sent.slice(-2)).toEqual([
+      {
+        item: {
+          call_id: "call-context",
+          output: '{"status":"ready","evidence":"The chart rises."}',
+          type: "function_call_output",
+        },
+        type: "conversation.item.create",
+      },
+      { type: "response.create" },
+    ]);
+  });
+
+  it("drops a context result after a new speech turn cancels the tool response", async () => {
+    const transport = new FakeTransport([
+      { type: "session.created" },
+      { type: "session.updated" },
+      {
+        response: { id: "resp-context", status: "in_progress" },
+        type: "response.created",
+      },
+      {
+        arguments: '{"question":"What is this?"}',
+        call_id: "call-context",
+        name: "inspect_current_context",
+        response_id: "resp-context",
+        type: "response.function_call_arguments.done",
+      },
+      { type: "input_audio_buffer.speech_started" },
+    ]);
+    let id = 0;
+    const port = new QwenAudioRealtimeConversationPort({
+      apiKey: "test-qwen-api-key",
+      createTransport: () => transport,
+      generateId: () => `id-${++id}`,
+      model: "qwen-audio-3.0-realtime-plus",
+      voice: "longanqian",
+      workspaceId: "ws-jvh4fvlcktrjvtbj",
+    });
+    const conversation = await port.open({
+      ...configuration(),
+      contextEvidence: "Local context",
+      contextLookupAvailable: true,
+      turnDetection: "smart_turn",
+    });
+    const outputs = await take(conversation.outputs(), 3);
+
+    await conversation.send({
+      callId: "call-context",
+      output: '{"status":"ready","evidence":"Late context"}',
+      type: "context-result",
+    });
+
+    expect(outputs.map((event) => event.type)).toEqual([
+      "response-started",
+      "context-request",
+      "speech-started",
+    ]);
+    expect(transport.sent).toContainEqual({ type: "response.cancel" });
+    expect(transport.sent).not.toContainEqual({
+      item: {
+        call_id: "call-context",
+        output: '{"status":"ready","evidence":"Late context"}',
+        type: "function_call_output",
+      },
+      type: "conversation.item.create",
+    });
+  });
+
   it("maps a push-to-talk audio turn into provider-neutral output", async () => {
     const transport = new FakeTransport([
       { type: "session.created" },

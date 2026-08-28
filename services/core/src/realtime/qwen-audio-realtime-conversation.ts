@@ -20,6 +20,7 @@ const outputAudio = {
 } as const;
 const defaultInstructions =
   "You are Violet, the user's private AI assistant. Reply naturally and concisely in the user's language. Never claim an action completed without a Core-confirmed tool result.";
+const inspectContextToolName = "inspect_current_context";
 
 export interface QwenAudioRealtimeConversationPortOptions {
   readonly apiKey: string;
@@ -44,6 +45,7 @@ export type QwenRealtimeTransportFactory = (
 ) => QwenRealtimeTransport;
 
 export class QwenAudioRealtimeConversationPort implements RealtimeConversationPort {
+  readonly supportsContextLookup = true;
   readonly #apiKey: string;
   readonly #connectTimeoutMs: number;
   readonly #createTransport: QwenRealtimeTransportFactory;
@@ -97,6 +99,31 @@ export class QwenAudioRealtimeConversationPort implements RealtimeConversationPo
           max_history_turns: 20,
           modalities: ["audio", "text"],
           output_audio_format: "pcm",
+          ...(configuration.contextLookupAvailable
+            ? {
+                tools: [
+                  {
+                    function: {
+                      description:
+                        "Read the complete current screen, window, image, diagram, article, selected text, or object near the user's pointer. Use this whenever the user refers to what they are looking at or pointing to.",
+                      name: inspectContextToolName,
+                      parameters: {
+                        additionalProperties: false,
+                        properties: {
+                          question: {
+                            description: "The user's question about the current visual context.",
+                            type: "string",
+                          },
+                        },
+                        required: ["question"],
+                        type: "object",
+                      },
+                    },
+                    type: "function",
+                  },
+                ],
+              }
+            : {}),
           turn_detection:
             turnDetection === "manual"
               ? null
@@ -137,7 +164,9 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
   readonly capabilities: RealtimeCapabilities;
   readonly #generateId: () => string;
   readonly #localResponseIds = new Map<string, string>();
+  readonly #pendingContextCallIds = new Set<string>();
   readonly #providerResponseIds = new Map<string, string>();
+  readonly #toolResponseIds = new Set<string>();
   readonly #transport: QwenRealtimeTransport;
   readonly #turnDetection: "manual" | "server_vad" | "smart_turn";
   readonly #turnIdsByProviderResponse = new Map<string, string>();
@@ -174,8 +203,10 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
     this.#closed = true;
     this.#transport.close();
     this.#localResponseIds.clear();
+    this.#pendingContextCallIds.clear();
     this.#providerResponseIds.clear();
     this.#turnIdsByProviderResponse.clear();
+    this.#toolResponseIds.clear();
     this.#activeProviderResponseId = null;
     this.#currentTurnId = null;
     this.#pendingAudioTurnId = null;
@@ -223,6 +254,9 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
         break;
       case "commit":
         await this.#commitAudio(input.turnId);
+        break;
+      case "context-result":
+        await this.#sendContextResult(input.callId, input.output);
         break;
       case "text":
         await this.#sendText(input.text, input.turnId);
@@ -313,7 +347,23 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
       return;
     }
 
+    this.#pendingContextCallIds.clear();
     await this.#transport.send({ type: "response.cancel" });
+  }
+
+  async #sendContextResult(callId: string, output: string): Promise<void> {
+    if (!this.#pendingContextCallIds.delete(callId)) {
+      return;
+    }
+    await this.#transport.send({
+      item: {
+        call_id: callId,
+        output,
+        type: "function_call_output",
+      },
+      type: "conversation.item.create",
+    });
+    await this.#transport.send({ type: "response.create" });
   }
 
   async #mapProviderEvent(
@@ -326,6 +376,7 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
       if (this.#activeProviderResponseId) {
         await this.#transport.send({ type: "response.cancel" });
       }
+      this.#pendingContextCallIds.clear();
       this.#currentTurnId = this.#generateId();
       return {
         turnId: this.#currentTurnId,
@@ -364,6 +415,27 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
     }
     if (event.type === "conversation.item.input_audio_transcription.failed") {
       return providerErrorOutput(event);
+    }
+    if (event.type === "response.function_call_arguments.done") {
+      const providerResponseId = string(event["response_id"]);
+      const callId = string(event["call_id"]);
+      const name = string(event["name"]);
+      if (!providerResponseId || !callId || name !== inspectContextToolName) {
+        throw new QwenAdapterError(
+          "INVALID_CONTEXT_TOOL_CALL",
+          "Qwen returned an invalid context tool call",
+          false,
+        );
+      }
+      const context = this.#responseContext(providerResponseId);
+      this.#toolResponseIds.add(providerResponseId);
+      this.#pendingContextCallIds.add(callId);
+      return {
+        callId,
+        query: contextQuestion(event["arguments"]),
+        turnId: context.turnId,
+        type: "context-request",
+      };
     }
 
     const providerResponseId = responseId(event);
@@ -412,6 +484,13 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
 
     const response = record(event["response"]);
     const status = string(response?.["status"]);
+    if (this.#toolResponseIds.delete(providerResponseId)) {
+      if (status && status !== "completed") {
+        this.#pendingContextCallIds.clear();
+      }
+      this.#forgetResponse(providerResponseId, context.localResponseId);
+      return undefined;
+    }
     this.#forgetResponse(providerResponseId, context.localResponseId);
     if (status === "cancelled") {
       return {
@@ -470,6 +549,20 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
     if (this.#activeProviderResponseId === providerResponseId) {
       this.#activeProviderResponseId = null;
     }
+  }
+}
+
+function contextQuestion(value: unknown): string {
+  const encoded = string(value);
+  if (!encoded) {
+    return "";
+  }
+  try {
+    const parsed = JSON.parse(encoded) as unknown;
+    const question = string(record(parsed)?.["question"])?.trim();
+    return question?.slice(0, 2_048) ?? "";
+  } catch {
+    return "";
   }
 }
 

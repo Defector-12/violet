@@ -5,7 +5,8 @@ import ImageIO
 @preconcurrency import ScreenCaptureKit
 import Vision
 
-public enum ContextCaptureKind: Sendable {
+public enum ContextCaptureKind: Equatable, Sendable {
+  case naturalPointing
   case region
   case selectedText
   case window
@@ -35,6 +36,7 @@ public enum ContextCaptureError: Error, Equatable, LocalizedError {
 public protocol ContextCapturePort: AnyObject {
   func capture(_ kind: ContextCaptureKind) async throws -> CapturedContext
   func cancel()
+  func prepareNaturalPointingCapture()
   func prepareSelectedTextCapture()
 }
 
@@ -50,6 +52,8 @@ public final class SilentContextCapture: ContextCapturePort {
   }
 
   public func cancel() {}
+
+  public func prepareNaturalPointingCapture() {}
 
   public func prepareSelectedTextCapture() {}
 }
@@ -74,6 +78,7 @@ public final class SystemContextCapture: NSObject, ContextCapturePort {
   private let focusedElementReader: (pid_t) -> AXUIElement?
   private var pickerContinuation: CheckedContinuation<SelectedFilter, Error>?
   private var regionSelector: RegionSelectionController?
+  private var naturalPointingLocation: CGPoint?
   private var selectedTextElement: AXUIElement?
   private var selectedTextTarget: ContextApplicationTarget?
   private let selectionReader: (pid_t?, AXUIElement?) -> AccessibilitySelectionResult
@@ -125,8 +130,15 @@ public final class SystemContextCapture: NSObject, ContextCapturePort {
     selectedTextElement = focusedElementReader(application.processIdentifier)
   }
 
+  public func prepareNaturalPointingCapture() {
+    prepareSelectedTextCapture()
+    naturalPointingLocation = NSEvent.mouseLocation
+  }
+
   public func capture(_ kind: ContextCaptureKind) async throws -> CapturedContext {
     switch kind {
+    case .naturalPointing:
+      return try await captureNaturalPointing()
     case .selectedText:
       return try captureSelectedText()
     case .window:
@@ -147,6 +159,7 @@ public final class SystemContextCapture: NSObject, ContextCapturePort {
     regionSelector = nil
     selectedTextElement = nil
     selectedTextTarget = nil
+    naturalPointingLocation = nil
     SCContentSharingPicker.shared.isActive = false
     SCContentSharingPicker.shared.remove(self)
   }
@@ -179,6 +192,67 @@ public final class SystemContextCapture: NSObject, ContextCapturePort {
     }
   }
 
+  private func captureNaturalPointing() async throws -> CapturedContext {
+    let target = selectedTextTarget ?? activeApplication()
+    guard
+      let target,
+      target.processIdentifier != currentProcessIdentifier
+    else {
+      throw ContextCaptureError.unavailable
+    }
+    if let bundleIdentifier = target.bundleIdentifier,
+      excludedBundleIds.contains(bundleIdentifier)
+    {
+      throw LocalContextPrivacyError.blockedApplication
+    }
+
+    if accessibilityAccess() {
+      switch selectionReader(target.processIdentifier, selectedTextElement) {
+      case .secureField:
+        throw LocalContextPrivacyError.blockedApplication
+      case .text(let text):
+        return .text(appBundleId: target.bundleIdentifier, text: text)
+      case .unavailable:
+        break
+      }
+    }
+
+    guard CGPreflightScreenCaptureAccess() else {
+      throw ContextCaptureError.screenRecordingPermissionDenied
+    }
+    let content = try await SCShareableContent.excludingDesktopWindows(
+      false,
+      onScreenWindowsOnly: true
+    )
+    let pointer: CGPoint?
+    if let naturalPointingLocation,
+      let primaryScreenFrame = NSScreen.screens.first?.frame
+    {
+      pointer = screenCapturePoint(
+        from: naturalPointingLocation,
+        primaryScreenFrame: primaryScreenFrame
+      )
+    } else {
+      pointer = nil
+    }
+    guard
+      let window = preferredNaturalPointingWindow(
+        content.windows,
+        processIdentifier: target.processIdentifier,
+        pointer: pointer
+      )
+    else {
+      throw ContextCaptureError.unavailable
+    }
+    let focusPoint = pointer.flatMap { normalizedPoint($0, in: window.frame) }
+    return try await capture(
+      filter: SCContentFilter(desktopIndependentWindow: window),
+      appBundleId: target.bundleIdentifier,
+      focusPoint: focusPoint,
+      region: nil
+    )
+  }
+
   private func capturePickedWindow() async throws -> CapturedContext {
     let picker = SCContentSharingPicker.shared
     guard pickerContinuation == nil else {
@@ -206,7 +280,12 @@ public final class SystemContextCapture: NSObject, ContextCapturePort {
         self?.cancel()
       }
     }
-    return try await capture(filter: filter.value, region: nil)
+    return try await capture(
+      filter: filter.value,
+      appBundleId: nil,
+      focusPoint: nil,
+      region: nil
+    )
   }
 
   private func selectRegion() async throws -> CGRect {
@@ -258,12 +337,15 @@ public final class SystemContextCapture: NSObject, ContextCapturePort {
     return try await makeCapturedImage(
       image,
       appBundleId: appBundleId,
+      focusPoint: nil,
       region: normalized(rect)
     )
   }
 
   private func capture(
     filter: SCContentFilter,
+    appBundleId: String?,
+    focusPoint: NormalizedContextPoint?,
     region: NormalizedContextRect?
   ) async throws -> CapturedContext {
     let configuration = SCStreamConfiguration()
@@ -276,12 +358,18 @@ public final class SystemContextCapture: NSObject, ContextCapturePort {
       contentFilter: filter,
       configuration: configuration
     )
-    return try await makeCapturedImage(image, appBundleId: nil, region: region)
+    return try await makeCapturedImage(
+      image,
+      appBundleId: appBundleId,
+      focusPoint: focusPoint,
+      region: region
+    )
   }
 
   private func makeCapturedImage(
     _ image: CGImage,
     appBundleId: String?,
+    focusPoint: NormalizedContextPoint?,
     region: NormalizedContextRect?
   ) async throws -> CapturedContext {
     let preparedImage = contextSizedImage(image)
@@ -297,6 +385,7 @@ public final class SystemContextCapture: NSObject, ContextCapturePort {
     return .image(
       appBundleId: appBundleId,
       data: encodedData,
+      focusPoint: focusPoint,
       height: preparedImage.height,
       recognizedText: observations,
       region: region,
@@ -562,6 +651,51 @@ private func normalized(_ rect: CGRect) -> NormalizedContextRect {
     y: (rect.minY - screen.frame.minY) / screen.frame.height,
     width: rect.width / screen.frame.width,
     height: rect.height / screen.frame.height
+  )
+}
+
+func normalizedPoint(
+  _ point: CGPoint,
+  in frame: CGRect
+) -> NormalizedContextPoint? {
+  guard frame.width > 0, frame.height > 0, frame.contains(point) else {
+    return nil
+  }
+  return .init(
+    x: (point.x - frame.minX) / frame.width,
+    y: (point.y - frame.minY) / frame.height
+  )
+}
+
+private func preferredNaturalPointingWindow(
+  _ windows: [SCWindow],
+  processIdentifier: pid_t,
+  pointer: CGPoint?
+) -> SCWindow? {
+  let candidates = windows.filter {
+    $0.owningApplication?.processID == processIdentifier
+      && $0.isOnScreen
+      && $0.windowLayer == 0
+      && $0.frame.width >= 4
+      && $0.frame.height >= 4
+  }
+  if let pointer,
+    let pointed = candidates.first(where: { $0.frame.contains(pointer) })
+  {
+    return pointed
+  }
+  return candidates.max {
+    $0.frame.width * $0.frame.height < $1.frame.width * $1.frame.height
+  }
+}
+
+func screenCapturePoint(
+  from appKitPoint: CGPoint,
+  primaryScreenFrame: CGRect
+) -> CGPoint {
+  return CGPoint(
+    x: appKitPoint.x,
+    y: primaryScreenFrame.maxY - appKitPoint.y
   )
 }
 

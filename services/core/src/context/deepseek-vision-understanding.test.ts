@@ -40,6 +40,7 @@ describe("DeepSeekVisionUnderstandingPort", () => {
       adapter.understand({
         localText: "Service A Service B",
         payload: {
+          focusPoint: { x: 0.25, y: 0.75 },
           image: {
             bytes: Buffer.from("image"),
             height: 100,
@@ -62,6 +63,7 @@ describe("DeepSeekVisionUnderstandingPort", () => {
       model: "deepseek-v4-flash-vision-exp",
     });
     expect(JSON.stringify(body)).toContain("locate its arrowhead");
+    expect(JSON.stringify(body)).toContain("x=0.250, y=0.750");
     expect(JSON.stringify(body)).toContain("data:image/png;base64,aW1hZ2U=");
   });
 });

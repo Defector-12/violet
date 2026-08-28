@@ -148,6 +148,10 @@ export interface components {
         /** Format: uuid */
         uuid: string;
         bundleId: string;
+        normalizedPoint: {
+            x: components["schemas"]["probability"];
+            y: components["schemas"]["probability"];
+        };
         image: {
             data: string;
             height: number;
@@ -191,11 +195,13 @@ export interface components {
                 /** @constant */
                 type: "app.state";
             } | {
+                focusPoint?: components["schemas"]["normalizedPoint"];
                 image: components["schemas"]["image"];
                 localText?: string;
                 /** @constant */
                 type: "screen.snapshot";
             } | {
+                focusPoint?: components["schemas"]["normalizedPoint"];
                 image: components["schemas"]["image"];
                 localText?: string;
                 region: components["schemas"]["normalizedRect"];
@@ -237,6 +243,10 @@ export interface components {
                 normalizedRect: {
                     height: components["schemas"]["probability"];
                     width: components["schemas"]["probability"];
+                    x: components["schemas"]["probability"];
+                    y: components["schemas"]["probability"];
+                };
+                normalizedPoint: {
                     x: components["schemas"]["probability"];
                     y: components["schemas"]["probability"];
                 };

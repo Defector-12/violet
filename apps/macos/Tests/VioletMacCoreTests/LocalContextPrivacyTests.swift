@@ -92,6 +92,7 @@ struct LocalContextPrivacyTests {
       .image(
         appBundleId: "com.apple.Preview",
         data: source,
+        focusPoint: nil,
         height: 32,
         recognizedText: [],
         region: nil,
@@ -99,7 +100,7 @@ struct LocalContextPrivacyTests {
       )
     )
 
-    guard case .image(let data, _, _, let mediaType, _, _, _) = result.payload else {
+    guard case .image(let data, _, _, _, let mediaType, _, _, _) = result.payload else {
       Issue.record("Expected a filtered image")
       return
     }
@@ -128,6 +129,7 @@ struct LocalContextPrivacyTests {
       .image(
         appBundleId: "com.apple.Preview",
         data: source,
+        focusPoint: .init(x: 0.25, y: 0.75),
         height: 32,
         recognizedText: [
           .init(
@@ -141,13 +143,16 @@ struct LocalContextPrivacyTests {
       )
     )
 
-    guard case .image(let data, _, let text, let mediaType, _, _, _) = result.payload else {
+    guard
+      case .image(let data, let focusPoint, _, let text, let mediaType, _, _, _) = result.payload
+    else {
       Issue.record("Expected a filtered image")
       return
     }
     #expect(mediaType == "image/jpeg")
     #expect(data != source)
     #expect(text == "ID [REDACTED]")
+    #expect(focusPoint == .init(x: 0.25, y: 0.75))
     #expect(result.redactions == [.init(category: .controlledSensitive, count: 1)])
   }
 }
