@@ -66,14 +66,38 @@ struct WakeWordCoordinatorTests {
     #expect(detector.startCount == 0)
     #expect(!detector.isRunning)
   }
+
+  @Test
+  @MainActor
+  func restartsDetectionAfterAudioConfigurationInvalidation() async throws {
+    let defaults = isolatedDefaults()
+    let detector = FakeWakeWordDetector()
+    let coordinator = WakeWordCoordinator(
+      detector: detector,
+      defaults: defaults,
+      routeRecoveryDelay: .zero
+    )
+
+    coordinator.setEnabled(true)
+    try await waitUntil { coordinator.state == .listening }
+    detector.invalidateAudioConfiguration()
+    try await waitUntil {
+      coordinator.state == .listening && detector.startCount == 2
+    }
+
+    #expect(detector.stopCount == 1)
+    #expect(detector.isRunning)
+  }
 }
 
 @MainActor
 private final class FakeWakeWordDetector: WakeWordDetectorPort {
   private let accessAllowed: Bool
+  private var audioConfigurationInvalidated: (@MainActor @Sendable () -> Void)?
   private var detection: (@MainActor @Sendable () -> Void)?
   private(set) var isRunning = false
   private(set) var startCount = 0
+  private(set) var stopCount = 0
 
   init(accessAllowed: Bool = true) {
     self.accessAllowed = accessAllowed
@@ -83,18 +107,28 @@ private final class FakeWakeWordDetector: WakeWordDetectorPort {
     accessAllowed
   }
 
-  func start(onDetection: @escaping @MainActor @Sendable () -> Void) {
+  func start(
+    onDetection: @escaping @MainActor @Sendable () -> Void,
+    onAudioConfigurationInvalidated: @escaping @MainActor @Sendable () -> Void
+  ) {
     detection = onDetection
+    audioConfigurationInvalidated = onAudioConfigurationInvalidated
     isRunning = true
     startCount += 1
   }
 
   func stop() {
+    stopCount += 1
+    audioConfigurationInvalidated = nil
     isRunning = false
   }
 
   func trigger() {
     detection?()
+  }
+
+  func invalidateAudioConfiguration() {
+    audioConfigurationInvalidated?()
   }
 }
 

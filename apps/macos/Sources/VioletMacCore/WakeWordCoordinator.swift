@@ -18,22 +18,27 @@ public final class WakeWordCoordinator: ObservableObject {
   private let defaults: UserDefaults
   private let detector: any WakeWordDetectorPort
   private let preferenceKey: String
+  private let routeRecoveryDelay: Duration
+  private var routeRecoveryTask: Task<Void, Never>?
   private var startTask: Task<Void, Never>?
 
   public init(
     detector: any WakeWordDetectorPort,
     defaults: UserDefaults = .standard,
-    preferenceKey: String = "violet.wake-word-enabled"
+    preferenceKey: String = "violet.wake-word-enabled",
+    routeRecoveryDelay: Duration = .milliseconds(500)
   ) {
     self.defaults = defaults
     self.detector = detector
     self.preferenceKey = preferenceKey
+    self.routeRecoveryDelay = routeRecoveryDelay
     let enabled = defaults.bool(forKey: preferenceKey)
     isEnabled = enabled
     state = enabled ? .paused : .disabled
   }
 
   deinit {
+    routeRecoveryTask?.cancel()
     startTask?.cancel()
   }
 
@@ -43,6 +48,8 @@ public final class WakeWordCoordinator: ObservableObject {
     if enabled {
       resume()
     } else {
+      routeRecoveryTask?.cancel()
+      routeRecoveryTask = nil
       startTask?.cancel()
       startTask = nil
       detector.stop()
@@ -51,7 +58,12 @@ public final class WakeWordCoordinator: ObservableObject {
   }
 
   public func resume() {
-    guard isEnabled, !detector.isRunning, startTask == nil else {
+    guard
+      isEnabled,
+      !detector.isRunning,
+      startTask == nil,
+      routeRecoveryTask == nil
+    else {
       return
     }
     state = .paused
@@ -70,14 +82,19 @@ public final class WakeWordCoordinator: ObservableObject {
         return
       }
       do {
-        try detector.start { [weak self] in
-          guard let self, self.isEnabled else {
-            return
+        try detector.start(
+          onDetection: { [weak self] in
+            guard let self, self.isEnabled else {
+              return
+            }
+            self.detector.stop()
+            self.state = .paused
+            self.onDetection?()
+          },
+          onAudioConfigurationInvalidated: { [weak self] in
+            self?.recoverAfterAudioConfigurationInvalidation()
           }
-          self.detector.stop()
-          self.state = .paused
-          self.onDetection?()
-        }
+        )
         self.state = .listening
       } catch {
         self.state = .unavailable(
@@ -90,9 +107,38 @@ public final class WakeWordCoordinator: ObservableObject {
   }
 
   public func suspend() {
+    routeRecoveryTask?.cancel()
+    routeRecoveryTask = nil
     startTask?.cancel()
     startTask = nil
     detector.stop()
     state = isEnabled ? .paused : .disabled
+  }
+
+  private func recoverAfterAudioConfigurationInvalidation() {
+    guard isEnabled else {
+      return
+    }
+    startTask?.cancel()
+    startTask = nil
+    detector.stop()
+    state = .paused
+    routeRecoveryTask?.cancel()
+    routeRecoveryTask = Task { [weak self] in
+      guard let self else {
+        return
+      }
+      do {
+        try await Task.sleep(for: self.routeRecoveryDelay)
+      } catch {
+        return
+      }
+      guard self.isEnabled else {
+        self.routeRecoveryTask = nil
+        return
+      }
+      self.routeRecoveryTask = nil
+      self.resume()
+    }
   }
 }

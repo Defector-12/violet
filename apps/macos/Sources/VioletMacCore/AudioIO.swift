@@ -1,4 +1,5 @@
 @preconcurrency import AVFoundation
+import CoreAudio
 import Foundation
 
 public struct VioletAudioFormat: Equatable, Sendable {
@@ -71,6 +72,7 @@ public final class AVAudioEngineIO: AudioIOPort {
 
   private let engine = AVAudioEngine()
   private let player = AVAudioPlayerNode()
+  private let playbackCaptureGate = PlaybackCaptureGate()
   private var playbackEndsAt: Date?
   private var playbackFormat: VioletAudioFormat?
 
@@ -119,6 +121,7 @@ public final class AVAudioEngineIO: AudioIOPort {
       format: inputFormat,
       block: makeCaptureTapHandler(
         converter: converter,
+        playbackCaptureGate: playbackCaptureGate,
         targetFormat: targetFormat,
         handler: handler
       )
@@ -180,6 +183,7 @@ public final class AVAudioEngineIO: AudioIOPort {
     playbackEndsAt = playbackStart.addingTimeInterval(
       Double(frameCount) / frame.format.sampleRate
     )
+    playbackCaptureGate.updatePlaybackEnd(playbackEndsAt)
 
     if playbackFormat != frame.format {
       try preparePlayback(format: frame.format)
@@ -194,6 +198,7 @@ public final class AVAudioEngineIO: AudioIOPort {
   public func stopPlayback() {
     player.stop()
     playbackEndsAt = nil
+    playbackCaptureGate.clearPlayback()
     stopEngineIfIdle()
   }
 
@@ -204,6 +209,13 @@ public final class AVAudioEngineIO: AudioIOPort {
       }
       throw AudioIOError.playbackFormatChangeWhileRunning
     }
+    playbackCaptureGate.setEnabled(
+      shouldSuppressCaptureDuringPlayback(
+        outputTransportType: defaultAudioDeviceTransportType(
+          kAudioHardwarePropertyDefaultOutputDevice
+        )
+      )
+    )
     guard
       format.channels == 1,
       let audioFormat = AVAudioFormat(
@@ -242,12 +254,68 @@ public enum AudioIOError: Error, Equatable {
   case unsupportedOutputFormat
 }
 
+func shouldSuppressCaptureDuringPlayback(
+  outputTransportType: UInt32?
+) -> Bool {
+  outputTransportType == kAudioDeviceTransportTypeBuiltIn
+}
+
+private func defaultAudioDeviceTransportType(
+  _ deviceSelector: AudioObjectPropertySelector
+) -> UInt32? {
+  var deviceAddress = AudioObjectPropertyAddress(
+    mSelector: deviceSelector,
+    mScope: kAudioObjectPropertyScopeGlobal,
+    mElement: kAudioObjectPropertyElementMain
+  )
+  var device = AudioDeviceID(kAudioObjectUnknown)
+  var deviceSize = UInt32(MemoryLayout<AudioDeviceID>.size)
+  guard
+    AudioObjectGetPropertyData(
+      AudioObjectID(kAudioObjectSystemObject),
+      &deviceAddress,
+      0,
+      nil,
+      &deviceSize,
+      &device
+    ) == noErr,
+    device != kAudioObjectUnknown
+  else {
+    return nil
+  }
+
+  var transportAddress = AudioObjectPropertyAddress(
+    mSelector: kAudioDevicePropertyTransportType,
+    mScope: kAudioObjectPropertyScopeGlobal,
+    mElement: kAudioObjectPropertyElementMain
+  )
+  var transportType: UInt32 = 0
+  var transportSize = UInt32(MemoryLayout<UInt32>.size)
+  guard
+    AudioObjectGetPropertyData(
+      device,
+      &transportAddress,
+      0,
+      nil,
+      &transportSize,
+      &transportType
+    ) == noErr
+  else {
+    return nil
+  }
+  return transportType
+}
+
 private func makeCaptureTapHandler(
   converter: AVAudioConverter,
+  playbackCaptureGate: PlaybackCaptureGate,
   targetFormat: AVAudioFormat,
   handler: @escaping @Sendable (VioletAudioFrame) -> Void
 ) -> AVAudioNodeTapBlock {
   { buffer, _ in
+    guard !playbackCaptureGate.shouldSuppressCapture(at: Date()) else {
+      return
+    }
     guard let converted = convert(buffer, using: converter, to: targetFormat) else {
       return
     }
@@ -257,6 +325,39 @@ private func makeCaptureTapHandler(
         format: VioletAudioFormat(sampleRate: targetFormat.sampleRate)
       )
     )
+  }
+}
+
+private final class PlaybackCaptureGate: @unchecked Sendable {
+  private let lock = NSLock()
+  private var playbackEndsAt: Date?
+  private var enabled = false
+
+  func clearPlayback() {
+    lock.withLock {
+      playbackEndsAt = nil
+    }
+  }
+
+  func setEnabled(_ enabled: Bool) {
+    lock.withLock {
+      self.enabled = enabled
+      if !enabled {
+        playbackEndsAt = nil
+      }
+    }
+  }
+
+  func shouldSuppressCapture(at now: Date) -> Bool {
+    lock.withLock {
+      enabled && playbackEndsAt.map { now < $0.addingTimeInterval(0.25) } == true
+    }
+  }
+
+  func updatePlaybackEnd(_ date: Date?) {
+    lock.withLock {
+      playbackEndsAt = date
+    }
   }
 }
 

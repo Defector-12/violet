@@ -6,7 +6,10 @@ import Foundation
 public protocol WakeWordDetectorPort: AnyObject {
   var isRunning: Bool { get }
   func requestAccess() async -> Bool
-  func start(onDetection: @escaping @MainActor @Sendable () -> Void) throws
+  func start(
+    onDetection: @escaping @MainActor @Sendable () -> Void,
+    onAudioConfigurationInvalidated: @escaping @MainActor @Sendable () -> Void
+  ) throws
   func stop()
 }
 
@@ -21,7 +24,10 @@ public final class SilentWakeWordDetector: WakeWordDetectorPort {
     true
   }
 
-  public func start(onDetection: @escaping @MainActor @Sendable () -> Void) {
+  public func start(
+    onDetection: @escaping @MainActor @Sendable () -> Void,
+    onAudioConfigurationInvalidated: @escaping @MainActor @Sendable () -> Void
+  ) {
     startCount += 1
     isRunning = true
   }
@@ -54,10 +60,36 @@ public final class SherpaWakeWordDetector: WakeWordDetectorPort {
 
   private let assetsURL: URL
   private let audioEngine = AVAudioEngine()
+  private var audioConfigurationInvalidated: (@MainActor @Sendable () -> Void)?
+  private var configurationObserver: NSObjectProtocol?
   private var processor: WakeWordProcessor?
 
   public init(assetsURL: URL) {
     self.assetsURL = assetsURL
+    configurationObserver = NotificationCenter.default.addObserver(
+      forName: .AVAudioEngineConfigurationChange,
+      object: audioEngine,
+      queue: .main
+    ) { [weak self] _ in
+      Task { @MainActor [weak self] in
+        guard let self else { return }
+        guard
+          self.isRunning,
+          !self.audioEngine.isRunning,
+          let invalidated = self.audioConfigurationInvalidated
+        else {
+          return
+        }
+        self.audioConfigurationInvalidated = nil
+        invalidated()
+      }
+    }
+  }
+
+  deinit {
+    if let configurationObserver {
+      NotificationCenter.default.removeObserver(configurationObserver)
+    }
   }
 
   public func requestAccess() async -> Bool {
@@ -73,7 +105,10 @@ public final class SherpaWakeWordDetector: WakeWordDetectorPort {
     }
   }
 
-  public func start(onDetection: @escaping @MainActor @Sendable () -> Void) throws {
+  public func start(
+    onDetection: @escaping @MainActor @Sendable () -> Void,
+    onAudioConfigurationInvalidated: @escaping @MainActor @Sendable () -> Void
+  ) throws {
     guard !isRunning else {
       return
     }
@@ -110,10 +145,12 @@ public final class SherpaWakeWordDetector: WakeWordDetectorPort {
       )
     )
     do {
+      audioConfigurationInvalidated = onAudioConfigurationInvalidated
       try audioEngine.start()
       self.processor = processor
       isRunning = true
     } catch {
+      audioConfigurationInvalidated = nil
       input.removeTap(onBus: 0)
       throw error
     }
@@ -127,6 +164,7 @@ public final class SherpaWakeWordDetector: WakeWordDetectorPort {
     audioEngine.stop()
     processor?.invalidate()
     processor = nil
+    audioConfigurationInvalidated = nil
     isRunning = false
   }
 }

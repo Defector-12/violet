@@ -17,7 +17,7 @@ VIOLET_SWIFTPM_DISABLE_SANDBOX=1 pnpm macos:app
 当前基线：
 
 - TypeScript/JavaScript：79 项通过。
-- Swift：36 项通过。
+- Swift：39 项通过。
 - Context 协议覆盖未知字段、过期、超长 TTL、越权、乱序、哈希篡改和删除。
 - DeepSeek Vision 请求使用 OpenAI 兼容图片内容块，测试不访问真实 API。
 - TOS 测试确认对象正文不含截图明文，并删除全部版本与 delete marker。
@@ -136,6 +136,16 @@ VIOLET_SWIFTPM_DISABLE_SANDBOX=1 pnpm macos:app
 - 下一候选方向是针对用户真实发音的定制 KWS 模型，而不是继续放宽当前
   GigaSpeech 开放词汇模型阈值。
 
+2026-08-29 完成本机音频路由专项验证：
+
+- 内置扬声器回复会被内置麦克风重新采集，并连续两帧越过本地打断门；当前在内置
+  扬声器播放期间及结束后 250ms 暂停上传麦克风帧，用户确认不再发生自我打断。
+- Apple Voice Processing 在本机 7 声道聚合路由上启动失败，因此不作为当前方案。
+- 插入或摘下耳机会停止 Wake 的 `AVAudioEngine`，旧代码仍把 detector 标记为运行；
+  现在由 detector 上报配置失效，Coordinator 等待 500ms 后自动重建监听。
+- 用户完成不戴耳机、戴上耳机和摘下耳机三段真实验证，均可重新唤醒 Violet。
+- 内置扬声器模式暂不支持语音打断，仍可点击打断；耳机路径继续支持语音打断。
+
 ## Natural Pointing 候选
 
 2026-08-28 增加 1C.1 Natural Pointing：
@@ -152,6 +162,8 @@ VIOLET_SWIFTPM_DISABLE_SANDBOX=1 pnpm macos:app
 - 用户开始新一轮语音时会取消旧回复并丢弃迟到的 Context 工具结果。
 - 自动 Context 沿用 5 分钟 TTL；关闭浮窗、锁屏、睡眠、撤权或退出 App 时继续执行既有
   清理逻辑。
+- 唤醒时若前台仍是 Violet 且没有保存的外部目标，自动 Natural Pointing 静默退化为
+  纯语音，不显示 `No readable context is available`；手动 Context 的同类失败仍明确提示。
 
 本地自动测试已覆盖：
 

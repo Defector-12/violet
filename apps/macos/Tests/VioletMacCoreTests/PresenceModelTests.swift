@@ -1,3 +1,4 @@
+import CoreAudio
 import Foundation
 import Testing
 
@@ -5,6 +6,25 @@ import Testing
 
 @Suite("Presence model")
 struct PresenceModelTests {
+  @Test
+  func suppressesPlaybackCaptureOnlyForBuiltInOutput() {
+    #expect(
+      shouldSuppressCaptureDuringPlayback(
+        outputTransportType: kAudioDeviceTransportTypeBuiltIn
+      )
+    )
+    #expect(
+      !shouldSuppressCaptureDuringPlayback(
+        outputTransportType: kAudioDeviceTransportTypeBluetooth
+      )
+    )
+    #expect(
+      !shouldSuppressCaptureDuringPlayback(
+        outputTransportType: nil
+      )
+    )
+  }
+
   @Test
   @MainActor
   func refreshesReadyAndSealedStates() async {
@@ -709,6 +729,29 @@ struct PresenceModelTests {
     #expect(await realtime.connectedContextSessionIds().compactMap { $0 }.count == 1)
     model.cancelAudioSession()
   }
+
+  @Test
+  @MainActor
+  func ignoresUnavailableAutomaticContextButReportsUnavailableManualContext() async {
+    let defaults = isolatedPresenceDefaults()
+    let capture = FailingContextCapture(error: ContextCaptureError.unavailable)
+    let model = PresenceModel(
+      client: FakeCoreClient(statusValue: .init(state: .ready, version: "test")),
+      contextCapture: capture,
+      contextClient: FakeContextClient(),
+      defaults: defaults
+    )
+    await model.refresh()
+    model.setNaturalPointingEnabled(true)
+
+    model.captureNaturalPointingContext()
+    await model.waitForContextPreparation()
+    #expect(model.contextState == .idle)
+
+    model.captureContext(.selectedText)
+    await model.waitForContextPreparation()
+    #expect(model.contextState == .failed(message: "No readable context is available."))
+  }
 }
 
 @MainActor
@@ -774,6 +817,25 @@ private final class FakeContextCapture: ContextCapturePort {
   func prepareNaturalPointingCapture() {
     naturalPointingPreparationCount += 1
   }
+
+  func prepareSelectedTextCapture() {}
+}
+
+@MainActor
+private final class FailingContextCapture: ContextCapturePort {
+  private let error: Error
+
+  init(error: Error) {
+    self.error = error
+  }
+
+  func capture(_ kind: ContextCaptureKind) async throws -> CapturedContext {
+    throw error
+  }
+
+  func cancel() {}
+
+  func prepareNaturalPointingCapture() {}
 
   func prepareSelectedTextCapture() {}
 }

@@ -267,6 +267,11 @@ public final class PresenceModel: ObservableObject {
         scheduleContextExpiry(receipt)
       } catch is CancellationError {
         contextState = .idle
+      } catch let error as ContextCaptureError
+        where
+        kind == .naturalPointing && error == .unavailable
+      {
+        contextState = .idle
       } catch let error as LocalContextPrivacyError {
         contextState = .blocked(
           message: error.errorDescription ?? "Context was blocked by local policy."
