@@ -1,10 +1,10 @@
 # Release 1C Violet Sight 验收
 
-> 状态：实现候选，代码已集成到主线。真实视觉 API canary、后台 Vision 真实复测、三种 Context
-> 入口人工冒烟和视觉矩阵 20/50 已完成。用户当前未遇到其他 Bug，2026-08-27
-> 主动暂停剩余验收；后续主功能开发完成后统一恢复，也可由用户随时发起专项测试。
-> 暂停不等于通过，Release 1C 仍不标记为正式交付。2026-08-28 增加的 1C.1
-> Natural Pointing 候选已部署，仍待真实环境验收。
+> 状态：实现候选，代码已集成到主线。真实视觉 API canary、后台 Vision 真实复测、三种
+> Context 入口人工冒烟和视觉矩阵 20/50 已完成。2026-08-30 恢复 1C.1 验收后确认：
+> 唤醒级静态 Context 可处理精确 AX 选区和宽泛窗口问题，但无法稳定处理同一会话内变化
+> 的鼠标位置、颜色和小控件。用户已批准按需视觉重构，完成前不得合并 MR !20 或将
+> Release 1C/1C.1 标记为正式交付。
 
 ## 自动门禁
 
@@ -16,8 +16,8 @@ VIOLET_SWIFTPM_DISABLE_SANDBOX=1 pnpm macos:app
 
 当前基线：
 
-- TypeScript/JavaScript：79 项通过。
-- Swift：39 项通过。
+- TypeScript/JavaScript：82 项通过。
+- Swift：45 项通过。
 - Context 协议覆盖未知字段、过期、超长 TTL、越权、乱序、哈希篡改和删除。
 - DeepSeek Vision 请求使用 OpenAI 兼容图片内容块，测试不访问真实 API。
 - TOS 测试确认对象正文不含截图明文，并删除全部版本与 delete marker。
@@ -98,10 +98,11 @@ VIOLET_SWIFTPM_DISABLE_SANDBOX=1 pnpm macos:app
 - Codebase 与 GitHub 主线保持相同内容；平台生成的 merge commit 可以不同。
 - Devbox 使用同一主线代码，Core、PostgreSQL、LGTM 和 Collector 健康。
 - 代码集成不改变验收结论：Release 1C 仍是实现候选。
-- 1C.1 功能提交 `3ea3afc` 已推送至 Codebase/GitHub 的
-  `feat/1c1-natural-pointing`；Draft MR !20 的 4/4 检查通过。
-- Devbox Core 已部署 `3ea3afc` 并保持健康，数据库仍为连续的 567 条事件；本地新版
-  Mac App 已启动。
+- 1C.1 初始功能提交 `3ea3afc` 已推送至 Codebase/GitHub 的
+  `feat/1c1-natural-pointing`；Draft MR !20 的既有 4/4 检查通过，但当前本地与
+  Devbox 候选包含尚未提交的新修复，旧检查不能代表当前工作树。
+- Devbox Core 和本地 Mac App 运行健康。当前候选包含隐藏唤醒交互、自然告别退出、
+  180 秒空闲退出和耳机路由修复；按需视觉重构尚未实现。
 
 ## 唤醒候选
 
@@ -144,7 +145,14 @@ VIOLET_SWIFTPM_DISABLE_SANDBOX=1 pnpm macos:app
 - 插入或摘下耳机会停止 Wake 的 `AVAudioEngine`，旧代码仍把 detector 标记为运行；
   现在由 detector 上报配置失效，Coordinator 等待 500ms 后自动重建监听。
 - 用户完成不戴耳机、戴上耳机和摘下耳机三段真实验证，均可重新唤醒 Violet。
-- 内置扬声器模式暂不支持语音打断，仍可点击打断；耳机路径继续支持语音打断。
+- 有线耳机与内置扬声器都可能被 Core Audio 标记为 `builtIn` transport；现改为同时读取
+  标准 `hdpn` 输出数据源。有线耳机模式保留语音打断，用户已完成真实复测。
+- 内置扬声器模式暂不支持语音打断，仍可点击打断。
+- 语音唤醒不再自动弹出浮窗；菜单栏打开后继续已有会话。
+- 明确控制短句和 `Control + Option + Space` 可立即退出；180 秒无活动自动退出。
+- “拜拜”“今天就到这里吧”等自然告别由 Core 独立文字模型分类。Qwen 先完整回复，
+  Core 在对应 `response.completed` 后发出 `session.end_requested`，Mac 等本地播放队列
+  清空后停止监听。用户已确认真实行为正确。
 
 ## Natural Pointing 候选
 
@@ -165,6 +173,41 @@ VIOLET_SWIFTPM_DISABLE_SANDBOX=1 pnpm macos:app
 - 唤醒时若前台仍是 Violet 且没有保存的外部目标，自动 Natural Pointing 静默退化为
   纯语音，不显示 `No readable context is available`；手动 Context 的同类失败仍明确提示。
 
+### 2026-08-30 真实验收结论
+
+已通过：
+
+- 普通编辑器中可读取的文字选区能够通过 Accessibility 精确传入 Realtime。
+- Trae 集成终端退化为截图后，部分代码问题和宽泛窗口内容问题可以回答。
+- 唤醒不会自动打开浮窗；用户打开浮窗后继续当前语音会话。
+- 自然告别会在完整回复播放结束后退出，明确控制短句、快捷键和 180 秒空闲退出正常。
+- 内置扬声器继续阻止回声自打断；有线耳机通过 `hdpn` 数据源识别并恢复语音打断。
+
+未通过：
+
+- Trae 集成终端不暴露 `AXSelectedText`，截图 fallback 无法稳定判断视觉选区。
+- 跨行终端命令曾只返回路径后半段，也曾把右侧输入框提示误认为左侧选中代码。
+- “鼠标位置的 33”被解释成行号；实际 `33` 是 Source Control 变更数量徽标。
+- “右下角绿色按钮”被解释成白色的“全部确认”；实际目标是绿色发送按钮。
+- 日志确认 OCR 已识别完整命令，但唤醒时保存的焦点坐标会与后续问题目标不同。
+- 同一 Realtime 会话只复用唤醒时的一张截图和一个通用 Vision 摘要，后续鼠标移动、
+  界面变化和新空间指代没有新证据。
+- Qwen 并非每个视觉问题都调用 `inspect_current_context`。
+
+因此停止继续调节 OCR 距离阈值和提示词。用户已批准以下替换方案，尚未实现：
+
+1. Qwen Audio 先理解用户话语并决定是否需要视觉；普通问题直接回答。
+2. 需要视觉时由 Qwen 调用工具，Core 再向 Mac 请求当前轮截图，不在唤醒时预上传。
+3. AX 能读取选中文字时保留为快速通道；失败时才截图。
+4. Mac 不持久缓存图片；Apple Vision OCR 只用于出境前的秘密阻断和敏感遮挡，不再负责
+   目标选择。
+5. DeepSeek Vision 接收当前截图和用户原问题，直接生成最终答案，同时返回目标边界、
+   类型、颜色和置信度供 Core 校验。
+6. Core 将通过校验的答案作为工具结果交还 Qwen；Qwen 只负责自然语音播报。
+7. Core 必须兜底拦截 Qwen 漏调视觉工具的视觉问题，且不得用旧 Context 代替新截图。
+8. 当前不切换到 Qwen Omni。现用 `qwen-audio-3.0-realtime-plus` 保持语音与工具路由，
+   DeepSeek `deepseek-v4-flash-vision-exp` 继续负责视觉。
+
 本地自动测试已覆盖：
 
 - `Look` 偏好默认关闭并可持久化。
@@ -173,15 +216,19 @@ VIOLET_SWIFTPM_DISABLE_SANDBOX=1 pnpm macos:app
 - 焦点坐标通过协议、本地隐私过滤和 DeepSeek Vision 提示完整传递。
 - Realtime Context 工具注册、结果回传、Core 内部消费和打断后迟到结果丢弃。
 
-真实验收仍需完成：
+重构后的真实验收必须重新执行：
 
 1. `Look` 关闭时 20 次唤醒不得产生任何自动 Context。
-2. `Look` 开启后，选中文字、鼠标附近文字、文章、图片和图表各 10 次；正确率至少
-   90%，错误窗口或旧 Context 命中为 0。
-3. 唤醒后 Realtime 不等待 DeepSeek Vision；本地 Context 超过 4 秒时仍能进入语音，
-   并明确显示 Context 未就绪。
-4. 普通聊天不调用 Context 工具；视觉问题只产生一次后台 Vision 请求。
-5. 保密应用和绝对秘密内容出境为 0，生命周期结束后自动 Context 接受数量为 0。
+2. `Look` 开启但问题不依赖视觉时不截图、不上传，Qwen 直接回答。
+3. AX 可读选区直接回答且不截图；AX 不可读时才进入按需截图链路。
+4. 连续三轮分别移动鼠标或改变窗口内容，每轮只能使用与当前 `turnId` 匹配的新证据。
+5. DeepSeek 收到原图和用户原问题；Qwen 收到已校验的最终答案，不再根据通用摘要猜测。
+6. 终端跨行命令、Source Control 数量徽标和右下角发送按钮必须分别正确识别。
+7. 小目标返回边界框、颜色和置信度；属性或空间校验失败时明确表达不确定。
+8. 选中文字、鼠标附近文字、文章、图片和图表各 10 次，正确率至少 90%，错误窗口、
+   旧 Context 或跨轮 Context 命中为 0。
+9. 保密应用和绝对秘密内容出境为 0；受控敏感信息继续本地遮挡。
+10. 关闭、锁屏、睡眠、撤权、超时或会话结束后，临时截图与 Context 不可继续使用。
 
 ## 视觉真实验收
 
@@ -211,9 +258,8 @@ VIOLET_SWIFTPM_DISABLE_SANDBOX=1 pnpm macos:app
 
 ## 验收暂停与待测清单
 
-2026-08-27 用户确认当前实际使用未遇到其他 Bug，决定暂停剩余测试，先继续后续主功能
-开发。以下事项保留为明确的验收债务；后续主功能完成后统一恢复，也可由用户随时发起
-其中任一专项测试。
+2026-08-27 曾暂停剩余测试；2026-08-30 因 Natural Pointing 真实使用发现定位缺陷而恢复。
+当前先完成按需视觉重构，再继续扩大矩阵。
 
 视觉准确率：
 
@@ -244,12 +290,12 @@ Context 生命周期：
   8 小时办公环境，以及锁屏、睡眠、切换用户和 Realtime 会话期间停采验证。
 - 唤醒前 PCM 写盘、上传和日志记录数量必须为 0。
 
-暂停期间保持的结论：
+当前结论：
 
-- 当前没有由用户实际使用发现但尚未修复的 1C Bug。
-- 上述功能已有实现和自动测试；未完成项是扩大样本后的真实交付证据。
-- 代码可以进入主线供后续阶段复用；只有恢复并通过原定门槛后，才能标记 Release 1C
-  正式交付。
+- Natural Pointing 当前存在已确认且尚未修复的跨轮新鲜度和精细定位缺陷。
+- 已验证的底层 Context、隐私和手动 Region 能力继续保留；唤醒级静态 Context 不能作为
+  最终方案合并。
+- 按需视觉重构和原定门槛通过前，不得将 Release 1C 或 1C.1 标记为正式交付。
 
 通过标准：
 
@@ -275,3 +321,5 @@ Context 生命周期：
 - 将 `VIOLET_CONTEXT_STORAGE_PROVIDER` 设为 `memory` 可停止 TOS 临时对象写入。
 - 关闭 Mac Wake 开关可停止本地唤醒，不影响快捷键、文字和手动语音入口。
 - 删除 Context Session 后，现有 Release 1B 文字和实时语音路径保持不变。
+- 按需截图超时、Qwen 未路由或 Vision 失败时，不使用旧 Context 代替；明确失败并允许
+  用户改用 `Region`。
