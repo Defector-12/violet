@@ -81,7 +81,7 @@ struct ContextCaptureTests {
 
   @Test
   @MainActor
-  func naturalPointingPrefersPreparedSelectedText() async throws {
+  func naturalPointingReadsCurrentSelectedText() async throws {
     let source = ContextApplicationTarget(
       bundleIdentifier: "com.example.Reader",
       processIdentifier: 303
@@ -95,7 +95,6 @@ struct ContextCaptureTests {
       selectionReader: { _, _ in .text("selected word") }
     )
 
-    capture.prepareNaturalPointingCapture()
     let result = try await capture.capture(.naturalPointing)
 
     #expect(

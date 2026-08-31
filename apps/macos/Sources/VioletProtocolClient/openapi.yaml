@@ -253,6 +253,8 @@ paths:
                         type: string
                         minLength: 2
                         maxLength: 35
+                      onDemandContext:
+                        type: boolean
                       outputAudio:
                         $ref: '#/components/schemas/audioFormat'
                       outputModalities:
@@ -364,6 +366,61 @@ paths:
                     $ref: '#/components/schemas/uuid'
                   type:
                     const: response.cancel
+              - type: object
+                additionalProperties: false
+                required:
+                  - context
+                  - eventId
+                  - requestId
+                  - sequence
+                  - sessionId
+                  - turnId
+                  - type
+                properties:
+                  context:
+                    $ref: '#/components/schemas/context-envelope.schema'
+                  eventId:
+                    $ref: '#/components/schemas/uuid'
+                  requestId:
+                    $ref: '#/components/schemas/uuid'
+                  sequence:
+                    $ref: '#/components/schemas/sequence'
+                  sessionId:
+                    $ref: '#/components/schemas/uuid'
+                  turnId:
+                    $ref: '#/components/schemas/uuid'
+                  type:
+                    const: context.capture.succeeded
+              - type: object
+                additionalProperties: false
+                required:
+                  - eventId
+                  - reason
+                  - requestId
+                  - sequence
+                  - sessionId
+                  - turnId
+                  - type
+                properties:
+                  eventId:
+                    $ref: '#/components/schemas/uuid'
+                  reason:
+                    type: string
+                    enum:
+                      - blocked
+                      - cancelled
+                      - permission_denied
+                      - unavailable
+                  requestId:
+                    $ref: '#/components/schemas/uuid'
+                  sequence:
+                    $ref: '#/components/schemas/sequence'
+                  sessionId:
+                    $ref: '#/components/schemas/uuid'
+                  turnId:
+                    $ref: '#/components/schemas/uuid'
+                  type:
+                    const: context.capture.failed
               - type: object
                 additionalProperties: false
                 required:
@@ -686,6 +743,32 @@ paths:
                     $ref: '#/components/schemas/uuid'
                   type:
                     const: session.end_requested
+              - type: object
+                additionalProperties: false
+                required:
+                  - eventId
+                  - expiresAt
+                  - requestId
+                  - sequence
+                  - sessionId
+                  - turnId
+                  - type
+                properties:
+                  eventId:
+                    $ref: '#/components/schemas/uuid'
+                  expiresAt:
+                    type: string
+                    format: date-time
+                  requestId:
+                    $ref: '#/components/schemas/uuid'
+                  sequence:
+                    $ref: '#/components/schemas/sequence'
+                  sessionId:
+                    $ref: '#/components/schemas/uuid'
+                  turnId:
+                    $ref: '#/components/schemas/uuid'
+                  type:
+                    const: context.capture.requested
               - type: object
                 additionalProperties: false
                 required:
@@ -1374,6 +1457,8 @@ components:
                   type: string
                   minLength: 2
                   maxLength: 35
+                onDemandContext:
+                  type: boolean
                 outputAudio:
                   $ref: '#/components/schemas/audioFormat'
                 outputModalities:
@@ -1485,6 +1570,61 @@ components:
               $ref: '#/components/schemas/uuid'
             type:
               const: response.cancel
+        - type: object
+          additionalProperties: false
+          required:
+            - context
+            - eventId
+            - requestId
+            - sequence
+            - sessionId
+            - turnId
+            - type
+          properties:
+            context:
+              $ref: '#/components/schemas/context-envelope.schema'
+            eventId:
+              $ref: '#/components/schemas/uuid'
+            requestId:
+              $ref: '#/components/schemas/uuid'
+            sequence:
+              $ref: '#/components/schemas/sequence'
+            sessionId:
+              $ref: '#/components/schemas/uuid'
+            turnId:
+              $ref: '#/components/schemas/uuid'
+            type:
+              const: context.capture.succeeded
+        - type: object
+          additionalProperties: false
+          required:
+            - eventId
+            - reason
+            - requestId
+            - sequence
+            - sessionId
+            - turnId
+            - type
+          properties:
+            eventId:
+              $ref: '#/components/schemas/uuid'
+            reason:
+              type: string
+              enum:
+                - blocked
+                - cancelled
+                - permission_denied
+                - unavailable
+            requestId:
+              $ref: '#/components/schemas/uuid'
+            sequence:
+              $ref: '#/components/schemas/sequence'
+            sessionId:
+              $ref: '#/components/schemas/uuid'
+            turnId:
+              $ref: '#/components/schemas/uuid'
+            type:
+              const: context.capture.failed
         - type: object
           additionalProperties: false
           required:
@@ -1820,6 +1960,32 @@ components:
               $ref: '#/components/schemas/uuid'
             type:
               const: session.end_requested
+        - type: object
+          additionalProperties: false
+          required:
+            - eventId
+            - expiresAt
+            - requestId
+            - sequence
+            - sessionId
+            - turnId
+            - type
+          properties:
+            eventId:
+              $ref: '#/components/schemas/uuid'
+            expiresAt:
+              type: string
+              format: date-time
+            requestId:
+              $ref: '#/components/schemas/uuid'
+            sequence:
+              $ref: '#/components/schemas/sequence'
+            sessionId:
+              $ref: '#/components/schemas/uuid'
+            turnId:
+              $ref: '#/components/schemas/uuid'
+            type:
+              const: context.capture.requested
         - type: object
           additionalProperties: false
           required:

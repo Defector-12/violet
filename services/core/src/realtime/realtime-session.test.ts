@@ -422,6 +422,7 @@ describe("RealtimeSession", () => {
               yield {
                 callId: "call-context",
                 query: "What does this word mean?",
+                responseId,
                 turnId,
                 type: "context-request",
               } as const;
@@ -480,6 +481,276 @@ describe("RealtimeSession", () => {
         type: "context-result",
       },
     ]);
+  });
+
+  it("requests fresh Mac context and returns exact Accessibility evidence", async () => {
+    const sessionId = randomUUID();
+    const turnId = randomUUID();
+    const responseId = randomUUID();
+    const receivedInputs: RealtimeConversationInput[] = [];
+    const session = new RealtimeSession({
+      conversationEndIntent: neverEndsConversation,
+      contextService: createContextService(),
+      conversationPort: {
+        supportsContextLookup: true,
+        async open() {
+          return {
+            capabilities: {
+              inputModalities: ["audio"],
+              interruption: true,
+              outputModalities: ["audio", "text"],
+              runtimeKind: "integrated",
+              transcription: true,
+              turnDetection: "smart_turn",
+              voiceKind: "preset",
+            },
+            async close() {},
+            async *outputs() {
+              yield { responseId, turnId, type: "response-started" } as const;
+              yield {
+                callId: "call-current-view",
+                query: "这个词是什么意思？",
+                responseId,
+                turnId,
+                type: "context-request",
+              } as const;
+            },
+            async send(input) {
+              receivedInputs.push(input);
+            },
+          };
+        },
+      },
+      generateId: randomUUID,
+      ledger: new InMemoryConversationLedger(),
+    });
+    await collect(
+      session.handle({
+        configuration: {
+          inputModalities: ["audio"],
+          onDemandContext: true,
+          outputModalities: ["audio", "text"],
+          protocolVersion: "1",
+          turnDetection: "smart_turn",
+        },
+        eventId: randomUUID(),
+        sequence: 1,
+        sessionId,
+        type: "session.configure",
+      }),
+    );
+
+    const output = await collect(session.outputs());
+    expect(output.map((event) => event.type)).toEqual([
+      "response.started",
+      "response.cancelled",
+      "context.capture.requested",
+    ]);
+    const request = output.find((event) => event.type === "context.capture.requested");
+    expect(request).toMatchObject({
+      turnId,
+      type: "context.capture.requested",
+    });
+    if (request?.type !== "context.capture.requested") {
+      throw new Error("Expected a context capture request");
+    }
+    const capturedAt = new Date();
+    await collect(
+      session.handle({
+        context: contextEnvelope("ephemeral", request.requestId, capturedAt),
+        eventId: randomUUID(),
+        requestId: request.requestId,
+        sequence: 2,
+        sessionId,
+        turnId,
+        type: "context.capture.succeeded",
+      }),
+    );
+    await waitUntil(() => receivedInputs.length === 1);
+
+    expect(receivedInputs).toMatchObject([
+      {
+        callId: "call-current-view",
+        output: expect.stringContaining("Selected text:\\nephemeral"),
+        type: "context-result",
+      },
+    ]);
+  });
+
+  it("blocks an explicit visual answer until Core grounding is available", async () => {
+    const sessionId = randomUUID();
+    const turnId = randomUUID();
+    const responseId = randomUUID();
+    const receivedInputs: RealtimeConversationInput[] = [];
+    const session = new RealtimeSession({
+      conversationEndIntent: neverEndsConversation,
+      contextService: createContextService(),
+      conversationPort: {
+        supportsContextLookup: true,
+        async open() {
+          return {
+            capabilities: {
+              inputModalities: ["audio"],
+              interruption: true,
+              outputModalities: ["audio", "text"],
+              runtimeKind: "integrated",
+              transcription: true,
+              turnDetection: "smart_turn",
+              voiceKind: "preset",
+            },
+            async close() {},
+            async *outputs() {
+              yield {
+                final: true,
+                text: "右下角绿色按钮有什么作用？",
+                turnId,
+                type: "transcript",
+              } as const;
+              yield { responseId, turnId, type: "response-started" } as const;
+              yield {
+                responseId,
+                text: "It might confirm everything.",
+                turnId,
+                type: "response-text",
+              } as const;
+              yield { responseId, type: "response-cancelled" } as const;
+            },
+            async send(input) {
+              receivedInputs.push(input);
+            },
+          };
+        },
+      },
+      generateId: randomUUID,
+      ledger: new InMemoryConversationLedger(),
+    });
+    await collect(
+      session.handle({
+        configuration: {
+          inputModalities: ["audio"],
+          onDemandContext: true,
+          outputModalities: ["audio", "text"],
+          protocolVersion: "1",
+          turnDetection: "smart_turn",
+        },
+        eventId: randomUUID(),
+        sequence: 1,
+        sessionId,
+        type: "session.configure",
+      }),
+    );
+
+    const output = await collect(session.outputs());
+    expect(output.map((event) => event.type)).toEqual([
+      "input.transcript",
+      "context.capture.requested",
+    ]);
+    expect(receivedInputs).toContainEqual({ responseId, type: "cancel" });
+    const request = output[1];
+    if (request?.type !== "context.capture.requested") {
+      throw new Error("Expected a context capture request");
+    }
+    await collect(
+      session.handle({
+        context: contextEnvelope("fresh evidence", request.requestId, new Date()),
+        eventId: randomUUID(),
+        requestId: request.requestId,
+        sequence: 2,
+        sessionId,
+        turnId,
+        type: "context.capture.succeeded",
+      }),
+    );
+    await waitUntil(() => receivedInputs.some((input) => input.type === "context-grounding"));
+
+    expect(receivedInputs).toContainEqual({
+      output: expect.stringContaining("fresh evidence"),
+      query: "右下角绿色按钮有什么作用？",
+      turnId,
+      type: "context-grounding",
+    });
+  });
+
+  it("ignores a stale capture result after a newer speech turn starts", async () => {
+    const sessionId = randomUUID();
+    const oldTurnId = randomUUID();
+    const newTurnId = randomUUID();
+    const responseId = randomUUID();
+    const session = new RealtimeSession({
+      conversationEndIntent: neverEndsConversation,
+      contextService: createContextService(),
+      conversationPort: {
+        supportsContextLookup: true,
+        async open() {
+          return {
+            capabilities: {
+              inputModalities: ["audio"],
+              interruption: true,
+              outputModalities: ["audio", "text"],
+              runtimeKind: "integrated",
+              transcription: true,
+              turnDetection: "smart_turn",
+              voiceKind: "preset",
+            },
+            async close() {},
+            async *outputs() {
+              yield {
+                callId: "old-call",
+                query: "What is this?",
+                responseId,
+                turnId: oldTurnId,
+                type: "context-request",
+              } as const;
+              yield {
+                turnId: newTurnId,
+                type: "speech-started",
+              } as const;
+            },
+            async send() {},
+          };
+        },
+      },
+      generateId: randomUUID,
+      ledger: new InMemoryConversationLedger(),
+    });
+    await collect(
+      session.handle({
+        configuration: {
+          inputModalities: ["audio"],
+          onDemandContext: true,
+          outputModalities: ["audio", "text"],
+          protocolVersion: "1",
+          turnDetection: "smart_turn",
+        },
+        eventId: randomUUID(),
+        sequence: 1,
+        sessionId,
+        type: "session.configure",
+      }),
+    );
+    const output = await collect(session.outputs());
+    const request = output[0];
+    if (request?.type !== "context.capture.requested") {
+      throw new Error("Expected a context capture request");
+    }
+
+    const staleResult = await collect(
+      session.handle({
+        context: contextEnvelope("stale evidence", request.requestId, new Date()),
+        eventId: randomUUID(),
+        requestId: request.requestId,
+        sequence: 2,
+        sessionId,
+        turnId: oldTurnId,
+        type: "context.capture.succeeded",
+      }),
+    );
+
+    expect(output.map((event) => event.type)).toEqual([
+      "context.capture.requested",
+      "input.speech.started",
+    ]);
+    expect(staleResult).toEqual([]);
   });
 
   it("rejects out-of-order and mismatched events without advancing client state", async () => {
@@ -633,6 +904,36 @@ const neverEndsConversation: ConversationEndIntentPort = {
     return false;
   },
 };
+
+function contextEnvelope(text: string, sessionId: string, capturedAt: Date) {
+  return {
+    authorization: {
+      controlledSensitiveAllowed: false,
+      grantId: randomUUID(),
+      mode: "explicit" as const,
+      purpose: "conversation" as const,
+      retention: "ephemeral" as const,
+    },
+    capturedAt: capturedAt.toISOString(),
+    completeness: 1,
+    confidence: 1,
+    eventId: randomUUID(),
+    expiresAt: new Date(capturedAt.getTime() + 300_000).toISOString(),
+    payload: {
+      text,
+      type: "focus.text" as const,
+    },
+    protocolVersion: "1" as const,
+    redactions: [],
+    sensitivity: "personal" as const,
+    sequence: 1,
+    sessionId,
+    source: {
+      deviceId: randomUUID(),
+      modality: "accessibility" as const,
+    },
+  };
+}
 
 function createContextService(): ContextService {
   return new ContextService({

@@ -27,6 +27,9 @@
               "minLength": 2,
               "maxLength": 35
             },
+            "onDemandContext": {
+              "type": "boolean"
+            },
             "outputAudio": {
               "$ref": "#/$defs/audioFormat"
             },
@@ -157,6 +160,63 @@
         },
         "type": {
           "const": "response.cancel"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["context", "eventId", "requestId", "sequence", "sessionId", "turnId", "type"],
+      "properties": {
+        "context": {
+          "$ref": "./context-envelope.schema.json"
+        },
+        "eventId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "requestId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "sequence": {
+          "$ref": "#/$defs/sequence"
+        },
+        "sessionId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "turnId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "type": {
+          "const": "context.capture.succeeded"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["eventId", "reason", "requestId", "sequence", "sessionId", "turnId", "type"],
+      "properties": {
+        "eventId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "reason": {
+          "type": "string",
+          "enum": ["blocked", "cancelled", "permission_denied", "unavailable"]
+        },
+        "requestId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "sequence": {
+          "$ref": "#/$defs/sequence"
+        },
+        "sessionId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "turnId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "type": {
+          "const": "context.capture.failed"
         }
       }
     },

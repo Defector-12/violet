@@ -36,7 +36,6 @@ public enum ContextCaptureError: Error, Equatable, LocalizedError {
 public protocol ContextCapturePort: AnyObject {
   func capture(_ kind: ContextCaptureKind) async throws -> CapturedContext
   func cancel()
-  func prepareNaturalPointingCapture()
   func prepareSelectedTextCapture()
 }
 
@@ -52,8 +51,6 @@ public final class SilentContextCapture: ContextCapturePort {
   }
 
   public func cancel() {}
-
-  public func prepareNaturalPointingCapture() {}
 
   public func prepareSelectedTextCapture() {}
 }
@@ -78,7 +75,6 @@ public final class SystemContextCapture: NSObject, ContextCapturePort {
   private let focusedElementReader: (pid_t) -> AXUIElement?
   private var pickerContinuation: CheckedContinuation<SelectedFilter, Error>?
   private var regionSelector: RegionSelectionController?
-  private var naturalPointingLocation: CGPoint?
   private var selectedTextElement: AXUIElement?
   private var selectedTextTarget: ContextApplicationTarget?
   private let selectionReader: (pid_t?, AXUIElement?) -> AccessibilitySelectionResult
@@ -130,11 +126,6 @@ public final class SystemContextCapture: NSObject, ContextCapturePort {
     selectedTextElement = focusedElementReader(application.processIdentifier)
   }
 
-  public func prepareNaturalPointingCapture() {
-    prepareSelectedTextCapture()
-    naturalPointingLocation = NSEvent.mouseLocation
-  }
-
   public func capture(_ kind: ContextCaptureKind) async throws -> CapturedContext {
     switch kind {
     case .naturalPointing:
@@ -159,7 +150,6 @@ public final class SystemContextCapture: NSObject, ContextCapturePort {
     regionSelector = nil
     selectedTextElement = nil
     selectedTextTarget = nil
-    naturalPointingLocation = nil
     SCContentSharingPicker.shared.isActive = false
     SCContentSharingPicker.shared.remove(self)
   }
@@ -193,7 +183,11 @@ public final class SystemContextCapture: NSObject, ContextCapturePort {
   }
 
   private func captureNaturalPointing() async throws -> CapturedContext {
-    let target = selectedTextTarget ?? activeApplication()
+    let currentTarget = activeApplication()
+    let target =
+      currentTarget?.processIdentifier == currentProcessIdentifier
+      ? selectedTextTarget
+      : currentTarget
     guard
       let target,
       target.processIdentifier != currentProcessIdentifier
@@ -207,7 +201,14 @@ public final class SystemContextCapture: NSObject, ContextCapturePort {
     }
 
     if accessibilityAccess() {
-      let selection = selectionReader(target.processIdentifier, selectedTextElement)
+      let focusedElement =
+        target == selectedTextTarget
+        ? selectedTextElement
+        : focusedElementReader(target.processIdentifier)
+      let selection = selectionReader(
+        target.processIdentifier,
+        focusedElement
+      )
       switch selection {
       case .secureField:
         throw LocalContextPrivacyError.blockedApplication
@@ -226,11 +227,9 @@ public final class SystemContextCapture: NSObject, ContextCapturePort {
       onScreenWindowsOnly: true
     )
     let pointer: CGPoint?
-    if let naturalPointingLocation,
-      let primaryScreenFrame = NSScreen.screens.first?.frame
-    {
+    if let primaryScreenFrame = NSScreen.screens.first?.frame {
       pointer = screenCapturePoint(
-        from: naturalPointingLocation,
+        from: NSEvent.mouseLocation,
         primaryScreenFrame: primaryScreenFrame
       )
     } else {

@@ -21,8 +21,8 @@ const outputAudio = {
 const defaultInstructions =
   "You are Violet, the user's private AI assistant. Reply naturally and concisely in the user's language. Never claim an action completed without a Core-confirmed tool result.";
 const contextLookupInstructions =
-  "Current visual context is available. When the user refers to this, that, here, the current screen, selected content, pointed content, a word, a line, an article, an image, or a chart, you must call inspect_current_context before answering or asking the user to identify it. Use the user's wording to choose among the returned evidence: for selected text or selected code, prefer the visible selection and include its complete contiguous content across wrapped lines; for pointed content, prefer the pointer target. A pointer-adjacent OCR candidate is not proof of selection. Do not infer the target from conversation history.";
-const inspectContextToolName = "inspect_current_context";
+  "You may inspect the user's current authorized view. When the user refers to this, that, here, the current screen, selected content, pointed content, a word, a line, an article, an image, or a chart, you must call inspect_current_view before answering or asking the user to identify it. The tool returns either exact Accessibility text or a final answer grounded in a fresh screenshot. State unavailable results honestly and do not infer the target from conversation history.";
+const inspectContextToolName = "inspect_current_view";
 const inspectContextTool = {
   function: {
     description:
@@ -256,6 +256,9 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
       case "context-result":
         await this.#sendContextResult(input.callId, input.output);
         break;
+      case "context-grounding":
+        await this.#sendGroundedContext(input);
+        break;
       case "text":
         await this.#sendText(input.text, input.turnId);
         break;
@@ -364,6 +367,31 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
     await this.#transport.send({ type: "response.create" });
   }
 
+  async #sendGroundedContext(
+    input: Extract<RealtimeConversationInput, { readonly type: "context-grounding" }>,
+  ): Promise<void> {
+    const callId = this.#generateId();
+    await this.#transport.send({
+      item: {
+        arguments: JSON.stringify({ question: input.query }),
+        call_id: callId,
+        name: inspectContextToolName,
+        type: "function_call",
+      },
+      type: "conversation.item.create",
+    });
+    await this.#transport.send({
+      item: {
+        call_id: callId,
+        output: input.output,
+        type: "function_call_output",
+      },
+      type: "conversation.item.create",
+    });
+    this.#currentTurnId = input.turnId;
+    await this.#transport.send({ type: "response.create" });
+  }
+
   async #mapProviderEvent(
     event: Readonly<Record<string, unknown>> & { readonly type: string },
   ): Promise<RealtimeConversationOutput | undefined> {
@@ -431,6 +459,7 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
       return {
         callId,
         query: contextQuestion(event["arguments"]),
+        responseId: context.localResponseId,
         turnId: context.turnId,
         type: "context-request",
       };

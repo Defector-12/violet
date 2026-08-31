@@ -165,6 +165,13 @@ struct LocalContextPrivacyTests {
       contextImagePoint(.init(x: 0.25, y: 0.75), width: 32, height: 32)
         == CGPoint(x: 8, y: 8)
     )
+    guard case .image(_, _, _, let onDemandText, _, _, _, _) =
+      result.withoutLocalOCR().payload
+    else {
+      Issue.record("Expected an on-demand image")
+      return
+    }
+    #expect(onDemandText == nil)
   }
 
   @Test

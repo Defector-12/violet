@@ -10,6 +10,20 @@ import type { RealtimeClientEvent, RealtimeServerEvent } from "@violet/protocol"
 
 import { type ContextService, ContextServiceError } from "../context/context-service.js";
 import type { ConversationEndIntentPort } from "./conversation-end-intent.js";
+import { formatVisualResult } from "./visual-grounding.js";
+import { explicitlyRequiresCurrentView } from "./visual-intent.js";
+
+interface PendingContextCapture {
+  readonly abortController: AbortController;
+  readonly callId?: string;
+  readonly conversation: RealtimeConversation;
+  readonly expiresAt: Date;
+  readonly query: string;
+  readonly requestId: string;
+  readonly requestedAt: Date;
+  readonly timeout: NodeJS.Timeout;
+  readonly turnId: string;
+}
 
 export interface RealtimeSessionOptions {
   readonly conversationEndIntent: ConversationEndIntentPort;
@@ -30,10 +44,16 @@ export class RealtimeSession {
   readonly #assistantContent = new Map<string, string>();
   readonly #clientEventIds = new Set<string>();
   readonly #endIntentByTurn = new Map<string, Promise<boolean>>();
+  readonly #finalTranscripts = new Map<string, string>();
+  readonly #pendingContextCaptures = new Map<string, PendingContextCapture>();
   readonly #persistedTurns = new Set<string>();
+  readonly #visibleResponseIds = new Set<string>();
+  readonly #visualRequiredTurns = new Map<string, string>();
+  readonly #visualRequestedTurns = new Set<string>();
   #closed = false;
   #conversation: RealtimeConversation | null = null;
   #contextSessionId: string | null = null;
+  #onDemandContext = false;
   #expectedClientSequence = 1;
   #serverSequence = 1;
   #sessionId: string | null = null;
@@ -64,7 +84,16 @@ export class RealtimeSession {
     this.#assistantContent.clear();
     this.#clientEventIds.clear();
     this.#endIntentByTurn.clear();
+    this.#finalTranscripts.clear();
+    for (const pending of this.#pendingContextCaptures.values()) {
+      clearTimeout(pending.timeout);
+      pending.abortController.abort();
+    }
+    this.#pendingContextCaptures.clear();
     this.#persistedTurns.clear();
+    this.#visibleResponseIds.clear();
+    this.#visualRequiredTurns.clear();
+    this.#visualRequestedTurns.clear();
     this.#contextSessionId = null;
   }
 
@@ -138,13 +167,17 @@ export class RealtimeSession {
         {
           ...mapConfiguration(event.configuration),
           ...(contextEvidence ? { contextEvidence } : {}),
-          ...(this.#contextSessionId && this.#conversationPort.supportsContextLookup
+          ...((this.#contextSessionId || event.configuration.onDemandContext) &&
+          this.#conversationPort.supportsContextLookup
             ? { contextLookupAvailable: true }
             : {}),
           history,
         },
         signal,
       );
+      this.#onDemandContext =
+        event.configuration.onDemandContext === true &&
+        this.#conversationPort.supportsContextLookup === true;
       yield {
         capabilities: {
           ...(this.#conversation.capabilities.inputAudio
@@ -181,6 +214,46 @@ export class RealtimeSession {
       return;
     }
 
+    if (event.type === "context.capture.succeeded" || event.type === "context.capture.failed") {
+      const pending = this.#pendingContextCaptures.get(event.requestId);
+      if (!pending || pending.turnId !== event.turnId) {
+        return;
+      }
+      clearTimeout(pending.timeout);
+      if (pending.expiresAt <= this.#now()) {
+        this.#pendingContextCaptures.delete(event.requestId);
+        pending.abortController.abort();
+        void this.#sendUnavailableContext(pending, "The context capture request expired.");
+        return;
+      }
+      if (
+        event.type === "context.capture.succeeded" &&
+        (event.context.sessionId.toLowerCase() !== event.requestId.toLowerCase() ||
+          new Date(event.context.capturedAt) < pending.requestedAt)
+      ) {
+        this.#pendingContextCaptures.delete(event.requestId);
+        pending.abortController.abort();
+        void this.#sendUnavailableContext(
+          pending,
+          "The captured view does not match the current request.",
+        );
+        return;
+      }
+      if (event.type === "context.capture.failed") {
+        this.#pendingContextCaptures.delete(event.requestId);
+        pending.abortController.abort();
+        void this.#sendUnavailableContext(
+          pending,
+          event.reason === "blocked"
+            ? "Local privacy policy blocked access to the current view."
+            : "The current view could not be captured.",
+        );
+        return;
+      }
+      void this.#resolveOnDemandContext(pending, event.context).catch(() => undefined);
+      return;
+    }
+
     if (event.type === "input.text") {
       await this.#persistUserTurn(event.turnId, event.text);
     }
@@ -203,10 +276,41 @@ export class RealtimeSession {
     }
     for await (const output of conversation.outputs(signal)) {
       if (output.type === "context-request") {
-        void this.#resolveContextRequest(conversation, output, signal).catch(() => undefined);
+        if (this.#onDemandContext) {
+          if (this.#visibleResponseIds.delete(output.responseId) && this.#sessionId) {
+            const cancelled = {
+              responseId: output.responseId,
+              type: "response-cancelled",
+            } as const;
+            await this.#persistOutput(cancelled);
+            yield this.#mapOutput(this.#sessionId, cancelled);
+          }
+          const request = this.#beginContextCapture({
+            callId: output.callId,
+            conversation,
+            query: this.#finalTranscripts.get(output.turnId) ?? output.query,
+            turnId: output.turnId,
+          });
+          if (request) {
+            yield request;
+          }
+        } else {
+          void this.#resolveContextRequest(conversation, output, signal).catch(() => undefined);
+        }
         continue;
       }
+      if (output.type === "speech-started") {
+        this.#cancelPendingContextCaptures(output.turnId);
+      }
       if (output.type === "transcript" && output.final) {
+        this.#finalTranscripts.set(output.turnId, output.text);
+        if (
+          this.#onDemandContext &&
+          !this.#visualRequestedTurns.has(output.turnId) &&
+          explicitlyRequiresCurrentView(output.text)
+        ) {
+          this.#visualRequiredTurns.set(output.turnId, output.text);
+        }
         this.#endIntentByTurn.set(
           output.turnId,
           this.#conversationEndIntent
@@ -214,13 +318,26 @@ export class RealtimeSession {
             .catch(() => false),
         );
       }
+      if (this.#shouldSuppressForVisualRouting(output)) {
+        const request = await this.#fallbackContextCapture(conversation, output);
+        if (request) {
+          yield request;
+        }
+        continue;
+      }
       await this.#persistOutput(output);
+      if (output.type === "response-started") {
+        this.#visibleResponseIds.add(output.responseId);
+      } else if (output.type === "response-completed" || output.type === "response-cancelled") {
+        this.#visibleResponseIds.delete(output.responseId);
+      }
       if (!this.#sessionId) {
         return;
       }
       yield this.#mapOutput(this.#sessionId, output);
       if (output.type === "response-completed") {
         const shouldEnd = await this.#takeEndIntent(output.turnId);
+        this.#finalTranscripts.delete(output.turnId);
         if (shouldEnd) {
           yield {
             reason: "user_intent",
@@ -237,6 +354,172 @@ export class RealtimeSession {
     const pending = this.#endIntentByTurn.get(turnId);
     this.#endIntentByTurn.delete(turnId);
     return pending ? pending : false;
+  }
+
+  #beginContextCapture(input: {
+    readonly callId?: string;
+    readonly conversation: RealtimeConversation;
+    readonly query: string;
+    readonly turnId: string;
+  }): RealtimeServerEvent | null {
+    if (!this.#sessionId || this.#visualRequestedTurns.has(input.turnId)) {
+      return null;
+    }
+    this.#visualRequestedTurns.add(input.turnId);
+    const requestId = this.#generateId();
+    const requestedAt = this.#now();
+    const expiresAt = new Date(requestedAt.getTime() + 15_000);
+    const abortController = new AbortController();
+    const pending: PendingContextCapture = {
+      abortController,
+      ...(input.callId ? { callId: input.callId } : {}),
+      conversation: input.conversation,
+      expiresAt,
+      query: input.query,
+      requestId,
+      requestedAt,
+      timeout: setTimeout(() => {
+        if (this.#pendingContextCaptures.delete(requestId)) {
+          abortController.abort();
+          this.#clearVisualTurn(input.turnId);
+          void this.#sendUnavailableContext(pending, "The current view was not captured in time.");
+        }
+      }, 15_000),
+      turnId: input.turnId,
+    };
+    this.#pendingContextCaptures.set(requestId, pending);
+    return {
+      expiresAt: expiresAt.toISOString(),
+      requestId,
+      turnId: input.turnId,
+      ...this.#baseEvent(this.#sessionId),
+      type: "context.capture.requested",
+    };
+  }
+
+  #shouldSuppressForVisualRouting(output: RealtimeConversationOutput): boolean {
+    if (
+      output.type !== "response-started" &&
+      output.type !== "response-text" &&
+      output.type !== "response-audio" &&
+      output.type !== "response-cancelled"
+    ) {
+      return false;
+    }
+    return output.type === "response-cancelled"
+      ? this.#visualRequestedTurns.size > 0 && !this.#visibleResponseIds.has(output.responseId)
+      : this.#visualRequiredTurns.has(output.turnId);
+  }
+
+  async #fallbackContextCapture(
+    conversation: RealtimeConversation,
+    output: RealtimeConversationOutput,
+  ): Promise<RealtimeServerEvent | null> {
+    if (
+      output.type !== "response-text" &&
+      output.type !== "response-audio" &&
+      output.type !== "response-completed"
+    ) {
+      return null;
+    }
+    const turnId = output.turnId;
+    const query = this.#visualRequiredTurns.get(turnId);
+    if (!query || this.#visualRequestedTurns.has(turnId)) {
+      return null;
+    }
+    if (output.type !== "response-completed") {
+      await conversation.send({
+        responseId: output.responseId,
+        type: "cancel",
+      });
+    }
+    return this.#beginContextCapture({
+      conversation,
+      query,
+      turnId,
+    });
+  }
+
+  #clearVisualTurn(turnId: string): void {
+    this.#visualRequiredTurns.delete(turnId);
+    this.#visualRequestedTurns.delete(turnId);
+  }
+
+  #cancelPendingContextCaptures(activeTurnId: string): void {
+    for (const [requestId, pending] of this.#pendingContextCaptures) {
+      if (pending.turnId === activeTurnId) {
+        continue;
+      }
+      this.#pendingContextCaptures.delete(requestId);
+      clearTimeout(pending.timeout);
+      pending.abortController.abort();
+      this.#clearVisualTurn(pending.turnId);
+    }
+    for (const turnId of this.#finalTranscripts.keys()) {
+      if (turnId !== activeTurnId) {
+        this.#finalTranscripts.delete(turnId);
+        this.#endIntentByTurn.delete(turnId);
+        this.#clearVisualTurn(turnId);
+      }
+    }
+  }
+
+  async #resolveOnDemandContext(
+    pending: PendingContextCapture,
+    envelope: Extract<
+      RealtimeClientEvent,
+      { readonly type: "context.capture.succeeded" }
+    >["context"],
+  ): Promise<void> {
+    try {
+      const question = this.#finalTranscripts.get(pending.turnId) ?? pending.query;
+      await this.#contextService.submit(envelope, pending.abortController.signal, question);
+      const context = await this.#contextService.get(envelope.sessionId);
+      pending.abortController.signal.throwIfAborted();
+      const result = formatVisualResult(context, question);
+      this.#clearVisualTurn(pending.turnId);
+      await this.#sendResolvedContext(pending, result);
+    } catch {
+      if (pending.abortController.signal.aborted) {
+        return;
+      }
+      await this.#sendUnavailableContext(
+        pending,
+        "The current view could not be understood reliably.",
+      );
+    } finally {
+      if (this.#pendingContextCaptures.get(pending.requestId) === pending) {
+        this.#pendingContextCaptures.delete(pending.requestId);
+      }
+      await this.#contextService.delete(envelope.sessionId).catch(() => undefined);
+    }
+  }
+
+  async #sendUnavailableContext(pending: PendingContextCapture, message: string): Promise<void> {
+    this.#clearVisualTurn(pending.turnId);
+    await this.#sendResolvedContext(
+      pending,
+      JSON.stringify({ message, status: "unavailable" }),
+    ).catch(() => undefined);
+  }
+
+  async #sendResolvedContext(pending: PendingContextCapture, output: string): Promise<void> {
+    if (pending.callId) {
+      await pending.conversation.send({
+        callId: pending.callId,
+        output,
+        type: "context-result",
+      });
+      return;
+    }
+    await pending.conversation
+      .send({
+        output,
+        query: pending.query,
+        turnId: pending.turnId,
+        type: "context-grounding",
+      })
+      .catch(() => undefined);
   }
 
   async #resolveContextRequest(
@@ -454,7 +737,16 @@ function mapConfiguration(
 }
 
 function mapInput(
-  event: Exclude<RealtimeClientEvent, { readonly type: "session.close" | "session.configure" }>,
+  event: Exclude<
+    RealtimeClientEvent,
+    {
+      readonly type:
+        | "context.capture.failed"
+        | "context.capture.succeeded"
+        | "session.close"
+        | "session.configure";
+    }
+  >,
 ): RealtimeConversationInput {
   switch (event.type) {
     case "input.text":

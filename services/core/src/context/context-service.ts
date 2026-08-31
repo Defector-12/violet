@@ -4,6 +4,7 @@ import type {
   ContextArtifactStore,
   ContextPayload,
   ContextSessionRepository,
+  ContextTargetEvidence,
   ContextUnderstandingPort,
   ResolvedContext,
 } from "@violet/domain";
@@ -14,10 +15,12 @@ import { recordContextStageDuration } from "../telemetry-signals.js";
 
 type ImageContextPayload = Extract<ContextPayload, { readonly image: unknown }>;
 type ContextResolution = {
+  readonly answer?: string;
   readonly confidence: number;
   readonly model: string;
   readonly provider: string;
   readonly summary: string;
+  readonly target?: ContextTargetEvidence;
 };
 
 export class ContextServiceError extends Error {
@@ -68,7 +71,11 @@ export class ContextService {
     this.#understanding = input.understanding;
   }
 
-  async submit(envelope: ContextEnvelope, signal?: AbortSignal): Promise<ContextReceipt> {
+  async submit(
+    envelope: ContextEnvelope,
+    signal?: AbortSignal,
+    question?: string,
+  ): Promise<ContextReceipt> {
     const startedAt = performance.now();
     const now = this.#now();
     const capturedAt = new Date(envelope.capturedAt);
@@ -94,12 +101,13 @@ export class ContextService {
         envelope,
         expiresAt,
         payload: imagePayload,
+        ...(question ? { question } : {}),
         sessionId,
         ...(signal ? { signal } : {}),
       });
     } else {
       const result = await measureContextStage("understanding", () =>
-        resolvePayload(payload, envelope.eventId, this.#understanding, signal),
+        resolvePayload(payload, envelope.eventId, this.#understanding, signal, question),
       );
       await this.#repository.put(
         resolvedContext({
@@ -167,6 +175,7 @@ export class ContextService {
     readonly envelope: ContextEnvelope;
     readonly expiresAt: Date;
     readonly payload: ImageContextPayload;
+    readonly question?: string;
     readonly sessionId: string;
     readonly signal?: AbortSignal;
   }): Promise<void> {
@@ -183,6 +192,7 @@ export class ContextService {
         input.envelope.eventId,
         this.#understanding,
         abortController.signal,
+        input.question,
       ),
     ).then(
       (result) => ({ result, status: "fulfilled" }) as const,
@@ -285,6 +295,8 @@ function resolvedContext(input: {
   readonly sessionId: string;
 }): ResolvedContext {
   return {
+    ...(input.result.answer ? { answer: input.result.answer } : {}),
+    confidence: Math.min(input.envelope.confidence, input.result.confidence),
     eventId: input.envelope.eventId,
     expiresAt: input.expiresAt,
     sessionId: input.sessionId,
@@ -302,6 +314,7 @@ function resolvedContext(input: {
     ]
       .filter((value): value is string => Boolean(value))
       .join("\n"),
+    ...(input.result.target ? { target: input.result.target } : {}),
   };
 }
 
@@ -403,11 +416,14 @@ async function resolvePayload(
   requestId: string,
   understanding: ContextUnderstandingPort,
   signal?: AbortSignal,
+  question?: string,
 ): Promise<{
+  readonly answer?: string;
   readonly confidence: number;
   readonly model: string;
   readonly provider: string;
   readonly summary: string;
+  readonly target?: ContextTargetEvidence;
 }> {
   switch (payload.type) {
     case "focus.text":
@@ -437,6 +453,7 @@ async function resolvePayload(
         {
           ...(payload.localText !== undefined ? { localText: payload.localText } : {}),
           payload,
+          ...(question ? { question } : {}),
           requestId,
         },
         signal,

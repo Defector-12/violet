@@ -36,6 +36,7 @@ const ajv = new Ajv2020({
 
 (addFormats as unknown as (instance: Ajv2020) => Ajv2020)(ajv);
 ajv.addSchema(errorSchema);
+ajv.addSchema(contextEnvelopeSchema);
 
 const chatRequestValidator = ajv.compile<ChatRequest>(chatRequestSchema);
 const chatStreamEventValidator = ajv.compile<ChatStreamEvent>(chatStreamEventSchema);

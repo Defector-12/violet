@@ -163,6 +163,42 @@ private struct RedactionResult {
   let value: String
 }
 
+extension FilteredContext {
+  func withoutLocalOCR() -> FilteredContext {
+    guard
+      case .image(
+        let data,
+        let focusPoint,
+        let height,
+        _,
+        let mediaType,
+        let region,
+        let sha256,
+        let width
+      ) = payload
+    else {
+      return self
+    }
+    return FilteredContext(
+      appBundleId: appBundleId,
+      completeness: completeness,
+      confidence: confidence,
+      payload: .image(
+        data: data,
+        focusPoint: focusPoint,
+        height: height,
+        localText: nil,
+        mediaType: mediaType,
+        region: region,
+        sha256: sha256,
+        width: width
+      ),
+      redactions: redactions,
+      sensitivity: sensitivity
+    )
+  }
+}
+
 private struct SensitiveRegion {
   let categories: [ContextRedaction.Category]
   let normalizedBounds: NormalizedContextRect

@@ -81,7 +81,7 @@ describe("QwenAudioRealtimeConversationPort", () => {
       {
         arguments: '{"question":"What is this chart?"}',
         call_id: "call-context",
-        name: "inspect_current_context",
+        name: "inspect_current_view",
         response_id: "resp-context",
         type: "response.function_call_arguments.done",
       },
@@ -139,7 +139,7 @@ describe("QwenAudioRealtimeConversationPort", () => {
         tools: [
           {
             function: {
-              name: "inspect_current_context",
+              name: "inspect_current_view",
             },
             type: "function",
           },
@@ -148,18 +148,19 @@ describe("QwenAudioRealtimeConversationPort", () => {
       type: "session.update",
     });
     expect(JSON.stringify(transport.sent[0])).toContain(
-      "you must call inspect_current_context before answering",
+      "you must call inspect_current_view before answering",
     );
     expect(JSON.stringify(transport.sent[0])).toContain(
-      "for selected text or selected code, prefer the visible selection",
+      "final answer grounded in a fresh screenshot",
     );
     expect(JSON.stringify(transport.sent[0])).toContain(
-      "A pointer-adjacent OCR candidate is not proof of selection",
+      "do not infer the target from conversation history",
     );
     expect(started.value).toMatchObject({ type: "response-started" });
     expect(contextRequest.value).toEqual({
       callId: "call-context",
       query: "What is this chart?",
+      responseId: "id-1",
       turnId: "id-2",
       type: "context-request",
     });
@@ -192,7 +193,7 @@ describe("QwenAudioRealtimeConversationPort", () => {
       {
         arguments: '{"question":"What is this?"}',
         call_id: "call-context",
-        name: "inspect_current_context",
+        name: "inspect_current_view",
         response_id: "resp-context",
         type: "response.function_call_arguments.done",
       },
@@ -235,6 +236,51 @@ describe("QwenAudioRealtimeConversationPort", () => {
       },
       type: "conversation.item.create",
     });
+  });
+
+  it("injects Core grounding when the model omitted the visual tool", async () => {
+    const transport = new FakeTransport([{ type: "session.created" }, { type: "session.updated" }]);
+    let id = 0;
+    const port = new QwenAudioRealtimeConversationPort({
+      apiKey: "test-qwen-api-key",
+      createTransport: () => transport,
+      generateId: () => `id-${++id}`,
+      model: "qwen-audio-3.0-realtime-plus",
+      voice: "longanqian",
+      workspaceId: "ws-jvh4fvlcktrjvtbj",
+    });
+    const conversation = await port.open({
+      ...configuration(),
+      contextLookupAvailable: true,
+    });
+
+    await conversation.send({
+      output: '{"status":"ready","answer":"The green button sends the message."}',
+      query: "What does the green button do?",
+      turnId: "turn-1",
+      type: "context-grounding",
+    });
+
+    expect(transport.sent.slice(-3)).toEqual([
+      {
+        item: {
+          arguments: '{"question":"What does the green button do?"}',
+          call_id: "id-1",
+          name: "inspect_current_view",
+          type: "function_call",
+        },
+        type: "conversation.item.create",
+      },
+      {
+        item: {
+          call_id: "id-1",
+          output: '{"status":"ready","answer":"The green button sends the message."}',
+          type: "function_call_output",
+        },
+        type: "conversation.item.create",
+      },
+      { type: "response.create" },
+    ]);
   });
 
   it("maps a push-to-talk audio turn into provider-neutral output", async () => {

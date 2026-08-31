@@ -40,6 +40,60 @@ describe("ContextService", () => {
     expect(JSON.stringify(resolved)).not.toContain(bytes.toString("base64"));
   });
 
+  it("preserves a question-grounded answer and target evidence", async () => {
+    const bytes = Buffer.from("synthetic-image");
+    const sessionId = randomUUID();
+    const service = new ContextService({
+      artifactStore: new InMemoryContextArtifactStore(),
+      now: () => now,
+      repository: new InMemoryContextSessionRepository(),
+      understanding: {
+        async understand(request) {
+          expect(request.question).toBe("右下角绿色按钮有什么作用？");
+          return {
+            answer: "右下角绿色按钮用于发送消息。",
+            confidence: 0.95,
+            model: "test",
+            provider: "test",
+            summary: "右下角绿色按钮用于发送消息。",
+            target: {
+              bounds: { height: 0.04, width: 0.03, x: 0.95, y: 0.93 },
+              color: "green",
+              kind: "button",
+            },
+          };
+        },
+      },
+    });
+
+    await service.submit(
+      envelope({
+        payload: {
+          image: {
+            data: bytes.toString("base64"),
+            height: 100,
+            mediaType: "image/jpeg",
+            sha256: createHash("sha256").update(bytes).digest("hex"),
+            width: 200,
+          },
+          type: "screen.snapshot",
+        },
+        sessionId,
+      }),
+      undefined,
+      "右下角绿色按钮有什么作用？",
+    );
+
+    await expect(service.get(sessionId)).resolves.toMatchObject({
+      answer: "右下角绿色按钮用于发送消息。",
+      confidence: 0.9,
+      target: {
+        color: "green",
+        kind: "button",
+      },
+    });
+  });
+
   it("canonicalizes UUID casing across context requests", async () => {
     const service = createService();
     const uppercaseSessionId = randomUUID().toUpperCase();

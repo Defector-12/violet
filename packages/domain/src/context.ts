@@ -49,14 +49,24 @@ export interface NormalizedPoint {
 export interface ContextUnderstandingRequest {
   readonly localText?: string;
   readonly payload: ContextPayload;
+  readonly question?: string;
   readonly requestId: string;
 }
 
+export interface ContextTargetEvidence {
+  readonly bounds?: NormalizedRect;
+  readonly color?: string;
+  readonly kind: string;
+  readonly text?: string;
+}
+
 export interface ContextUnderstandingResult {
+  readonly answer?: string;
   readonly confidence: number;
   readonly model: string;
   readonly provider: string;
   readonly summary: string;
+  readonly target?: ContextTargetEvidence;
 }
 
 export interface ContextUnderstandingPort {
@@ -67,10 +77,13 @@ export interface ContextUnderstandingPort {
 }
 
 export interface ResolvedContext {
+  readonly answer?: string;
+  readonly confidence?: number;
   readonly eventId: string;
   readonly expiresAt: Date;
   readonly sessionId: string;
   readonly summary: string;
+  readonly target?: ContextTargetEvidence;
 }
 
 export interface ContextSessionRepository {

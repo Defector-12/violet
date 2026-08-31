@@ -159,31 +159,10 @@ public actor URLSessionContextClient: ContextClientPort {
     deviceId: UUID,
     sessionId: UUID
   ) async throws -> ContextReceipt {
-    let capturedAt = Date()
-    let envelope = ContextEnvelopeWire(
-      authorization: .init(
-        controlledSensitiveAllowed: false,
-        grantId: UUID(),
-        mode: "explicit",
-        purpose: "conversation",
-        retention: "ephemeral"
-      ),
-      capturedAt: iso8601String(capturedAt),
-      completeness: context.completeness,
-      confidence: context.confidence,
-      eventId: UUID(),
-      expiresAt: iso8601String(capturedAt.addingTimeInterval(300)),
-      payload: .init(context.payload),
-      protocolVersion: "1",
-      redactions: context.redactions,
-      sensitivity: context.sensitivity,
-      sequence: 1,
-      sessionId: sessionId.uuidString.lowercased(),
-      source: .init(
-        appBundleId: context.appBundleId,
-        deviceId: deviceId,
-        modality: context.payload.modality
-      )
+    let envelope = makeContextEnvelope(
+      context,
+      deviceId: deviceId,
+      sessionId: sessionId
     )
     var request = URLRequest(url: contextURL(path: "/v1/context/envelopes"))
     request.httpMethod = "POST"
@@ -226,7 +205,7 @@ public actor URLSessionContextClient: ContextClientPort {
   }
 }
 
-private struct ContextEnvelopeWire: Encodable {
+struct ContextEnvelopeWire: Encodable {
   struct Authorization: Encodable {
     let controlledSensitiveAllowed: Bool
     let grantId: UUID
@@ -256,7 +235,7 @@ private struct ContextEnvelopeWire: Encodable {
   let source: Source
 }
 
-private enum ContextPayloadWire: Encodable {
+enum ContextPayloadWire: Encodable {
   case appState(bundleId: String, appName: String?)
   case image(
     data: Data,
@@ -350,7 +329,7 @@ private enum ContextPayloadWire: Encodable {
   }
 }
 
-private struct ImageWire: Encodable {
+struct ImageWire: Encodable {
   let data: String
   let height: Int
   let mediaType: String
@@ -374,13 +353,46 @@ extension ContextPayload {
   }
 }
 
+func makeContextEnvelope(
+  _ context: FilteredContext,
+  deviceId: UUID,
+  sessionId: UUID,
+  capturedAt: Date = Date()
+) -> ContextEnvelopeWire {
+  ContextEnvelopeWire(
+    authorization: .init(
+      controlledSensitiveAllowed: false,
+      grantId: UUID(),
+      mode: "explicit",
+      purpose: "conversation",
+      retention: "ephemeral"
+    ),
+    capturedAt: iso8601String(capturedAt),
+    completeness: context.completeness,
+    confidence: context.confidence,
+    eventId: UUID(),
+    expiresAt: iso8601String(capturedAt.addingTimeInterval(300)),
+    payload: .init(context.payload),
+    protocolVersion: "1",
+    redactions: context.redactions,
+    sensitivity: context.sensitivity,
+    sequence: 1,
+    sessionId: sessionId.uuidString.lowercased(),
+    source: .init(
+      appBundleId: context.appBundleId,
+      deviceId: deviceId,
+      modality: context.payload.modality
+    )
+  )
+}
+
 private func iso8601String(_ date: Date) -> String {
   let formatter = ISO8601DateFormatter()
   formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
   return formatter.string(from: date)
 }
 
-private func parseISO8601(_ value: String) -> Date? {
+func parseISO8601(_ value: String) -> Date? {
   let fractional = ISO8601DateFormatter()
   fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
   return fractional.date(from: value) ?? ISO8601DateFormatter().date(from: value)

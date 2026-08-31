@@ -303,6 +303,35 @@
     {
       "type": "object",
       "additionalProperties": false,
+      "required": ["eventId", "expiresAt", "requestId", "sequence", "sessionId", "turnId", "type"],
+      "properties": {
+        "eventId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "expiresAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "requestId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "sequence": {
+          "$ref": "#/$defs/sequence"
+        },
+        "sessionId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "turnId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "type": {
+          "const": "context.capture.requested"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
       "required": ["code", "eventId", "message", "retryable", "sequence", "sessionId", "type"],
       "properties": {
         "code": {

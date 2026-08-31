@@ -275,6 +275,7 @@ class PipelineRealtimeConversation implements RealtimeConversation {
           false,
         );
       case "context-result":
+      case "context-grounding":
         throw new PipelineAdapterError(
           "UNSUPPORTED_REALTIME_INPUT",
           "The realtime pipeline does not accept context tool results",

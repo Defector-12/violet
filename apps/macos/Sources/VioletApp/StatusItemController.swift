@@ -213,8 +213,6 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
   }
 
   private func handleWakeWord() {
-    model.prepareNaturalPointingCapture()
-    model.captureNaturalPointingContext()
     wakeConversationPending = true
     acknowledgement?.currentTime = 0
     if acknowledgement?.play() != true {
@@ -240,7 +238,6 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
       guard let self else {
         return
       }
-      await self.model.waitForContextPreparation()
       guard !Task.isCancelled else {
         return
       }

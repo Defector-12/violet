@@ -62,6 +62,12 @@ export type RealtimeConversationInput =
       readonly callId: string;
       readonly output: string;
       readonly type: "context-result";
+    }
+  | {
+      readonly output: string;
+      readonly query: string;
+      readonly turnId: string;
+      readonly type: "context-grounding";
     };
 
 export type RealtimeConversationOutput =
@@ -116,6 +122,7 @@ export type RealtimeConversationOutput =
   | {
       readonly callId: string;
       readonly query: string;
+      readonly responseId: string;
       readonly turnId: string;
       readonly type: "context-request";
     };

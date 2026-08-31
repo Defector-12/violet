@@ -218,13 +218,6 @@ public final class PresenceModel: ObservableObject {
     startContextCapture(kind, cancelsAudio: true, reportsSelection: true)
   }
 
-  public func captureNaturalPointingContext() {
-    guard isNaturalPointingEnabled else {
-      return
-    }
-    startContextCapture(.naturalPointing, cancelsAudio: false, reportsSelection: false)
-  }
-
   private func startContextCapture(
     _ kind: ContextCaptureKind,
     cancelsAudio: Bool,
@@ -289,13 +282,6 @@ public final class PresenceModel: ObservableObject {
       contextTask = nil
       onContextProcessingFinished?()
     }
-  }
-
-  public func prepareNaturalPointingCapture() {
-    guard isNaturalPointingEnabled else {
-      return
-    }
-    contextCapture?.prepareNaturalPointingCapture()
   }
 
   public func prepareSelectedTextCapture() {
@@ -394,7 +380,8 @@ public final class PresenceModel: ObservableObject {
 
       do {
         let capabilities = try await realtimeClient.connect(
-          contextSessionId: self.activeContextSessionId
+          contextSessionId: self.activeContextSessionId,
+          onDemandContext: self.isNaturalPointingEnabled
         )
         guard self.audioSessionId == sessionId else {
           await realtimeClient.close()
@@ -600,6 +587,11 @@ public final class PresenceModel: ObservableObject {
   private func handleAudioEvent(_ event: RealtimeServerEvent) throws {
     switch event {
     case .speechStarted(let turnId):
+      contextTask?.cancel()
+      contextTask = nil
+      if case .selecting = contextState {
+        contextState = .idle
+      }
       pendingConversationEndTask?.cancel()
       pendingConversationEndTask = nil
       resetAudioInactivityTimeout()
@@ -749,8 +741,106 @@ public final class PresenceModel: ObservableObject {
       }
     case .endRequested:
       finishConversationAfterPlayback()
+    case .contextCaptureRequested(let requestId, let turnId, let expiresAt):
+      captureContextForRealtime(
+        requestId: requestId,
+        turnId: turnId,
+        expiresAt: expiresAt
+      )
     case .ready:
       break
+    }
+  }
+
+  private func captureContextForRealtime(
+    requestId: UUID,
+    turnId: UUID,
+    expiresAt: Date
+  ) {
+    guard
+      isNaturalPointingEnabled,
+      let contextCapture,
+      let realtimeClient
+    else {
+      Task {
+        try? await realtimeClient?.sendContextCaptureResult(
+          .failed(.unavailable),
+          deviceId: deviceId,
+          requestId: requestId,
+          turnId: turnId
+        )
+      }
+      return
+    }
+
+    contextTask?.cancel()
+    contextState = .selecting
+    contextTask = Task { [weak self, contextCapture, realtimeClient] in
+      guard let self else {
+        return
+      }
+      do {
+        guard expiresAt > Date() else {
+          throw ContextCaptureError.cancelled
+        }
+        let captured = try await contextCapture.capture(.naturalPointing)
+        try Task.checkCancellation()
+        let filtered = try contextPrivacyFilter.filter(captured).withoutLocalOCR()
+        guard expiresAt > Date() else {
+          throw ContextCaptureError.cancelled
+        }
+        try await realtimeClient.sendContextCaptureResult(
+          .succeeded(filtered),
+          deviceId: deviceId,
+          requestId: requestId,
+          turnId: turnId
+        )
+      } catch is CancellationError {
+        try? await realtimeClient.sendContextCaptureResult(
+          .failed(.cancelled),
+          deviceId: deviceId,
+          requestId: requestId,
+          turnId: turnId
+        )
+      } catch let error as LocalContextPrivacyError {
+        try? await realtimeClient.sendContextCaptureResult(
+          .failed(.blocked),
+          deviceId: deviceId,
+          requestId: requestId,
+          turnId: turnId
+        )
+        contextState = .blocked(
+          message: error.errorDescription ?? "Context was blocked by local policy."
+        )
+      } catch let error as ContextCaptureError {
+        let reason: RealtimeContextCaptureFailure =
+          switch error {
+          case .accessibilityPermissionDenied, .screenRecordingPermissionDenied:
+            .permissionDenied
+          case .cancelled:
+            .cancelled
+          case .unavailable:
+            .unavailable
+          }
+        try? await realtimeClient.sendContextCaptureResult(
+          .failed(reason),
+          deviceId: deviceId,
+          requestId: requestId,
+          turnId: turnId
+        )
+      } catch {
+        try? await realtimeClient.sendContextCaptureResult(
+          .failed(.unavailable),
+          deviceId: deviceId,
+          requestId: requestId,
+          turnId: turnId
+        )
+      }
+      if case .selecting = contextState {
+        contextState = .idle
+      }
+      contextTask = nil
+      onContextProcessingFinished?()
     }
   }
 

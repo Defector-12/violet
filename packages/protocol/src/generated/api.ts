@@ -346,6 +346,7 @@ export interface components {
                 inputAudio?: components["schemas"]["audioFormat"];
                 inputModalities: components["schemas"]["modalities"];
                 language?: string;
+                onDemandContext?: boolean;
                 outputAudio?: components["schemas"]["audioFormat"];
                 outputModalities: components["schemas"]["modalities"];
                 /** @constant */
@@ -389,6 +390,25 @@ export interface components {
             sessionId: components["schemas"]["uuid"];
             /** @constant */
             type: "response.cancel";
+        } | {
+            context: components["schemas"]["context-envelope.schema"];
+            eventId: components["schemas"]["uuid"];
+            requestId: components["schemas"]["uuid"];
+            sequence: components["schemas"]["sequence"];
+            sessionId: components["schemas"]["uuid"];
+            turnId: components["schemas"]["uuid"];
+            /** @constant */
+            type: "context.capture.succeeded";
+        } | {
+            eventId: components["schemas"]["uuid"];
+            /** @enum {string} */
+            reason: "blocked" | "cancelled" | "permission_denied" | "unavailable";
+            requestId: components["schemas"]["uuid"];
+            sequence: components["schemas"]["sequence"];
+            sessionId: components["schemas"]["uuid"];
+            turnId: components["schemas"]["uuid"];
+            /** @constant */
+            type: "context.capture.failed";
         } | {
             eventId: components["schemas"]["uuid"];
             sequence: components["schemas"]["sequence"];
@@ -514,6 +534,16 @@ export interface components {
             turnId: components["schemas"]["uuid"];
             /** @constant */
             type: "session.end_requested";
+        } | {
+            eventId: components["schemas"]["uuid"];
+            /** Format: date-time */
+            expiresAt: string;
+            requestId: components["schemas"]["uuid"];
+            sequence: components["schemas"]["sequence"];
+            sessionId: components["schemas"]["uuid"];
+            turnId: components["schemas"]["uuid"];
+            /** @constant */
+            type: "context.capture.requested";
         } | {
             code: string;
             eventId: components["schemas"]["uuid"];
