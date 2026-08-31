@@ -3,8 +3,8 @@
 > 状态：实现候选，代码已集成到主线。真实视觉 API canary、后台 Vision 真实复测、三种
 > Context 入口人工冒烟和视觉矩阵 20/50 已完成。2026-08-30 恢复 1C.1 验收后确认：
 > 唤醒级静态 Context 可处理精确 AX 选区和宽泛窗口问题，但无法稳定处理同一会话内变化
-> 的鼠标位置、颜色和小控件。用户已批准按需视觉重构，完成前不得合并 MR !20 或将
-> Release 1C/1C.1 标记为正式交付。
+> 的鼠标位置、颜色和小控件。按需视觉替换方案已形成实现候选并通过自动门禁，但尚未
+> 部署和执行真实矩阵；完成真实验收前不得合并 MR !20 或将 Release 1C/1C.1 标记为正式交付。
 
 ## 自动门禁
 
@@ -16,8 +16,8 @@ VIOLET_SWIFTPM_DISABLE_SANDBOX=1 pnpm macos:app
 
 当前基线：
 
-- TypeScript/JavaScript：82 项通过。
-- Swift：45 项通过。
+- TypeScript/JavaScript：94 项通过。
+- Swift：48 项通过。
 - Context 协议覆盖未知字段、过期、超长 TTL、越权、乱序、哈希篡改和删除。
 - DeepSeek Vision 请求使用 OpenAI 兼容图片内容块，测试不访问真实 API。
 - TOS 测试确认对象正文不含截图明文，并删除全部版本与 delete marker。
@@ -101,8 +101,8 @@ VIOLET_SWIFTPM_DISABLE_SANDBOX=1 pnpm macos:app
 - 1C.1 初始功能提交 `3ea3afc` 已推送至 Codebase/GitHub 的
   `feat/1c1-natural-pointing`；Draft MR !20 的既有 4/4 检查通过，但当前本地与
   Devbox 候选包含尚未提交的新修复，旧检查不能代表当前工作树。
-- Devbox Core 和本地 Mac App 运行健康。当前候选包含隐藏唤醒交互、自然告别退出、
-  180 秒空闲退出和耳机路由修复；按需视觉重构尚未实现。
+- Devbox Core 当前仍运行上一候选，本地 Mac App 尚未切换到按需视觉候选。新代码包含
+  隐藏唤醒交互、自然告别退出、180 秒空闲退出、耳机路由修复和按需视觉实现，待部署。
 
 ## 唤醒候选
 
@@ -194,7 +194,7 @@ VIOLET_SWIFTPM_DISABLE_SANDBOX=1 pnpm macos:app
   界面变化和新空间指代没有新证据。
 - Qwen 并非每个视觉问题都调用 `inspect_current_context`。
 
-因此停止继续调节 OCR 距离阈值和提示词。用户已批准以下替换方案，尚未实现：
+因此停止继续调节 OCR 距离阈值和提示词。以下替换方案已形成实现候选：
 
 1. Qwen Audio 先理解用户话语并决定是否需要视觉；普通问题直接回答。
 2. 需要视觉时由 Qwen 调用工具，Core 再向 Mac 请求当前轮截图，不在唤醒时预上传。
@@ -208,13 +208,24 @@ VIOLET_SWIFTPM_DISABLE_SANDBOX=1 pnpm macos:app
 8. 当前不切换到 Qwen Omni。现用 `qwen-audio-3.0-realtime-plus` 保持语音与工具路由，
    DeepSeek `deepseek-v4-flash-vision-exp` 继续负责视觉。
 
-本地自动测试已覆盖：
+2026-08-31 新候选的本地自动测试已覆盖：
 
 - `Look` 偏好默认关闭并可持久化。
-- Natural Pointing 优先使用浮窗出现前保存的选中文字。
+- 唤醒本身不采集 Context；只有 Core 发出当前轮请求后才读取 AX 或截图。
+- Natural Pointing 能读取当前 AX 选中文字，浮窗已打开时可沿用打开前保存的外部目标。
 - AppKit 鼠标坐标转换与窗口内归一化焦点坐标。
-- 焦点坐标通过协议、本地隐私过滤和 DeepSeek Vision 提示完整传递。
-- Realtime Context 工具注册、结果回传、Core 内部消费和打断后迟到结果丢弃。
+- 截图先经过本地 OCR、秘密阻断和敏感遮挡；OCR 原文不作为按需视觉模型证据发送。
+- `requestId`、`turnId`、过期时间、成功/失败回执、错轮拒绝及打断后迟到结果丢弃。
+- Qwen 工具路由、Core 对明确视觉指代的漏调兜底、未经验证回答的播报前取消。
+- DeepSeek 问题级结构化答案、边界框/颜色/置信度校验和小目标裁剪复核。
+- AX 精确文本不调用 Vision；低置信度、位置或颜色冲突时返回不可可靠定位。
+- Mac App 完成打包和深度签名校验；Core 生产部署包中的 `sharp` 裁剪依赖可加载。
+
+仍未验证：
+
+- Devbox/Linux Core 镜像构建与真实 DeepSeek 按需视觉调用。
+- Qwen 真实工具路由及 Core 漏调兜底在实时语音连接中的完整时序。
+- 下列真实验收矩阵。
 
 重构后的真实验收必须重新执行：
 
