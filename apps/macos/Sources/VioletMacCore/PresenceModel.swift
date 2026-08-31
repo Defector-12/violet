@@ -53,6 +53,7 @@ public final class PresenceModel: ObservableObject {
 
   private let acceptanceRecorder: any RealtimeAcceptanceRecording
   private let audioIO: any AudioIOPort
+  private let audioInactivityTimeout: Duration
   private let client: any VioletCoreClientPort
   private let contextCapture: (any ContextCapturePort)?
   private let contextClient: (any ContextClientPort)?
@@ -64,6 +65,7 @@ public final class PresenceModel: ObservableObject {
   private var activeContextSessionId: UUID?
   private var activeRealtimeResponseId: UUID?
   private var audioFrameContinuation: AsyncStream<VioletAudioFrame>.Continuation?
+  private var audioInactivityTask: Task<Void, Never>?
   private var audioOutputFormat: VioletAudioFormat?
   private var audioResponseMessageId: UUID?
   private var audioSessionId: UUID?
@@ -75,6 +77,7 @@ public final class PresenceModel: ObservableObject {
   private var ignoredRealtimeResponseIds = Set<UUID>()
   private var localBargeInFrameCount = 0
   private var monitoringTask: Task<Void, Never>?
+  private var pendingConversationEndTask: Task<Void, Never>?
   private var recordedAudioResponseIds = Set<UUID>()
   public var onAudioSessionEnded: (@MainActor @Sendable () -> Void)?
   public var onAudioSessionStarted: (@MainActor @Sendable () -> Void)?
@@ -85,6 +88,7 @@ public final class PresenceModel: ObservableObject {
   public init(
     client: any VioletCoreClientPort,
     audioIO: any AudioIOPort = SilentAudioIO(),
+    audioInactivityTimeout: Duration = .seconds(180),
     contextCapture: (any ContextCapturePort)? = nil,
     contextClient: (any ContextClientPort)? = nil,
     contextPrivacyFilter: any LocalContextPrivacyFiltering = LocalContextPrivacyFilter(),
@@ -97,6 +101,7 @@ public final class PresenceModel: ObservableObject {
   ) {
     self.acceptanceRecorder = acceptanceRecorder
     self.audioIO = audioIO
+    self.audioInactivityTimeout = audioInactivityTimeout
     self.client = client
     self.contextCapture = contextCapture
     self.contextClient = contextClient
@@ -109,11 +114,13 @@ public final class PresenceModel: ObservableObject {
   }
 
   deinit {
+    audioInactivityTask?.cancel()
     audioTask?.cancel()
     chatTask?.cancel()
     contextExpiryTask?.cancel()
     contextTask?.cancel()
     monitoringTask?.cancel()
+    pendingConversationEndTask?.cancel()
   }
 
   public var isAudioSessionActive: Bool {
@@ -449,6 +456,7 @@ public final class PresenceModel: ObservableObject {
           }
         }
         self.audioState = .listening
+        self.resetAudioInactivityTimeout()
         self.acceptanceRecorder.record(
           .init(type: .captureStarted, sessionId: sessionId)
         )
@@ -497,6 +505,10 @@ public final class PresenceModel: ObservableObject {
         .init(type: .sessionStopRequested, reason: reason, sessionId: sessionId)
       )
     }
+    audioInactivityTask?.cancel()
+    audioInactivityTask = nil
+    pendingConversationEndTask?.cancel()
+    pendingConversationEndTask = nil
     let wasCapturing = audioIO.isCapturing
     audioSessionId = nil
     audioFrameContinuation?.finish()
@@ -588,6 +600,9 @@ public final class PresenceModel: ObservableObject {
   private func handleAudioEvent(_ event: RealtimeServerEvent) throws {
     switch event {
     case .speechStarted(let turnId):
+      pendingConversationEndTask?.cancel()
+      pendingConversationEndTask = nil
+      resetAudioInactivityTimeout()
       let responseId = activeRealtimeResponseId
       let wasPlaying = audioIO.isPlaying
       if let responseId {
@@ -624,11 +639,13 @@ public final class PresenceModel: ObservableObject {
       localBargeInFrameCount = 0
       audioState = .listening
     case .speechStopped(let turnId):
+      resetAudioInactivityTimeout()
       acceptanceRecorder.record(
         .init(type: .speechStopped, sessionId: audioSessionId, turnId: turnId)
       )
       audioState = .processing
-    case .transcript(let text, _, _):
+    case .transcript(let text, let final, _):
+      resetAudioInactivityTimeout()
       if let audioTranscriptMessageId {
         replaceMessage(audioTranscriptMessageId, with: text)
       } else {
@@ -636,7 +653,12 @@ public final class PresenceModel: ObservableObject {
         audioTranscriptMessageId = message.id
         messages.append(message)
       }
+      if final, isConversationExitCommand(text) {
+        cancelAudioSession(reason: .userStop)
+        clearContext()
+      }
     case .responseStarted(let responseId, let turnId):
+      resetAudioInactivityTimeout()
       activeRealtimeResponseId = responseId
       acceptanceRecorder.record(
         .init(
@@ -700,6 +722,7 @@ public final class PresenceModel: ObservableObject {
         retryable: retryable
       )
     case .responseCompleted(let responseId, let turnId):
+      resetAudioInactivityTimeout()
       acceptanceRecorder.record(
         .init(
           type: .responseCompleted,
@@ -715,6 +738,7 @@ public final class PresenceModel: ObservableObject {
         audioState = .listening
       }
     case .responseCancelled(let responseId):
+      resetAudioInactivityTimeout()
       acceptanceRecorder.record(
         .init(type: .responseCancelled, sessionId: audioSessionId, responseId: responseId)
       )
@@ -723,8 +747,63 @@ public final class PresenceModel: ObservableObject {
         audioResponseMessageId = nil
         audioState = .listening
       }
+    case .endRequested:
+      finishConversationAfterPlayback()
     case .ready:
       break
+    }
+  }
+
+  private func finishConversationAfterPlayback() {
+    pendingConversationEndTask?.cancel()
+    guard let sessionId = audioSessionId else {
+      pendingConversationEndTask = nil
+      return
+    }
+    pendingConversationEndTask = Task { [weak self] in
+      let clock = ContinuousClock()
+      let deadline = clock.now.advanced(by: .seconds(60))
+      while !Task.isCancelled, clock.now < deadline {
+        guard let self, self.audioSessionId == sessionId else {
+          return
+        }
+        if !self.audioIO.isPlaying {
+          self.cancelAudioSession(reason: .modelIntent)
+          self.clearContext()
+          return
+        }
+        try? await Task.sleep(for: .milliseconds(20))
+      }
+      guard let self, self.audioSessionId == sessionId else {
+        return
+      }
+      self.cancelAudioSession(reason: .modelIntent)
+      self.clearContext()
+    }
+  }
+
+  private func resetAudioInactivityTimeout() {
+    audioInactivityTask?.cancel()
+    guard let sessionId = audioSessionId else {
+      audioInactivityTask = nil
+      return
+    }
+    let timeout = audioInactivityTimeout
+    audioInactivityTask = Task { [weak self] in
+      do {
+        try await Task.sleep(for: timeout)
+      } catch {
+        return
+      }
+      guard let self, self.audioSessionId == sessionId else {
+        return
+      }
+      if self.audioState == .processing || self.audioIO.isPlaying {
+        self.resetAudioInactivityTimeout()
+        return
+      }
+      self.cancelAudioSession(reason: .inactivityTimeout)
+      self.clearContext()
     }
   }
 
@@ -733,6 +812,10 @@ public final class PresenceModel: ObservableObject {
     reason: RealtimeAcceptanceReason
   ) {
     let sessionId = audioSessionId
+    audioInactivityTask?.cancel()
+    audioInactivityTask = nil
+    pendingConversationEndTask?.cancel()
+    pendingConversationEndTask = nil
     let wasCapturing = audioIO.isCapturing
     audioIO.stopCapture()
     audioIO.stopPlayback()
@@ -803,6 +886,30 @@ public final class PresenceModel: ObservableObject {
     messages[index].text = text
   }
 }
+
+func isConversationExitCommand(_ value: String) -> Bool {
+  let compact = value.lowercased().unicodeScalars
+    .filter { CharacterSet.alphanumerics.contains($0) }
+    .map(String.init)
+    .joined()
+  let command: String
+  if compact.hasPrefix("violet") {
+    command = String(compact.dropFirst("violet".count))
+  } else {
+    command = compact
+  }
+  return conversationExitCommands.contains(command)
+}
+
+private let conversationExitCommands: Set<String> = [
+  "结束对话",
+  "结束聊天",
+  "退出对话",
+  "退出监听",
+  "停止监听",
+  "endconversation",
+  "stoplistening",
+]
 
 private func audioUserFacingMessage(_ error: Error) -> String {
   if error is AudioIOError {

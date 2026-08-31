@@ -60,6 +60,7 @@ public enum RealtimeServerEvent: Equatable, Sendable {
   case responseAudio(responseId: UUID, audio: Data, turnId: UUID)
   case responseCompleted(responseId: UUID, turnId: UUID)
   case responseCancelled(responseId: UUID)
+  case endRequested(turnId: UUID)
   case error(code: String, message: String, retryable: Bool)
 }
 
@@ -292,7 +293,8 @@ public actor URLSessionRealtimeClient: RealtimeSessionClientPort {
       case .responseCompleted, .responseCancelled:
         activeResponseId = nil
         continuation.yield(event)
-      case .speechStarted, .speechStopped, .transcript, .responseText, .responseAudio:
+      case .speechStarted, .speechStopped, .transcript, .responseText, .responseAudio,
+        .endRequested:
         continuation.yield(event)
       case .error(let code, let message, let retryable):
         throw RealtimeSessionClientError.server(
@@ -357,8 +359,10 @@ public actor URLSessionRealtimeClient: RealtimeSessionClientPort {
           message: message,
           retryable: retryable
         )
-      case .ready, .responseAudio, .responseCancelled, .speechStarted, .speechStopped,
-        .transcript:
+      case .endRequested:
+        continuation.finish()
+        return
+      case .ready, .responseAudio, .responseCancelled, .speechStarted, .speechStopped, .transcript:
         continue
       }
     }
@@ -522,6 +526,11 @@ private struct ErrorEvent: Decodable {
   let retryable: Bool
 }
 
+private struct SessionEndRequestEvent: Decodable {
+  let reason: String
+  let turnId: UUID
+}
+
 func decodeRealtimeServerEvent(_ data: Data) throws -> RealtimeServerEvent {
   let decoder = JSONDecoder()
   let envelope = try decoder.decode(ServerEnvelope.self, from: data)
@@ -565,6 +574,12 @@ func decodeRealtimeServerEvent(_ data: Data) throws -> RealtimeServerEvent {
   case "response.cancelled":
     let event = try decoder.decode(ResponseEvent.self, from: data)
     return .responseCancelled(responseId: event.responseId)
+  case "session.end_requested":
+    let event = try decoder.decode(SessionEndRequestEvent.self, from: data)
+    guard event.reason == "user_intent" else {
+      throw RealtimeSessionClientError.invalidEvent
+    }
+    return .endRequested(turnId: event.turnId)
   case "error":
     let event = try decoder.decode(ErrorEvent.self, from: data)
     return .error(code: event.code, message: event.message, retryable: event.retryable)

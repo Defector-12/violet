@@ -209,13 +209,21 @@ public final class AVAudioEngineIO: AudioIOPort {
       }
       throw AudioIOError.playbackFormatChangeWhileRunning
     }
-    playbackCaptureGate.setEnabled(
-      shouldSuppressCaptureDuringPlayback(
-        outputTransportType: defaultAudioDeviceTransportType(
-          kAudioHardwarePropertyDefaultOutputDevice
-        )
-      )
+    let outputTransportType = defaultAudioDeviceProperty(
+      kAudioHardwarePropertyDefaultOutputDevice,
+      propertySelector: kAudioDevicePropertyTransportType,
+      propertyScope: kAudioObjectPropertyScopeGlobal
     )
+    let outputDataSource = defaultAudioDeviceProperty(
+      kAudioHardwarePropertyDefaultOutputDevice,
+      propertySelector: kAudioDevicePropertyDataSource,
+      propertyScope: kAudioObjectPropertyScopeOutput
+    )
+    let suppressCapture = shouldSuppressCaptureDuringPlayback(
+      outputTransportType: outputTransportType,
+      outputDataSource: outputDataSource
+    )
+    playbackCaptureGate.setEnabled(suppressCapture)
     guard
       format.channels == 1,
       let audioFormat = AVAudioFormat(
@@ -255,13 +263,19 @@ public enum AudioIOError: Error, Equatable {
 }
 
 func shouldSuppressCaptureDuringPlayback(
-  outputTransportType: UInt32?
+  outputTransportType: UInt32?,
+  outputDataSource: UInt32? = nil
 ) -> Bool {
   outputTransportType == kAudioDeviceTransportTypeBuiltIn
+    && outputDataSource != headphoneOutputDataSource
 }
 
-private func defaultAudioDeviceTransportType(
-  _ deviceSelector: AudioObjectPropertySelector
+let headphoneOutputDataSource: UInt32 = 0x6864_706E  // 'hdpn'
+
+private func defaultAudioDeviceProperty(
+  _ deviceSelector: AudioObjectPropertySelector,
+  propertySelector: AudioObjectPropertySelector,
+  propertyScope: AudioObjectPropertyScope
 ) -> UInt32? {
   var deviceAddress = AudioObjectPropertyAddress(
     mSelector: deviceSelector,
@@ -284,26 +298,26 @@ private func defaultAudioDeviceTransportType(
     return nil
   }
 
-  var transportAddress = AudioObjectPropertyAddress(
-    mSelector: kAudioDevicePropertyTransportType,
-    mScope: kAudioObjectPropertyScopeGlobal,
+  var propertyAddress = AudioObjectPropertyAddress(
+    mSelector: propertySelector,
+    mScope: propertyScope,
     mElement: kAudioObjectPropertyElementMain
   )
-  var transportType: UInt32 = 0
-  var transportSize = UInt32(MemoryLayout<UInt32>.size)
+  var propertyValue: UInt32 = 0
+  var propertySize = UInt32(MemoryLayout<UInt32>.size)
   guard
     AudioObjectGetPropertyData(
       device,
-      &transportAddress,
+      &propertyAddress,
       0,
       nil,
-      &transportSize,
-      &transportType
+      &propertySize,
+      &propertyValue
     ) == noErr
   else {
     return nil
   }
-  return transportType
+  return propertyValue
 }
 
 private func makeCaptureTapHandler(

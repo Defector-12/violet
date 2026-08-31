@@ -15,6 +15,12 @@ struct PresenceModelTests {
     )
     #expect(
       !shouldSuppressCaptureDuringPlayback(
+        outputTransportType: kAudioDeviceTransportTypeBuiltIn,
+        outputDataSource: headphoneOutputDataSource
+      )
+    )
+    #expect(
+      !shouldSuppressCaptureDuringPlayback(
         outputTransportType: kAudioDeviceTransportTypeBluetooth
       )
     )
@@ -195,6 +201,149 @@ struct PresenceModelTests {
     model.toggleAudioSession()
     #expect(model.audioState == .idle)
     #expect(audio.stopCaptureCount >= 1)
+  }
+
+  @Test
+  @MainActor
+  func explicitVoiceExitStopsCaptureAndClearsContext() async throws {
+    let turnId = UUID()
+    let audio = FakeAudioIO()
+    let contextClient = FakeContextClient()
+    let realtime = FakeRealtimeSessionClient(
+      capabilities: audioCapabilities,
+      events: [
+        .speechStarted(turnId: turnId),
+        .transcript(text: "Violet，结束对话。", final: true, turnId: turnId),
+      ]
+    )
+    let model = PresenceModel(
+      client: FakeCoreClient(statusValue: .init(state: .ready, version: "test")),
+      audioIO: audio,
+      contextCapture: FakeContextCapture(
+        result: .text(appBundleId: "com.example.Reader", text: "Temporary context")
+      ),
+      contextClient: contextClient,
+      realtimeClient: realtime
+    )
+    await model.refresh()
+    model.captureContext(.selectedText)
+    await model.waitForContextPreparation()
+
+    model.startAudioSession()
+    try await waitUntil {
+      model.messages.map(\.text) == ["Violet，结束对话。"]
+        && model.audioState == .idle
+    }
+    try await Task.sleep(for: .milliseconds(20))
+
+    #expect(audio.stopCaptureCount >= 1)
+    #expect(model.contextState == .idle)
+    #expect(await contextClient.deletedSessionCount == 1)
+    #expect(await realtime.connectCount == 1)
+  }
+
+  @Test
+  @MainActor
+  func modelIntentExitStopsCaptureAndClearsContext() async throws {
+    let turnId = UUID()
+    let responseId = UUID()
+    let audio = FakeAudioIO()
+    let contextClient = FakeContextClient()
+    let recorder = FakeAcceptanceRecorder()
+    let realtime = FakeRealtimeSessionClient(
+      capabilities: audioCapabilities,
+      events: [
+        .speechStarted(turnId: turnId),
+        .transcript(text: "拜拜，就先这样吧", final: true, turnId: turnId),
+        .responseStarted(responseId: responseId, turnId: turnId),
+        .responseText(responseId: responseId, text: "拜拜，下次见。", turnId: turnId),
+        .responseAudio(responseId: responseId, audio: Data([0, 0]), turnId: turnId),
+        .responseCompleted(responseId: responseId, turnId: turnId),
+        .endRequested(turnId: turnId),
+      ],
+      eventInterval: .milliseconds(2)
+    )
+    let model = PresenceModel(
+      client: FakeCoreClient(statusValue: .init(state: .ready, version: "test")),
+      audioIO: audio,
+      contextCapture: FakeContextCapture(
+        result: .text(appBundleId: "com.example.Reader", text: "Temporary context")
+      ),
+      contextClient: contextClient,
+      realtimeClient: realtime,
+      acceptanceRecorder: recorder
+    )
+    await model.refresh()
+    model.captureContext(.selectedText)
+    await model.waitForContextPreparation()
+
+    model.startAudioSession()
+    try await waitUntil {
+      model.messages.map(\.text) == ["拜拜，就先这样吧", "拜拜，下次见。"]
+        && model.audioState == .listening
+        && audio.isPlaying
+    }
+    #expect(audio.isCapturing)
+    audio.finishPlayback()
+    try await waitUntil { model.audioState == .idle }
+    try await Task.sleep(for: .milliseconds(20))
+
+    #expect(!isConversationExitCommand("拜拜，就先这样吧"))
+    #expect(audio.stopCaptureCount >= 1)
+    #expect(model.contextState == .idle)
+    #expect(await contextClient.deletedSessionCount == 1)
+    #expect(
+      recorder.marks.contains {
+        $0.type == .sessionEnded && $0.reason == .modelIntent
+      }
+    )
+  }
+
+  @Test
+  @MainActor
+  func inactivityTimeoutStopsCaptureAndClearsContext() async throws {
+    let audio = FakeAudioIO()
+    let contextClient = FakeContextClient()
+    let recorder = FakeAcceptanceRecorder()
+    let realtime = FakeRealtimeSessionClient(capabilities: audioCapabilities)
+    let model = PresenceModel(
+      client: FakeCoreClient(statusValue: .init(state: .ready, version: "test")),
+      audioIO: audio,
+      audioInactivityTimeout: .milliseconds(30),
+      contextCapture: FakeContextCapture(
+        result: .text(appBundleId: "com.example.Reader", text: "Temporary context")
+      ),
+      contextClient: contextClient,
+      realtimeClient: realtime,
+      acceptanceRecorder: recorder
+    )
+    await model.refresh()
+    model.captureContext(.selectedText)
+    await model.waitForContextPreparation()
+
+    model.startAudioSession()
+    try await waitUntil { audio.startCaptureCount == 1 }
+    try await waitUntil { model.audioState == .idle }
+    try await Task.sleep(for: .milliseconds(20))
+
+    #expect(audio.stopCaptureCount >= 1)
+    #expect(model.contextState == .idle)
+    #expect(await contextClient.deletedSessionCount == 1)
+    #expect(
+      recorder.marks.contains {
+        $0.type == .sessionEnded && $0.reason == .inactivityTimeout
+      }
+    )
+  }
+
+  @Test
+  func matchesOnlyExplicitConversationExitCommands() {
+    #expect(isConversationExitCommand("结束对话"))
+    #expect(!isConversationExitCommand("Violet，先这样吧。"))
+    #expect(!isConversationExitCommand("再见"))
+    #expect(isConversationExitCommand("Stop listening"))
+    #expect(!isConversationExitCommand("请解释如何实现结束对话功能"))
+    #expect(!isConversationExitCommand("停止播放当前回复"))
   }
 
   @Test
@@ -538,6 +687,18 @@ struct PresenceModelTests {
       }
       """.utf8
     )
+    let endRequested = Data(
+      """
+      {
+        "eventId": "\(UUID())",
+        "reason": "user_intent",
+        "sequence": 4,
+        "sessionId": "\(sessionId)",
+        "turnId": "\(turnId)",
+        "type": "session.end_requested"
+      }
+      """.utf8
+    )
 
     #expect(
       try decodeRealtimeServerEvent(ready)
@@ -564,6 +725,10 @@ struct PresenceModelTests {
     #expect(
       try decodeRealtimeServerEvent(speechStarted)
         == .speechStarted(turnId: turnId)
+    )
+    #expect(
+      try decodeRealtimeServerEvent(endRequested)
+        == .endRequested(turnId: turnId)
     )
   }
 

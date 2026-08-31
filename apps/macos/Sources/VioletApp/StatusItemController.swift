@@ -88,7 +88,6 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
       guard let self else {
         return
       }
-      self.showPopover()
       self.popover.behavior = .transient
     }
     model.onAudioSessionStarted = { [weak wakeWord] in
@@ -179,6 +178,11 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
   }
 
   private func toggle(source: RealtimeAcceptanceReason) {
+    if source == .shortcut, !popover.isShown, model.isAudioSessionActive {
+      model.cancelAudioSession(reason: .shortcut)
+      model.clearContext()
+      return
+    }
     if popover.isShown {
       popover.performClose(nil)
       return
@@ -211,7 +215,6 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
   private func handleWakeWord() {
     model.prepareNaturalPointingCapture()
     model.captureNaturalPointingContext()
-    showPopover()
     wakeConversationPending = true
     acknowledgement?.currentTime = 0
     if acknowledgement?.play() != true {
@@ -238,7 +241,7 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
         return
       }
       await self.model.waitForContextPreparation()
-      guard !Task.isCancelled, self.popover.isShown else {
+      guard !Task.isCancelled else {
         return
       }
       self.model.startAudioSession()

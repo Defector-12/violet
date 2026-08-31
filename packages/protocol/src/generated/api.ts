@@ -506,6 +506,15 @@ export interface components {
             /** @constant */
             type: "response.cancelled";
         } | {
+            eventId: components["schemas"]["uuid"];
+            /** @constant */
+            reason: "user_intent";
+            sequence: components["schemas"]["sequence"];
+            sessionId: components["schemas"]["uuid"];
+            turnId: components["schemas"]["uuid"];
+            /** @constant */
+            type: "session.end_requested";
+        } | {
             code: string;
             eventId: components["schemas"]["uuid"];
             message: string;

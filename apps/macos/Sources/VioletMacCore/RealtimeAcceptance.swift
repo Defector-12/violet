@@ -22,8 +22,10 @@ public enum RealtimeAcceptanceEventType: String, Codable, Sendable {
 public enum RealtimeAcceptanceReason: String, Codable, Sendable {
   case appTermination = "app_termination"
   case failure
+  case inactivityTimeout = "inactivity_timeout"
   case localSpeech = "local_speech"
   case menuBar = "menu_bar"
+  case modelIntent = "model_intent"
   case popoverClosed = "popover_closed"
   case serverSpeech = "server_speech"
   case shortcut

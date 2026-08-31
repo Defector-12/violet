@@ -278,6 +278,31 @@
     {
       "type": "object",
       "additionalProperties": false,
+      "required": ["eventId", "reason", "sequence", "sessionId", "turnId", "type"],
+      "properties": {
+        "eventId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "reason": {
+          "const": "user_intent"
+        },
+        "sequence": {
+          "$ref": "#/$defs/sequence"
+        },
+        "sessionId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "turnId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "type": {
+          "const": "session.end_requested"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
       "required": ["code", "eventId", "message", "retryable", "sequence", "sessionId", "type"],
       "properties": {
         "code": {

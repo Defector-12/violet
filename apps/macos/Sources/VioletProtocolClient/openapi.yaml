@@ -667,6 +667,28 @@ paths:
               - type: object
                 additionalProperties: false
                 required:
+                  - eventId
+                  - reason
+                  - sequence
+                  - sessionId
+                  - turnId
+                  - type
+                properties:
+                  eventId:
+                    $ref: '#/components/schemas/uuid'
+                  reason:
+                    const: user_intent
+                  sequence:
+                    $ref: '#/components/schemas/sequence'
+                  sessionId:
+                    $ref: '#/components/schemas/uuid'
+                  turnId:
+                    $ref: '#/components/schemas/uuid'
+                  type:
+                    const: session.end_requested
+              - type: object
+                additionalProperties: false
+                required:
                   - code
                   - eventId
                   - message
@@ -1776,6 +1798,28 @@ components:
               $ref: '#/components/schemas/uuid'
             type:
               const: response.cancelled
+        - type: object
+          additionalProperties: false
+          required:
+            - eventId
+            - reason
+            - sequence
+            - sessionId
+            - turnId
+            - type
+          properties:
+            eventId:
+              $ref: '#/components/schemas/uuid'
+            reason:
+              const: user_intent
+            sequence:
+              $ref: '#/components/schemas/sequence'
+            sessionId:
+              $ref: '#/components/schemas/uuid'
+            turnId:
+              $ref: '#/components/schemas/uuid'
+            type:
+              const: session.end_requested
         - type: object
           additionalProperties: false
           required:

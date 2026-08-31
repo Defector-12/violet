@@ -17,7 +17,11 @@ if pgrep -f "${EXECUTABLE}" >/dev/null; then
 fi
 
 mkdir -p "$(dirname "${OUTPUT}")"
-VIOLET_ACCEPTANCE_LOG="${OUTPUT}" nohup "${EXECUTABLE}" >/dev/null 2>&1 &
+open -n -g \
+  --stdout /dev/null \
+  --stderr /dev/null \
+  --env "VIOLET_ACCEPTANCE_LOG=${OUTPUT}" \
+  "${APP_DIR}"
 
 printf 'Violet acceptance run started.\n'
 printf 'Event log: %s\n' "${OUTPUT}"

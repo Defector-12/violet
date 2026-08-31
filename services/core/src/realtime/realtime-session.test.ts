@@ -6,6 +6,7 @@ import { DeterministicContextUnderstandingPort } from "../context/deterministic-
 import { InMemoryContextArtifactStore } from "../context/in-memory-context-artifact-store.js";
 import { InMemoryContextSessionRepository } from "../context/in-memory-context-session-repository.js";
 import { InMemoryConversationLedger } from "../conversation/in-memory-conversation-ledger.js";
+import type { ConversationEndIntentPort } from "./conversation-end-intent.js";
 import { DeterministicRealtimeConversationPort } from "./deterministic-realtime-conversation.js";
 import { RealtimeSession } from "./realtime-session.js";
 
@@ -74,6 +75,7 @@ describe("RealtimeSession", () => {
     const sessionId = randomUUID();
     const ledger = new InMemoryConversationLedger();
     const session = new RealtimeSession({
+      conversationEndIntent: neverEndsConversation,
       conversationPort: {
         async open() {
           return {
@@ -141,6 +143,98 @@ describe("RealtimeSession", () => {
     });
   });
 
+  it("emits an end request after the farewell response completes", async () => {
+    const sessionId = randomUUID();
+    const turnId = randomUUID();
+    const responseId = randomUUID();
+    const session = new RealtimeSession({
+      conversationEndIntent: {
+        async shouldEnd(input) {
+          expect(input).toEqual({ text: "拜拜，就先这样吧", turnId });
+          return true;
+        },
+      },
+      conversationPort: {
+        async open() {
+          return {
+            capabilities: {
+              inputModalities: ["audio"],
+              interruption: true,
+              outputModalities: ["audio", "text"],
+              runtimeKind: "integrated",
+              transcription: true,
+              turnDetection: "smart_turn",
+              voiceKind: "preset",
+            } as const,
+            async close() {},
+            async *outputs() {
+              yield {
+                final: true,
+                text: "拜拜，就先这样吧",
+                turnId,
+                type: "transcript",
+              } as const;
+              yield {
+                responseId,
+                turnId,
+                type: "response-started",
+              } as const;
+              yield {
+                inputTokens: 1,
+                outputTokens: 1,
+                responseId,
+                turnId,
+                type: "response-completed",
+              } as const;
+            },
+            async send() {},
+          };
+        },
+      },
+      contextService: createContextService(),
+      generateId: randomUUID,
+      ledger: new InMemoryConversationLedger(),
+    });
+    await collect(
+      session.handle({
+        configuration: {
+          inputModalities: ["audio"],
+          outputModalities: ["audio", "text"],
+          protocolVersion: "1",
+          turnDetection: "smart_turn",
+        },
+        eventId: randomUUID(),
+        sequence: 1,
+        sessionId,
+        type: "session.configure",
+      }),
+    );
+
+    const output = await collect(session.outputs());
+
+    expect(output).toMatchObject([
+      {
+        sequence: 2,
+        type: "input.transcript",
+      },
+      {
+        sequence: 3,
+        type: "response.started",
+      },
+      {
+        sequence: 4,
+        type: "response.completed",
+      },
+      {
+        reason: "user_intent",
+        sequence: 5,
+        sessionId,
+        turnId,
+        type: "session.end_requested",
+      },
+    ]);
+  });
+
   it("seeds a new realtime runtime with recent ledger history", async () => {
     const sessionId = randomUUID();
     const ledger = new InMemoryConversationLedger();
@@ -164,6 +258,7 @@ describe("RealtimeSession", () => {
       generateId: randomUUID,
     });
     const session = new RealtimeSession({
+      conversationEndIntent: neverEndsConversation,
       conversationPort: {
         async open(configuration, signal) {
           observedConfiguration = configuration;
@@ -237,6 +332,7 @@ describe("RealtimeSession", () => {
       generateId: randomUUID,
     });
     const session = new RealtimeSession({
+      conversationEndIntent: neverEndsConversation,
       contextService,
       conversationPort: {
         supportsContextLookup: true,
@@ -306,6 +402,7 @@ describe("RealtimeSession", () => {
     const responseId = randomUUID();
     const turnId = randomUUID();
     const session = new RealtimeSession({
+      conversationEndIntent: neverEndsConversation,
       contextService,
       conversationPort: {
         supportsContextLookup: true,
@@ -522,6 +619,7 @@ function createSession(): {
   return {
     ledger,
     session: new RealtimeSession({
+      conversationEndIntent: neverEndsConversation,
       conversationPort: new DeterministicRealtimeConversationPort({ generateId }),
       contextService: createContextService(),
       generateId,
@@ -529,6 +627,12 @@ function createSession(): {
     }),
   };
 }
+
+const neverEndsConversation: ConversationEndIntentPort = {
+  async shouldEnd() {
+    return false;
+  },
+};
 
 function createContextService(): ContextService {
   return new ContextService({

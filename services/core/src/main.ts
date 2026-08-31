@@ -16,6 +16,7 @@ import { InMemoryConversationLedger } from "./conversation/in-memory-conversatio
 import { buildCoreApp } from "./http/app.js";
 import { DeepSeekModelGateway } from "./model/deepseek-model-gateway.js";
 import { DeterministicModelGateway } from "./model/deterministic-model-gateway.js";
+import { ModelConversationEndIntent } from "./realtime/conversation-end-intent.js";
 import { DeterministicRealtimeConversationPort } from "./realtime/deterministic-realtime-conversation.js";
 import { PipelineRealtimeConversationPort } from "./realtime/pipeline-realtime-conversation.js";
 import { QwenAudioRealtimeConversationPort } from "./realtime/qwen-audio-realtime-conversation.js";
@@ -120,6 +121,7 @@ const app = buildCoreApp({
     ledger,
     modelGateway,
   }),
+  conversationEndIntent: new ModelConversationEndIntent(modelGateway),
   contextService,
   realtimeConversationPort,
   realtimeLedger: ledger,

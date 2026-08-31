@@ -9,8 +9,10 @@ import type {
 import type { RealtimeClientEvent, RealtimeServerEvent } from "@violet/protocol";
 
 import { type ContextService, ContextServiceError } from "../context/context-service.js";
+import type { ConversationEndIntentPort } from "./conversation-end-intent.js";
 
 export interface RealtimeSessionOptions {
+  readonly conversationEndIntent: ConversationEndIntentPort;
   readonly conversationPort: RealtimeConversationPort;
   readonly contextService: ContextService;
   readonly generateId: () => string;
@@ -19,6 +21,7 @@ export interface RealtimeSessionOptions {
 }
 
 export class RealtimeSession {
+  readonly #conversationEndIntent: ConversationEndIntentPort;
   readonly #conversationPort: RealtimeConversationPort;
   readonly #contextService: ContextService;
   readonly #generateId: () => string;
@@ -26,6 +29,7 @@ export class RealtimeSession {
   readonly #now: () => Date;
   readonly #assistantContent = new Map<string, string>();
   readonly #clientEventIds = new Set<string>();
+  readonly #endIntentByTurn = new Map<string, Promise<boolean>>();
   readonly #persistedTurns = new Set<string>();
   #closed = false;
   #conversation: RealtimeConversation | null = null;
@@ -35,6 +39,7 @@ export class RealtimeSession {
   #sessionId: string | null = null;
 
   constructor(options: RealtimeSessionOptions) {
+    this.#conversationEndIntent = options.conversationEndIntent;
     this.#conversationPort = options.conversationPort;
     this.#contextService = options.contextService;
     this.#generateId = options.generateId;
@@ -58,6 +63,7 @@ export class RealtimeSession {
     await this.#conversation?.close();
     this.#assistantContent.clear();
     this.#clientEventIds.clear();
+    this.#endIntentByTurn.clear();
     this.#persistedTurns.clear();
     this.#contextSessionId = null;
   }
@@ -200,12 +206,37 @@ export class RealtimeSession {
         void this.#resolveContextRequest(conversation, output, signal).catch(() => undefined);
         continue;
       }
+      if (output.type === "transcript" && output.final) {
+        this.#endIntentByTurn.set(
+          output.turnId,
+          this.#conversationEndIntent
+            .shouldEnd({ text: output.text, turnId: output.turnId }, signal)
+            .catch(() => false),
+        );
+      }
       await this.#persistOutput(output);
       if (!this.#sessionId) {
         return;
       }
       yield this.#mapOutput(this.#sessionId, output);
+      if (output.type === "response-completed") {
+        const shouldEnd = await this.#takeEndIntent(output.turnId);
+        if (shouldEnd) {
+          yield {
+            reason: "user_intent",
+            turnId: output.turnId,
+            ...this.#baseEvent(this.#sessionId),
+            type: "session.end_requested",
+          };
+        }
+      }
     }
+  }
+
+  async #takeEndIntent(turnId: string): Promise<boolean> {
+    const pending = this.#endIntentByTurn.get(turnId);
+    this.#endIntentByTurn.delete(turnId);
+    return pending ? pending : false;
   }
 
   async #resolveContextRequest(

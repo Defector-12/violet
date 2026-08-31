@@ -18,12 +18,14 @@ import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
 import type { DeviceAuthenticator } from "../auth/device-authenticator.js";
 import { type ContextService, ContextServiceError } from "../context/context-service.js";
 import type { ChatService } from "../conversation/chat-service.js";
+import type { ConversationEndIntentPort } from "../realtime/conversation-end-intent.js";
 import { handleRealtimeWebSocket } from "../realtime/realtime-websocket.js";
 import { recordHttpRequest } from "../telemetry-signals.js";
 
 export interface CoreAppOptions {
   readonly authenticator: DeviceAuthenticator;
   readonly chatService: ChatService;
+  readonly conversationEndIntent: ConversationEndIntentPort;
   readonly contextService: ContextService;
   readonly now?: () => Date;
   readonly realtimeConversationPort: RealtimeConversationPort;
@@ -256,6 +258,7 @@ export function buildCoreApp(options: CoreAppOptions): FastifyInstance {
       },
       (socket) => {
         handleRealtimeWebSocket(socket, {
+          conversationEndIntent: options.conversationEndIntent,
           conversationPort: options.realtimeConversationPort,
           contextService: options.contextService,
           generateId: randomUUID,

@@ -236,6 +236,16 @@ describe("protocol validation", () => {
         usage: { inputTokens: 1, outputTokens: 1 },
       }),
     ).not.toThrow();
+    expect(() =>
+      assertRealtimeServerEvent({
+        eventId: randomUUID(),
+        reason: "user_intent",
+        sequence: 4,
+        sessionId,
+        turnId,
+        type: "session.end_requested",
+      }),
+    ).not.toThrow();
   });
 
   it("rejects unknown realtime events and invalid sequence numbers", () => {

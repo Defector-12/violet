@@ -368,6 +368,11 @@ async function startCore(
       ledger,
       modelGateway,
     }),
+    conversationEndIntent: {
+      async shouldEnd() {
+        return false;
+      },
+    },
     contextService: new ContextService({
       artifactStore: new InMemoryContextArtifactStore(),
       repository: new InMemoryContextSessionRepository(),
