@@ -63,7 +63,12 @@ describe("DeepSeekVisionUnderstandingPort", () => {
       model: "deepseek-v4-flash-vision-exp",
     });
     expect(JSON.stringify(body)).toContain("locate its arrowhead");
+    expect(JSON.stringify(body)).toContain("x increases from left to right");
+    expect(JSON.stringify(body)).toContain("separate evidence");
+    expect(JSON.stringify(body)).toContain("complete contiguous selection");
+    expect(JSON.stringify(body)).toContain("not proof of selection");
     expect(JSON.stringify(body)).toContain("x=0.250, y=0.750");
+    expect(JSON.stringify(body)).toContain("white and magenta ring");
     expect(JSON.stringify(body)).toContain("data:image/png;base64,aW1hZ2U=");
   });
 });

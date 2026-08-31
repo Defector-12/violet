@@ -107,33 +107,34 @@ public struct LocalContextPrivacyFilter: LocalContextPrivacyFiltering {
           normalizedBounds: observation.normalizedBounds
         )
       }
-      let redactedImage =
+      let preparedImage =
         sensitiveRegions.isEmpty && isBoundedJPEG(data)
+          && focusPoint == nil
         ? data
-        : try redactImage(
+        : try prepareImage(
           data,
+          focusPoint: focusPoint,
           height: height,
           regions: sensitiveRegions,
           width: width
         )
-      let safeText =
-        recognizedText
-        .map { redact($0.text).value }
-        .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-        .joined(separator: "\n")
+      let safeText = prioritizedLocalText(
+        recognizedText,
+        focusPoint: focusPoint
+      )
       let categories = sensitiveRegions.flatMap(\.categories)
       return FilteredContext(
         appBundleId: appBundleId,
         completeness: sensitiveRegions.isEmpty ? 1 : 0.8,
         confidence: recognizedText.map(\.confidence).max() ?? 0.5,
         payload: .image(
-          data: redactedImage,
+          data: preparedImage,
           focusPoint: focusPoint,
           height: height,
           localText: safeText.isEmpty ? nil : safeText,
           mediaType: "image/jpeg",
           region: region,
-          sha256: contextImageHash(redactedImage),
+          sha256: contextImageHash(preparedImage),
           width: width
         ),
         redactions: redactionCounts(categories),
@@ -165,6 +166,11 @@ private struct RedactionResult {
 private struct SensitiveRegion {
   let categories: [ContextRedaction.Category]
   let normalizedBounds: NormalizedContextRect
+}
+
+private struct RedactedOCRText {
+  let normalizedBounds: NormalizedContextRect
+  let text: String
 }
 
 private let absoluteSecretPatterns: [NSRegularExpression] = [
@@ -215,8 +221,73 @@ private func redactionCounts(_ categories: [ContextRedaction.Category]) -> [Cont
     .sorted { $0.category.rawValue < $1.category.rawValue }
 }
 
-private func redactImage(
+private func prioritizedLocalText(
+  _ recognizedText: [RecognizedContextText],
+  focusPoint: NormalizedContextPoint?
+) -> String {
+  let observations = recognizedText.compactMap { observation -> RedactedOCRText? in
+    let text = redact(observation.text).value.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !text.isEmpty else {
+      return nil
+    }
+    return RedactedOCRText(
+      normalizedBounds: observation.normalizedBounds,
+      text: text
+    )
+  }
+  let allText = observations.map(\.text).joined(separator: "\n")
+  guard let focusPoint else {
+    return allText
+  }
+  let nearestIndex = observations.indices.min {
+    distanceSquared(
+      from: focusPoint,
+      toVisionBounds: observations[$0].normalizedBounds
+    )
+      < distanceSquared(
+        from: focusPoint,
+        toVisionBounds: observations[$1].normalizedBounds
+      )
+  }
+  let nearestDistance = nearestIndex.map {
+    distanceSquared(from: focusPoint, toVisionBounds: observations[$0].normalizedBounds)
+  }
+  guard
+    let nearestIndex,
+    let nearestDistance,
+    nearestDistance <= 0.0004
+  else {
+    return allText
+  }
+
+  let otherText = observations.enumerated()
+    .filter { $0.offset != nearestIndex }
+    .map { $0.element.text }
+    .joined(separator: "\n")
+  return [
+    "Pointer-adjacent OCR candidate (not proof of selection):\n\(observations[nearestIndex].text)",
+    otherText.isEmpty ? nil : "Other OCR text in the authorized window:\n\(otherText)",
+  ]
+  .compactMap { $0 }
+  .joined(separator: "\n\n")
+}
+
+private func distanceSquared(
+  from point: NormalizedContextPoint,
+  toVisionBounds bounds: NormalizedContextRect
+) -> Double {
+  let minimumX = bounds.x
+  let maximumX = bounds.x + bounds.width
+  let minimumY = 1 - bounds.y - bounds.height
+  let maximumY = 1 - bounds.y
+  let deltaX = point.x < minimumX ? minimumX - point.x : max(0, point.x - maximumX)
+  let deltaY = point.y < minimumY ? minimumY - point.y : max(0, point.y - maximumY)
+  return deltaX * deltaX + deltaY * deltaY
+}
+
+private func prepareImage(
   _ data: Data,
+  focusPoint: NormalizedContextPoint?,
   height: Int,
   regions: [SensitiveRegion],
   width: Int
@@ -254,6 +325,14 @@ private func redactImage(
       )
     )
   }
+  if let focusPoint {
+    drawFocusMarker(
+      in: context,
+      point: contextImagePoint(focusPoint, width: width, height: height),
+      width: width,
+      height: height
+    )
+  }
   guard
     let redacted = context.makeImage(),
     let encoded = NSBitmapImageRep(cgImage: redacted).representation(
@@ -265,6 +344,39 @@ private func redactImage(
     throw LocalContextPrivacyError.imageEncodingFailed
   }
   return encoded
+}
+
+func contextImagePoint(
+  _ point: NormalizedContextPoint,
+  width: Int,
+  height: Int
+) -> CGPoint {
+  CGPoint(
+    x: min(max(point.x, 0), 1) * Double(width),
+    y: (1 - min(max(point.y, 0), 1)) * Double(height)
+  )
+}
+
+private func drawFocusMarker(
+  in context: CGContext,
+  point: CGPoint,
+  width: Int,
+  height: Int
+) {
+  let radius = max(12, Double(min(width, height)) * 0.015)
+  let markerBounds = CGRect(
+    x: point.x - radius,
+    y: point.y - radius,
+    width: radius * 2,
+    height: radius * 2
+  )
+  context.setFillColor(NSColor.clear.cgColor)
+  context.setStrokeColor(NSColor.white.withAlphaComponent(0.95).cgColor)
+  context.setLineWidth(max(5, radius * 0.35))
+  context.strokeEllipse(in: markerBounds)
+  context.setStrokeColor(NSColor.systemPink.cgColor)
+  context.setLineWidth(max(2, radius * 0.16))
+  context.strokeEllipse(in: markerBounds)
 }
 
 private func isBoundedJPEG(_ data: Data) -> Bool {

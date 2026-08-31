@@ -432,8 +432,8 @@ async function resolvePayload(
         summary: `Current utterance:\n${payload.transcript}`,
       };
     case "focus.region":
-    case "screen.snapshot":
-      return understanding.understand(
+    case "screen.snapshot": {
+      const result = await understanding.understand(
         {
           ...(payload.localText !== undefined ? { localText: payload.localText } : {}),
           payload,
@@ -441,5 +441,18 @@ async function resolvePayload(
         },
         signal,
       );
+      const localText = payload.localText?.trim();
+      return {
+        ...result,
+        summary: localText
+          ? [
+              "Device OCR evidence from the authorized image:",
+              localText,
+              "Visual interpretation:",
+              result.summary,
+            ].join("\n")
+          : result.summary,
+      };
+    }
   }
 }

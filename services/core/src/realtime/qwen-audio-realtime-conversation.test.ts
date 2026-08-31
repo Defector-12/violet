@@ -147,6 +147,15 @@ describe("QwenAudioRealtimeConversationPort", () => {
       },
       type: "session.update",
     });
+    expect(JSON.stringify(transport.sent[0])).toContain(
+      "you must call inspect_current_context before answering",
+    );
+    expect(JSON.stringify(transport.sent[0])).toContain(
+      "for selected text or selected code, prefer the visible selection",
+    );
+    expect(JSON.stringify(transport.sent[0])).toContain(
+      "A pointer-adjacent OCR candidate is not proof of selection",
+    );
     expect(started.value).toMatchObject({ type: "response-started" });
     expect(contextRequest.value).toEqual({
       callId: "call-context",

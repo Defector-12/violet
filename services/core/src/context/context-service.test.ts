@@ -35,6 +35,8 @@ describe("ContextService", () => {
 
     expect(receipt.status).toBe("ready");
     expect(resolved.summary).toContain("Architecture diagram");
+    expect(resolved.summary).toContain("Device OCR evidence from the authorized image:");
+    expect(resolved.summary).toContain("Visual interpretation:");
     expect(JSON.stringify(resolved)).not.toContain(bytes.toString("base64"));
   });
 

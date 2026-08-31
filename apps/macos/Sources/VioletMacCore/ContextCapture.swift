@@ -207,7 +207,8 @@ public final class SystemContextCapture: NSObject, ContextCapturePort {
     }
 
     if accessibilityAccess() {
-      switch selectionReader(target.processIdentifier, selectedTextElement) {
+      let selection = selectionReader(target.processIdentifier, selectedTextElement)
+      switch selection {
       case .secureField:
         throw LocalContextPrivacyError.blockedApplication
       case .text(let text):
