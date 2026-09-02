@@ -3,8 +3,9 @@
 > 状态：实现候选，代码已集成到主线。真实视觉 API canary、后台 Vision 真实复测、三种
 > Context 入口人工冒烟和视觉矩阵 20/50 已完成。2026-08-30 恢复 1C.1 验收后确认：
 > 唤醒级静态 Context 可处理精确 AX 选区和宽泛窗口问题，但无法稳定处理同一会话内变化
-> 的鼠标位置、颜色和小控件。按需视觉替换方案已形成实现候选并通过自动门禁，但尚未
-> 部署和执行真实矩阵；完成真实验收前不得合并 MR !20 或将 Release 1C/1C.1 标记为正式交付。
+> 的鼠标位置、颜色和小控件。按需视觉替换方案已部署，真实 Qwen 工具路由和 AX 快速
+> 通道已通过冒烟；截图、精细定位、隐私和生命周期矩阵仍待执行。完成真实验收前不得
+> 合并 MR !20 或将 Release 1C/1C.1 标记为正式交付。
 
 ## 自动门禁
 
@@ -99,10 +100,10 @@ VIOLET_SWIFTPM_DISABLE_SANDBOX=1 pnpm macos:app
 - Devbox 使用同一主线代码，Core、PostgreSQL、LGTM 和 Collector 健康。
 - 代码集成不改变验收结论：Release 1C 仍是实现候选。
 - 1C.1 初始功能提交 `3ea3afc` 已推送至 Codebase/GitHub 的
-  `feat/1c1-natural-pointing`；Draft MR !20 的既有 4/4 检查通过，但当前本地与
-  Devbox 候选包含尚未提交的新修复，旧检查不能代表当前工作树。
-- Devbox Core 当前仍运行上一候选，本地 Mac App 尚未切换到按需视觉候选。新代码包含
-  隐藏唤醒交互、自然告别退出、180 秒空闲退出、耳机路由修复和按需视觉实现，待部署。
+  `feat/1c1-natural-pointing`；UUID 与跨设备时钟修复提交 `d3fbd55` 已同步两个远端，
+  Draft MR !20 需要以该提交的新检查为准。
+- Devbox Core 与本地 Mac App 已部署无诊断代码的 `d3fbd55`；Core 健康、Mac 单进程
+  在线，部署前后的加密事件账本保持 `760 / 1..760` 连续。
 
 ## 唤醒候选
 
@@ -221,10 +222,25 @@ VIOLET_SWIFTPM_DISABLE_SANDBOX=1 pnpm macos:app
 - AX 精确文本不调用 Vision；低置信度、位置或颜色冲突时返回不可可靠定位。
 - Mac App 完成打包和深度签名校验；Core 生产部署包中的 `sharp` 裁剪依赖可加载。
 
+2026-09-02 完成第一轮按需视觉真实冒烟：
+
+- Devbox/Linux 生产构建中的 `sharp` 与 `libvips` 可加载；无用户数据的绿色合成图
+  DeepSeek canary 正确返回颜色，置信度为 1。
+- 真实 Qwen Realtime 会调用 `inspect_current_view`，Core 随后才按当前 `turnId`
+  请求 Mac 采集；Mac 成功读取 Trae Markdown 编辑器中的 `AXSelectedText`，未进入
+  截图和 DeepSeek Vision 分支，用户确认 Violet 正确播报选中文字。
+- 首轮失败的根因是 Swift 编码 UUID 使用大写，而 Core 以小写 UUID 保存待处理请求；
+  Core 现对 `requestId`、`turnId` 和 Context `sessionId` 做大小写无关匹配。
+- 第二轮失败的根因是 Mac 时钟比 Devbox 慢约 49ms，严格比较两台设备的
+  `capturedAt >= requestedAt` 会把新证据误判为旧证据；新鲜度校验现允许最多 30 秒
+  的跨设备时钟偏差，同时仍以请求过期时间和当前轮关联阻止旧证据。
+- 修复后的运行证据连续三次显示 request、turn 和 Context session 匹配，Core 均返回
+  ready evidence；诊断日志不记录选区正文、截图或语音，并在确认根因后删除。
+
 仍未验证：
 
-- Devbox/Linux Core 镜像构建与真实 DeepSeek 按需视觉调用。
-- Qwen 真实工具路由及 Core 漏调兜底在实时语音连接中的完整时序。
+- 普通非视觉问题不产生截图或上传，以及 Core 漏调兜底的真实时序。
+- AX 不可读时的真实截图、DeepSeek 问题级回答和小目标裁剪复核链路。
 - 下列真实验收矩阵。
 
 重构后的真实验收必须重新执行：
@@ -303,10 +319,11 @@ Context 生命周期：
 
 当前结论：
 
-- Natural Pointing 当前存在已确认且尚未修复的跨轮新鲜度和精细定位缺陷。
+- Natural Pointing 的按需请求关联、UUID 格式差异和跨设备时钟偏差已修复，真实 AX
+  快速通道已通过；截图精细定位及完整新鲜度矩阵仍未通过。
 - 已验证的底层 Context、隐私和手动 Region 能力继续保留；唤醒级静态 Context 不能作为
   最终方案合并。
-- 按需视觉重构和原定门槛通过前，不得将 Release 1C 或 1C.1 标记为正式交付。
+- 原定按需视觉门槛全部通过前，不得将 Release 1C 或 1C.1 标记为正式交付。
 
 通过标准：
 
