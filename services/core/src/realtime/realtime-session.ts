@@ -13,6 +13,8 @@ import type { ConversationEndIntentPort } from "./conversation-end-intent.js";
 import { formatVisualResult } from "./visual-grounding.js";
 import { explicitlyRequiresCurrentView } from "./visual-intent.js";
 
+const maximumCaptureClockSkewMs = 30_000;
+
 interface PendingContextCapture {
   readonly abortController: AbortController;
   readonly callId?: string;
@@ -215,13 +217,15 @@ export class RealtimeSession {
     }
 
     if (event.type === "context.capture.succeeded" || event.type === "context.capture.failed") {
-      const pending = this.#pendingContextCaptures.get(event.requestId);
-      if (!pending || pending.turnId !== event.turnId) {
+      const requestId = event.requestId.toLowerCase();
+      const turnId = event.turnId.toLowerCase();
+      const pending = this.#pendingContextCaptures.get(requestId);
+      if (!pending || pending.turnId.toLowerCase() !== turnId) {
         return;
       }
       clearTimeout(pending.timeout);
       if (pending.expiresAt <= this.#now()) {
-        this.#pendingContextCaptures.delete(event.requestId);
+        this.#pendingContextCaptures.delete(requestId);
         pending.abortController.abort();
         void this.#sendUnavailableContext(pending, "The context capture request expired.");
         return;
@@ -229,9 +233,10 @@ export class RealtimeSession {
       if (
         event.type === "context.capture.succeeded" &&
         (event.context.sessionId.toLowerCase() !== event.requestId.toLowerCase() ||
-          new Date(event.context.capturedAt) < pending.requestedAt)
+          new Date(event.context.capturedAt).getTime() <
+            pending.requestedAt.getTime() - maximumCaptureClockSkewMs)
       ) {
-        this.#pendingContextCaptures.delete(event.requestId);
+        this.#pendingContextCaptures.delete(requestId);
         pending.abortController.abort();
         void this.#sendUnavailableContext(
           pending,
@@ -240,7 +245,7 @@ export class RealtimeSession {
         return;
       }
       if (event.type === "context.capture.failed") {
-        this.#pendingContextCaptures.delete(event.requestId);
+        this.#pendingContextCaptures.delete(requestId);
         pending.abortController.abort();
         void this.#sendUnavailableContext(
           pending,

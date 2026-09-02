@@ -483,7 +483,7 @@ describe("RealtimeSession", () => {
     ]);
   });
 
-  it("requests fresh Mac context and returns exact Accessibility evidence", async () => {
+  it("accepts uppercase Swift UUIDs and normal cross-device clock skew", async () => {
     const sessionId = randomUUID();
     const turnId = randomUUID();
     const responseId = randomUUID();
@@ -554,15 +554,15 @@ describe("RealtimeSession", () => {
     if (request?.type !== "context.capture.requested") {
       throw new Error("Expected a context capture request");
     }
-    const capturedAt = new Date();
+    const capturedAt = new Date(Date.now() - 1_000);
     await collect(
       session.handle({
-        context: contextEnvelope("ephemeral", request.requestId, capturedAt),
+        context: contextEnvelope("ephemeral", request.requestId.toLowerCase(), capturedAt),
         eventId: randomUUID(),
-        requestId: request.requestId,
+        requestId: request.requestId.toUpperCase(),
         sequence: 2,
         sessionId,
-        turnId,
+        turnId: turnId.toUpperCase(),
         type: "context.capture.succeeded",
       }),
     );
