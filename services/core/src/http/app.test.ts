@@ -237,6 +237,86 @@ describe("Core HTTP API", () => {
     socket.terminate();
   });
 
+  it("keeps realtime open for a protocol-valid image context event", async () => {
+    const { app } = await startCore(false);
+    const socket = await app.injectWS("/v1/realtime", {
+      headers: { authorization: `Bearer ${deviceToken}` },
+    });
+    const sessionId = randomUUID();
+
+    const readyEvents = receiveEvents(socket, 1);
+    socket.send(
+      JSON.stringify({
+        configuration: {
+          inputModalities: ["text"],
+          onDemandContext: true,
+          outputModalities: ["text"],
+          protocolVersion: "1",
+        },
+        eventId: randomUUID(),
+        sequence: 1,
+        sessionId,
+        type: "session.configure",
+      }),
+    );
+    await readyEvents;
+
+    const closed = new Promise<[{ code: number; type: "closed" }]>((resolve) => {
+      socket.once("close", (code) => {
+        resolve([{ code, type: "closed" }]);
+      });
+    });
+    const responseEvents = receiveEvents(socket, 3);
+    const contextRequestId = randomUUID();
+    const capturedAt = new Date();
+    socket.send(
+      JSON.stringify({
+        context: {
+          ...contextEnvelope(contextRequestId, capturedAt),
+          payload: {
+            image: {
+              data: Buffer.alloc(200_000).toString("base64"),
+              height: 400,
+              mediaType: "image/jpeg",
+              sha256: "0".repeat(64),
+              width: 800,
+            },
+            type: "screen.snapshot",
+          },
+          source: {
+            deviceId: randomUUID(),
+            modality: "screen",
+          },
+        },
+        eventId: randomUUID(),
+        requestId: contextRequestId,
+        sequence: 2,
+        sessionId,
+        turnId: randomUUID(),
+        type: "context.capture.succeeded",
+      }),
+    );
+    const turnId = randomUUID();
+    socket.send(
+      JSON.stringify({
+        eventId: randomUUID(),
+        sequence: 3,
+        sessionId,
+        text: "Still connected",
+        turnId,
+        type: "input.text",
+      }),
+    );
+
+    const outcome = await Promise.race([responseEvents, closed]);
+    expect(outcome.map((event) => event.type)).toEqual([
+      "response.started",
+      "response.text",
+      "response.completed",
+    ]);
+    socket.terminate();
+  });
+
   it("accepts cancellation while the provider output stream is still active", async () => {
     const outputQueue = new TestRealtimeOutputQueue();
     const receivedInputs: RealtimeConversationInput[] = [];

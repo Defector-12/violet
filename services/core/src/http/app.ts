@@ -22,6 +22,8 @@ import type { ConversationEndIntentPort } from "../realtime/conversation-end-int
 import { handleRealtimeWebSocket } from "../realtime/realtime-websocket.js";
 import { recordHttpRequest } from "../telemetry-signals.js";
 
+const maximumRealtimePayloadBytes = 12 * 1024 * 1024;
+
 export interface CoreAppOptions {
   readonly authenticator: DeviceAuthenticator;
   readonly chatService: ChatService;
@@ -40,7 +42,7 @@ export function buildCoreApp(options: CoreAppOptions): FastifyInstance {
   });
   app.register(websocket, {
     options: {
-      maxPayload: 150000,
+      maxPayload: maximumRealtimePayloadBytes,
     },
   });
   const now = options.now ?? (() => new Date());
