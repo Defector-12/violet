@@ -3,9 +3,10 @@
 > 状态：实现候选，代码已集成到主线。真实视觉 API canary、后台 Vision 真实复测、三种
 > Context 入口人工冒烟和视觉矩阵 20/50 已完成。2026-08-30 恢复 1C.1 验收后确认：
 > 唤醒级静态 Context 可处理精确 AX 选区和宽泛窗口问题，但无法稳定处理同一会话内变化
-> 的鼠标位置、颜色和小控件。按需视觉替换方案已部署，真实 Qwen 工具路由和 AX 快速
-> 通道已通过冒烟；截图、精细定位、隐私和生命周期矩阵仍待执行。完成真实验收前不得
-> 合并 MR !20 或将 Release 1C/1C.1 标记为正式交付。
+> 的鼠标位置、颜色和小控件。按需视觉替换方案已部署，普通非视觉问答、真实 Qwen 工具
+> 路由和连续 AX 快速通道已通过冒烟；Trae 终端精确选区失败，截图精细定位、隐私和
+> 生命周期矩阵仍待执行。完成真实验收前不得合并 MR !20 或将 Release 1C/1C.1 标记为
+> 正式交付。
 
 ## 自动门禁
 
@@ -17,7 +18,7 @@ VIOLET_SWIFTPM_DISABLE_SANDBOX=1 pnpm macos:app
 
 当前基线：
 
-- TypeScript/JavaScript：94 项通过。
+- TypeScript/JavaScript：95 项通过。
 - Swift：48 项通过。
 - Context 协议覆盖未知字段、过期、超长 TTL、越权、乱序、哈希篡改和删除。
 - DeepSeek Vision 请求使用 OpenAI 兼容图片内容块，测试不访问真实 API。
@@ -100,10 +101,10 @@ VIOLET_SWIFTPM_DISABLE_SANDBOX=1 pnpm macos:app
 - Devbox 使用同一主线代码，Core、PostgreSQL、LGTM 和 Collector 健康。
 - 代码集成不改变验收结论：Release 1C 仍是实现候选。
 - 1C.1 初始功能提交 `3ea3afc` 已推送至 Codebase/GitHub 的
-  `feat/1c1-natural-pointing`；UUID 与跨设备时钟修复提交 `d3fbd55` 已同步两个远端，
-  Draft MR !20 需要以该提交的新检查为准。
-- Devbox Core 与本地 Mac App 已部署无诊断代码的 `d3fbd55`；Core 健康、Mac 单进程
-  在线，部署前后的加密事件账本保持 `760 / 1..760` 连续。
+  `feat/1c1-natural-pointing`；UUID/时钟修复 `d3fbd55` 与图片 WebSocket 修复
+  `2753351` 已同步两个远端，Draft MR !20 需要以最新提交的检查为准。
+- Devbox Core 与本地 Mac App 已部署无诊断代码的 `2753351`；Core 健康、Mac 单进程
+  在线，加密事件账本保持 `805 / 1..805` 连续。
 
 ## 唤醒候选
 
@@ -237,10 +238,28 @@ VIOLET_SWIFTPM_DISABLE_SANDBOX=1 pnpm macos:app
 - 修复后的运行证据连续三次显示 request、turn 和 Context session 匹配，Core 均返回
   ready evidence；诊断日志不记录选区正文、截图或语音，并在确认根因后删除。
 
+2026-09-03 继续最小真实冒烟：
+
+- `Look` 开启后询问普通非视觉问题，Violet 正常回答；Context 阶段指标在测试前后均为
+  0，证明该轮没有进入 AX、截图或 Vision 处理。
+- 在同一 Realtime 会话连续选择三个不同的 AX 文本并提问，三次回答全部正确；
+  `understanding` 和 `total` 指标各精确增加 3 次，未命中旧轮证据。
+- Trae 集成终端截图 Context 的编码事件约 450–540 KB，超过原 150 KB WebSocket
+  `maxPayload`，Core 以 close code 1009 断开，Mac 将底层错误显示为 `Core offline`。
+  提交 `2753351` 将已鉴权 Realtime 上限提高到 12 MiB，与 Context 图片协议一致；
+  新增集成测试确认协议有效的大图片事件之后同一连接仍可继续回答。
+- 传输修复后不再 offline，图片成功完成临时存储和 DeepSeek 调用，但终端跨行选区仍
+  未通过。Trae 终端不暴露 `AXSelectedText`；整窗截图携带的鼠标焦点不在终端目标附近，
+  模型一次返回置信度 `0.65` 且无边界框，另一次视觉理解失败后使用 `0.25` 无答案降级，
+  Core 均按现有门禁明确返回不可可靠定位。
+- 当前代码已经实现“AX 失败后发送整窗截图、截图时鼠标坐标和用户原问题”。讨论中的
+  每轮提前固定鼠标坐标、拖拽监听、剪贴板读取和 Trae 专用适配器均未实现。用户决定
+  暂停进一步开发，由后续 Agent 先重新确认 AX 不可用时的产品语义。
+
 仍未验证：
 
-- 普通非视觉问题不产生截图或上传，以及 Core 漏调兜底的真实时序。
-- AX 不可读时的真实截图、DeepSeek 问题级回答和小目标裁剪复核链路。
+- `Look` 开关和普通非视觉问题各 20 次的正式计数，以及 Core 漏调兜底的真实时序。
+- AX 不可读时的鼠标指向、小目标裁剪复核和稳定精确定位；终端跨行选区当前已知失败。
 - 下列真实验收矩阵。
 
 重构后的真实验收必须重新执行：
@@ -320,7 +339,8 @@ Context 生命周期：
 当前结论：
 
 - Natural Pointing 的按需请求关联、UUID 格式差异和跨设备时钟偏差已修复，真实 AX
-  快速通道已通过；截图精细定位及完整新鲜度矩阵仍未通过。
+  快速通道及三轮新鲜度冒烟已通过；图片 WebSocket 容量缺陷已修复。Trae 终端精确
+  选区和截图精细定位仍未通过。
 - 已验证的底层 Context、隐私和手动 Region 能力继续保留；唤醒级静态 Context 不能作为
   最终方案合并。
 - 原定按需视觉门槛全部通过前，不得将 Release 1C 或 1C.1 标记为正式交付。
