@@ -126,7 +126,7 @@ public struct LocalContextPrivacyFilter: LocalContextPrivacyFiltering {
       return FilteredContext(
         appBundleId: appBundleId,
         completeness: sensitiveRegions.isEmpty ? 1 : 0.8,
-        confidence: recognizedText.map(\.confidence).max() ?? 0.5,
+        confidence: 1,
         payload: .image(
           data: preparedImage,
           focusPoint: focusPoint,

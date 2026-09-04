@@ -481,7 +481,11 @@ export class RealtimeSession {
       await this.#contextService.submit(envelope, pending.abortController.signal, question);
       const context = await this.#contextService.get(envelope.sessionId);
       pending.abortController.signal.throwIfAborted();
-      const result = formatVisualResult(context, question);
+      const focusPoint =
+        envelope.payload.type === "focus.region" || envelope.payload.type === "screen.snapshot"
+          ? envelope.payload.focusPoint
+          : undefined;
+      const result = formatVisualResult(context, question, focusPoint);
       this.#clearVisualTurn(pending.turnId);
       await this.#sendResolvedContext(pending, result);
     } catch {

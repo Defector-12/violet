@@ -1,6 +1,10 @@
-import type { ResolvedContext } from "@violet/domain";
+import type { NormalizedPoint, ResolvedContext } from "@violet/domain";
 
-export function formatVisualResult(context: ResolvedContext, question: string): string {
+export function formatVisualResult(
+  context: ResolvedContext,
+  question: string,
+  focusPoint?: NormalizedPoint,
+): string {
   if (!context.answer) {
     return context.summary.includes("Selected text:")
       ? JSON.stringify({
@@ -8,6 +12,9 @@ export function formatVisualResult(context: ResolvedContext, question: string): 
           status: "ready",
         })
       : unavailable("The current view could not be understood reliably.");
+  }
+  if (!focusPoint) {
+    return unavailable("The captured visual context did not include a pointer.");
   }
   if ((context.confidence ?? 0) < 0.7) {
     return unavailable("The visual model could not locate the requested target reliably.");
@@ -19,6 +26,12 @@ export function formatVisualResult(context: ResolvedContext, question: string): 
     );
   if (targetRequired && !context.target?.bounds) {
     return unavailable("The visual answer did not include a verifiable target location.");
+  }
+  if (!context.target?.bounds) {
+    return unavailable("The visual answer did not include a target for the captured pointer.");
+  }
+  if (!containsPoint(context.target.bounds, focusPoint)) {
+    return unavailable("The located target does not contain the captured pointer.");
   }
   if (context.target?.bounds && !matchesPosition(question, context.target.bounds)) {
     return unavailable("The located target does not match the requested screen position.");
@@ -33,6 +46,23 @@ export function formatVisualResult(context: ResolvedContext, question: string): 
     status: "ready",
     ...(context.target ? { target: context.target } : {}),
   });
+}
+
+function containsPoint(
+  bounds: {
+    readonly height: number;
+    readonly width: number;
+    readonly x: number;
+    readonly y: number;
+  },
+  point: NormalizedPoint,
+): boolean {
+  return (
+    point.x >= bounds.x &&
+    point.x <= bounds.x + bounds.width &&
+    point.y >= bounds.y &&
+    point.y <= bounds.y + bounds.height
+  );
 }
 
 function matchesPosition(

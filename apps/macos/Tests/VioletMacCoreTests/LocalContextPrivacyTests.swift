@@ -106,6 +106,7 @@ struct LocalContextPrivacyTests {
     }
     #expect(data == source)
     #expect(mediaType == "image/jpeg")
+    #expect(result.confidence == 1)
   }
 
   @Test

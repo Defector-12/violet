@@ -55,11 +55,13 @@ public final class PresenceModel: ObservableObject {
   private let audioIO: any AudioIOPort
   private let audioInactivityTimeout: Duration
   private let client: any VioletCoreClientPort
+  private let clock = ContinuousClock()
   private let contextCapture: (any ContextCapturePort)?
   private let contextClient: (any ContextClientPort)?
   private let contextPrivacyFilter: any LocalContextPrivacyFiltering
   private let deviceId: UUID
   private let defaults: UserDefaults
+  private let naturalPointingAnchorLifetime: Duration
   private let naturalPointingPreferenceKey: String
   private let realtimeClient: (any RealtimeSessionClientPort)?
   private var activeContextSessionId: UUID?
@@ -74,9 +76,11 @@ public final class PresenceModel: ObservableObject {
   private var chatTask: Task<Void, Never>?
   private var contextExpiryTask: Task<Void, Never>?
   private var contextTask: Task<Void, Never>?
+  private var contextTaskId: UUID?
   private var ignoredRealtimeResponseIds = Set<UUID>()
   private var localBargeInFrameCount = 0
   private var monitoringTask: Task<Void, Never>?
+  private var naturalPointingAnchor: (expiresAt: ContinuousClock.Instant, turnId: UUID)?
   private var pendingConversationEndTask: Task<Void, Never>?
   private var recordedAudioResponseIds = Set<UUID>()
   public var onAudioSessionEnded: (@MainActor @Sendable () -> Void)?
@@ -94,6 +98,7 @@ public final class PresenceModel: ObservableObject {
     contextPrivacyFilter: any LocalContextPrivacyFiltering = LocalContextPrivacyFilter(),
     deviceId: UUID = UUID(),
     defaults: UserDefaults = .standard,
+    naturalPointingAnchorLifetime: Duration = .seconds(30),
     naturalPointingPreferenceKey: String = "violet.natural-pointing-enabled",
     realtimeClient: (any RealtimeSessionClientPort)? = nil,
     acceptanceRecorder: any RealtimeAcceptanceRecording =
@@ -108,6 +113,7 @@ public final class PresenceModel: ObservableObject {
     self.contextPrivacyFilter = contextPrivacyFilter
     self.deviceId = deviceId
     self.defaults = defaults
+    self.naturalPointingAnchorLifetime = naturalPointingAnchorLifetime
     self.naturalPointingPreferenceKey = naturalPointingPreferenceKey
     self.isNaturalPointingEnabled = defaults.bool(forKey: naturalPointingPreferenceKey)
     self.realtimeClient = realtimeClient
@@ -236,6 +242,8 @@ public final class PresenceModel: ObservableObject {
       cancelAudioSession(reason: .userStop)
     }
     contextTask?.cancel()
+    let taskId = UUID()
+    contextTaskId = taskId
     let previousContextSessionId = activeContextSessionId
     activeContextSessionId = nil
     contextState = .selecting
@@ -246,41 +254,63 @@ public final class PresenceModel: ObservableObject {
       guard let self else {
         return
       }
+      var submittedSessionId: UUID?
       do {
         if let previous = previousContextSessionId {
           await contextClient.deleteContext(sessionId: previous)
         }
         let captured = try await contextCapture.capture(kind)
+        try Task.checkCancellation()
         if reportsSelection {
           onContextSelectionFinished?(kind)
         }
-        try Task.checkCancellation()
         let filtered = try contextPrivacyFilter.filter(captured)
         let sessionId = UUID()
+        submittedSessionId = sessionId
         let receipt = try await contextClient.submitContext(
           filtered,
           deviceId: deviceId,
           sessionId: sessionId
         )
+        if Task.isCancelled || contextTaskId != taskId {
+          await contextClient.deleteContext(sessionId: receipt.sessionId)
+          submittedSessionId = nil
+          throw CancellationError()
+        }
+        submittedSessionId = nil
         activeContextSessionId = receipt.sessionId
         contextState = .ready(expiresAt: receipt.expiresAt)
         scheduleContextExpiry(receipt)
       } catch is CancellationError {
-        contextState = .idle
+        if let submittedSessionId {
+          await contextClient.deleteContext(sessionId: submittedSessionId)
+        }
+        if contextTaskId == taskId {
+          contextState = .idle
+        }
       } catch let error as ContextCaptureError
         where
         kind == .naturalPointing && error == .unavailable
       {
-        contextState = .idle
+        if contextTaskId == taskId {
+          contextState = .idle
+        }
       } catch let error as LocalContextPrivacyError {
-        contextState = .blocked(
-          message: error.errorDescription ?? "Context was blocked by local policy."
-        )
+        if contextTaskId == taskId {
+          contextState = .blocked(
+            message: error.errorDescription ?? "Context was blocked by local policy."
+          )
+        }
       } catch {
-        contextState = .failed(message: contextUserFacingMessage(error))
+        if contextTaskId == taskId {
+          contextState = .failed(message: contextUserFacingMessage(error))
+        }
       }
-      contextTask = nil
-      onContextProcessingFinished?()
+      if contextTaskId == taskId {
+        contextTask = nil
+        contextTaskId = nil
+        onContextProcessingFinished?()
+      }
     }
   }
 
@@ -291,6 +321,9 @@ public final class PresenceModel: ObservableObject {
   public func setNaturalPointingEnabled(_ enabled: Bool) {
     isNaturalPointingEnabled = enabled
     defaults.set(enabled, forKey: naturalPointingPreferenceKey)
+    if !enabled {
+      naturalPointingAnchor = nil
+    }
     if !enabled, contextState == .selecting {
       clearContext()
     }
@@ -308,8 +341,7 @@ public final class PresenceModel: ObservableObject {
     contextCapture?.cancel()
     contextExpiryTask?.cancel()
     contextExpiryTask = nil
-    contextTask?.cancel()
-    contextTask = nil
+    cancelContextTask()
     let sessionId = activeContextSessionId
     activeContextSessionId = nil
     contextState = .idle
@@ -491,6 +523,8 @@ public final class PresenceModel: ObservableObject {
       acceptanceRecorder.record(
         .init(type: .sessionStopRequested, reason: reason, sessionId: sessionId)
       )
+      naturalPointingAnchor = nil
+      cancelContextTask()
     }
     audioInactivityTask?.cancel()
     audioInactivityTask = nil
@@ -587,11 +621,8 @@ public final class PresenceModel: ObservableObject {
   private func handleAudioEvent(_ event: RealtimeServerEvent) throws {
     switch event {
     case .speechStarted(let turnId):
-      contextTask?.cancel()
-      contextTask = nil
-      if case .selecting = contextState {
-        contextState = .idle
-      }
+      naturalPointingAnchor = nil
+      cancelContextTask()
       pendingConversationEndTask?.cancel()
       pendingConversationEndTask = nil
       resetAudioInactivityTimeout()
@@ -631,6 +662,18 @@ public final class PresenceModel: ObservableObject {
       localBargeInFrameCount = 0
       audioState = .listening
     case .speechStopped(let turnId):
+      if
+        isNaturalPointingEnabled,
+        let contextCapture,
+        contextCapture.prepareNaturalPointingCapture()
+      {
+        naturalPointingAnchor = (
+          expiresAt: clock.now.advanced(by: naturalPointingAnchorLifetime),
+          turnId: turnId
+        )
+      } else {
+        naturalPointingAnchor = nil
+      }
       resetAudioInactivityTimeout()
       acceptanceRecorder.record(
         .init(type: .speechStopped, sessionId: audioSessionId, turnId: turnId)
@@ -757,11 +800,16 @@ public final class PresenceModel: ObservableObject {
     turnId: UUID,
     expiresAt: Date
   ) {
+    let anchor = naturalPointingAnchor
     guard
       isNaturalPointingEnabled,
       let contextCapture,
-      let realtimeClient
+      let realtimeClient,
+      anchor?.turnId == turnId,
+      let anchorExpiresAt = anchor?.expiresAt,
+      anchorExpiresAt > clock.now
     else {
+      naturalPointingAnchor = nil
       Task {
         try? await realtimeClient?.sendContextCaptureResult(
           .failed(.unavailable),
@@ -773,7 +821,10 @@ public final class PresenceModel: ObservableObject {
       return
     }
 
+    naturalPointingAnchor = nil
     contextTask?.cancel()
+    let taskId = UUID()
+    contextTaskId = taskId
     contextState = .selecting
     contextTask = Task { [weak self, contextCapture, realtimeClient] in
       guard let self else {
@@ -786,7 +837,10 @@ public final class PresenceModel: ObservableObject {
         let captured = try await contextCapture.capture(.naturalPointing)
         try Task.checkCancellation()
         let filtered = try contextPrivacyFilter.filter(captured).withoutLocalOCR()
-        guard expiresAt > Date() else {
+        guard
+          anchorExpiresAt > clock.now,
+          expiresAt > Date()
+        else {
           throw ContextCaptureError.cancelled
         }
         try await realtimeClient.sendContextCaptureResult(
@@ -809,9 +863,11 @@ public final class PresenceModel: ObservableObject {
           requestId: requestId,
           turnId: turnId
         )
-        contextState = .blocked(
-          message: error.errorDescription ?? "Context was blocked by local policy."
-        )
+        if contextTaskId == taskId {
+          contextState = .blocked(
+            message: error.errorDescription ?? "Context was blocked by local policy."
+          )
+        }
       } catch let error as ContextCaptureError {
         let reason: RealtimeContextCaptureFailure =
           switch error {
@@ -836,11 +892,23 @@ public final class PresenceModel: ObservableObject {
           turnId: turnId
         )
       }
-      if case .selecting = contextState {
-        contextState = .idle
+      if contextTaskId == taskId {
+        if case .selecting = contextState {
+          contextState = .idle
+        }
+        contextTask = nil
+        contextTaskId = nil
+        onContextProcessingFinished?()
       }
-      contextTask = nil
-      onContextProcessingFinished?()
+    }
+  }
+
+  private func cancelContextTask() {
+    contextTask?.cancel()
+    contextTask = nil
+    contextTaskId = nil
+    if case .selecting = contextState {
+      contextState = .idle
     }
   }
 
@@ -917,6 +985,8 @@ public final class PresenceModel: ObservableObject {
     audioFrameContinuation?.finish()
     audioFrameContinuation = nil
     audioSessionId = nil
+    naturalPointingAnchor = nil
+    cancelContextTask()
     audioOutputFormat = nil
     activeRealtimeResponseId = nil
     ignoredRealtimeResponseIds.removeAll()

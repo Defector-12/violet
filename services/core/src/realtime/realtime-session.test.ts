@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { RealtimeConversationInput } from "@violet/domain";
 import { describe, expect, it } from "vitest";
 import { ContextService } from "../context/context-service.js";
@@ -577,14 +577,33 @@ describe("RealtimeSession", () => {
     ]);
   });
 
-  it("blocks an explicit visual answer until Core grounding is available", async () => {
+  it("rejects an on-demand visual target that does not contain the captured pointer", async () => {
     const sessionId = randomUUID();
     const turnId = randomUUID();
     const responseId = randomUUID();
     const receivedInputs: RealtimeConversationInput[] = [];
     const session = new RealtimeSession({
       conversationEndIntent: neverEndsConversation,
-      contextService: createContextService(),
+      contextService: new ContextService({
+        artifactStore: new InMemoryContextArtifactStore(),
+        repository: new InMemoryContextSessionRepository(),
+        understanding: {
+          async understand() {
+            return {
+              answer: "右下角绿色按钮用于发送消息。",
+              confidence: 0.95,
+              model: "test",
+              provider: "test",
+              summary: "右下角绿色按钮用于发送消息。",
+              target: {
+                bounds: { height: 0.04, width: 0.03, x: 0.95, y: 0.93 },
+                color: "green",
+                kind: "button",
+              },
+            };
+          },
+        },
+      }),
       conversationPort: {
         supportsContextLookup: true,
         async open() {
@@ -652,7 +671,7 @@ describe("RealtimeSession", () => {
     }
     await collect(
       session.handle({
-        context: contextEnvelope("fresh evidence", request.requestId, new Date()),
+        context: imageContextEnvelope(request.requestId, new Date(), { x: 0.1, y: 0.1 }),
         eventId: randomUUID(),
         requestId: request.requestId,
         sequence: 2,
@@ -663,11 +682,14 @@ describe("RealtimeSession", () => {
     );
     await waitUntil(() => receivedInputs.some((input) => input.type === "context-grounding"));
 
-    expect(receivedInputs).toContainEqual({
-      output: expect.stringContaining("fresh evidence"),
+    const grounding = receivedInputs.find((input) => input.type === "context-grounding");
+    expect(grounding).toMatchObject({
       query: "右下角绿色按钮有什么作用？",
       turnId,
       type: "context-grounding",
+    });
+    expect(grounding?.type === "context-grounding" && JSON.parse(grounding.output)).toMatchObject({
+      status: "unavailable",
     });
   });
 
@@ -931,6 +953,48 @@ function contextEnvelope(text: string, sessionId: string, capturedAt: Date) {
     source: {
       deviceId: randomUUID(),
       modality: "accessibility" as const,
+    },
+  };
+}
+
+function imageContextEnvelope(
+  sessionId: string,
+  capturedAt: Date,
+  focusPoint: { readonly x: number; readonly y: number },
+) {
+  const bytes = Buffer.from("synthetic-image");
+  return {
+    authorization: {
+      controlledSensitiveAllowed: false,
+      grantId: randomUUID(),
+      mode: "explicit" as const,
+      purpose: "conversation" as const,
+      retention: "ephemeral" as const,
+    },
+    capturedAt: capturedAt.toISOString(),
+    completeness: 1,
+    confidence: 1,
+    eventId: randomUUID(),
+    expiresAt: new Date(capturedAt.getTime() + 300_000).toISOString(),
+    payload: {
+      focusPoint,
+      image: {
+        data: bytes.toString("base64"),
+        height: 100,
+        mediaType: "image/jpeg" as const,
+        sha256: createHash("sha256").update(bytes).digest("hex"),
+        width: 200,
+      },
+      type: "screen.snapshot" as const,
+    },
+    protocolVersion: "1" as const,
+    redactions: [],
+    sensitivity: "personal" as const,
+    sequence: 1,
+    sessionId,
+    source: {
+      deviceId: randomUUID(),
+      modality: "screen" as const,
     },
   };
 }

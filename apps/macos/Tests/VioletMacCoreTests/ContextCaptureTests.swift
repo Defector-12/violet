@@ -95,6 +95,7 @@ struct ContextCaptureTests {
       selectionReader: { _, _ in .text("selected word") }
     )
 
+    #expect(capture.prepareNaturalPointingCapture())
     let result = try await capture.capture(.naturalPointing)
 
     #expect(
@@ -103,5 +104,79 @@ struct ContextCaptureTests {
           appBundleId: source.bundleIdentifier,
           text: "selected word"
         ))
+  }
+
+  @Test
+  @MainActor
+  func naturalPointingUsesTheApplicationPreparedAtSpeechStop() async throws {
+    let source = ContextApplicationTarget(
+      bundleIdentifier: "com.example.Source",
+      processIdentifier: 505
+    )
+    let laterApplication = ContextApplicationTarget(
+      bundleIdentifier: "com.example.Later",
+      processIdentifier: 606
+    )
+    var activeApplication = source
+    var focusedElementReadCount = 0
+    var requestedProcessIdentifier: pid_t?
+    let capture = SystemContextCapture(
+      excludedBundleIds: [],
+      currentProcessIdentifier: 707,
+      activeApplication: { activeApplication },
+      accessibilityAccess: { true },
+      focusedElementReader: { _ in
+        focusedElementReadCount += 1
+        return AXUIElementCreateSystemWide()
+      },
+      selectionReader: { processIdentifier, _ in
+        requestedProcessIdentifier = processIdentifier
+        return .text("anchored selection")
+      }
+    )
+
+    capture.prepareSelectedTextCapture()
+    #expect(capture.prepareNaturalPointingCapture())
+    activeApplication = laterApplication
+    let result = try await capture.capture(.naturalPointing)
+
+    #expect(focusedElementReadCount == 2)
+    #expect(requestedProcessIdentifier == source.processIdentifier)
+    #expect(
+      result
+        == .text(
+          appBundleId: source.bundleIdentifier,
+          text: "anchored selection"
+        ))
+  }
+
+  @Test
+  @MainActor
+  func naturalPointingPreparationClearsAnUnavailablePreviousTarget() async {
+    let source = ContextApplicationTarget(
+      bundleIdentifier: "com.example.Source",
+      processIdentifier: 808
+    )
+    var activeApplication: ContextApplicationTarget? = source
+    let capture = SystemContextCapture(
+      excludedBundleIds: [],
+      currentProcessIdentifier: 909,
+      activeApplication: { activeApplication },
+      accessibilityAccess: { true },
+      focusedElementReader: { _ in AXUIElementCreateSystemWide() },
+      selectionReader: { _, _ in .text("stale selection") }
+    )
+    capture.prepareSelectedTextCapture()
+    activeApplication = nil
+
+    #expect(!capture.prepareNaturalPointingCapture())
+    do {
+      _ = try await capture.capture(.naturalPointing)
+      Issue.record("Expected unavailable capture")
+    } catch let error as ContextCaptureError {
+      #expect(error == .unavailable)
+    } catch {
+      Issue.record("Expected ContextCaptureError.unavailable")
+    }
   }
 }

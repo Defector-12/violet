@@ -36,6 +36,7 @@ public enum ContextCaptureError: Error, Equatable, LocalizedError {
 public protocol ContextCapturePort: AnyObject {
   func capture(_ kind: ContextCaptureKind) async throws -> CapturedContext
   func cancel()
+  func prepareNaturalPointingCapture() -> Bool
   func prepareSelectedTextCapture()
 }
 
@@ -51,6 +52,10 @@ public final class SilentContextCapture: ContextCapturePort {
   }
 
   public func cancel() {}
+
+  public func prepareNaturalPointingCapture() -> Bool {
+    true
+  }
 
   public func prepareSelectedTextCapture() {}
 }
@@ -73,8 +78,12 @@ public final class SystemContextCapture: NSObject, ContextCapturePort {
   private let currentProcessIdentifier: pid_t
   private let excludedBundleIds: Set<String>
   private let focusedElementReader: (pid_t) -> AXUIElement?
+  private let mouseLocation: () -> CGPoint
   private var pickerContinuation: CheckedContinuation<SelectedFilter, Error>?
   private var regionSelector: RegionSelectionController?
+  private var naturalPointingElement: AXUIElement?
+  private var naturalPointingLocation: CGPoint?
+  private var naturalPointingTarget: ContextApplicationTarget?
   private var selectedTextElement: AXUIElement?
   private var selectedTextTarget: ContextApplicationTarget?
   private let selectionReader: (pid_t?, AXUIElement?) -> AccessibilitySelectionResult
@@ -94,7 +103,8 @@ public final class SystemContextCapture: NSObject, ContextCapturePort {
       },
       accessibilityAccess: requestAccessibilityAccess,
       focusedElementReader: focusedAccessibilityElement,
-      selectionReader: readAccessibilitySelection
+      selectionReader: readAccessibilitySelection,
+      mouseLocation: { NSEvent.mouseLocation }
     )
   }
 
@@ -104,13 +114,15 @@ public final class SystemContextCapture: NSObject, ContextCapturePort {
     activeApplication: @escaping () -> ContextApplicationTarget?,
     accessibilityAccess: @escaping () -> Bool,
     focusedElementReader: @escaping (pid_t) -> AXUIElement?,
-    selectionReader: @escaping (pid_t?, AXUIElement?) -> AccessibilitySelectionResult
+    selectionReader: @escaping (pid_t?, AXUIElement?) -> AccessibilitySelectionResult,
+    mouseLocation: @escaping () -> CGPoint = { NSEvent.mouseLocation }
   ) {
     self.accessibilityAccess = accessibilityAccess
     self.activeApplication = activeApplication
     self.currentProcessIdentifier = currentProcessIdentifier
     self.excludedBundleIds = excludedBundleIds
     self.focusedElementReader = focusedElementReader
+    self.mouseLocation = mouseLocation
     self.selectionReader = selectionReader
     super.init()
   }
@@ -124,6 +136,30 @@ public final class SystemContextCapture: NSObject, ContextCapturePort {
     }
     selectedTextTarget = application
     selectedTextElement = focusedElementReader(application.processIdentifier)
+  }
+
+  public func prepareNaturalPointingCapture() -> Bool {
+    let currentTarget = activeApplication()
+    let usesPreparedTarget =
+      currentTarget?.processIdentifier == currentProcessIdentifier
+    let target =
+      usesPreparedTarget
+      ? selectedTextTarget
+      : currentTarget
+    guard
+      let target,
+      target.processIdentifier != currentProcessIdentifier
+    else {
+      clearNaturalPointingCapture()
+      return false
+    }
+    naturalPointingTarget = target
+    naturalPointingElement =
+      usesPreparedTarget
+      ? selectedTextElement
+      : focusedElementReader(target.processIdentifier)
+    naturalPointingLocation = mouseLocation()
+    return true
   }
 
   public func capture(_ kind: ContextCaptureKind) async throws -> CapturedContext {
@@ -148,6 +184,7 @@ public final class SystemContextCapture: NSObject, ContextCapturePort {
     pickerContinuation = nil
     regionSelector?.cancel()
     regionSelector = nil
+    clearNaturalPointingCapture()
     selectedTextElement = nil
     selectedTextTarget = nil
     SCContentSharingPicker.shared.isActive = false
@@ -183,28 +220,23 @@ public final class SystemContextCapture: NSObject, ContextCapturePort {
   }
 
   private func captureNaturalPointing() async throws -> CapturedContext {
-    let currentTarget = activeApplication()
-    let target =
-      currentTarget?.processIdentifier == currentProcessIdentifier
-      ? selectedTextTarget
-      : currentTarget
     guard
-      let target,
+      let target = naturalPointingTarget,
+      let naturalPointingLocation,
       target.processIdentifier != currentProcessIdentifier
     else {
+      clearNaturalPointingCapture()
       throw ContextCaptureError.unavailable
     }
+    let focusedElement = naturalPointingElement
+    clearNaturalPointingCapture()
     if let bundleIdentifier = target.bundleIdentifier,
       excludedBundleIds.contains(bundleIdentifier)
     {
       throw LocalContextPrivacyError.blockedApplication
     }
 
-    if accessibilityAccess() {
-      let focusedElement =
-        target == selectedTextTarget
-        ? selectedTextElement
-        : focusedElementReader(target.processIdentifier)
+    if accessibilityAccess(), let focusedElement {
       let selection = selectionReader(
         target.processIdentifier,
         focusedElement
@@ -226,15 +258,13 @@ public final class SystemContextCapture: NSObject, ContextCapturePort {
       false,
       onScreenWindowsOnly: true
     )
-    let pointer: CGPoint?
-    if let primaryScreenFrame = NSScreen.screens.first?.frame {
-      pointer = screenCapturePoint(
-        from: NSEvent.mouseLocation,
-        primaryScreenFrame: primaryScreenFrame
-      )
-    } else {
-      pointer = nil
+    guard let primaryScreenFrame = NSScreen.screens.first?.frame else {
+      throw ContextCaptureError.unavailable
     }
+    let pointer = screenCapturePoint(
+      from: naturalPointingLocation,
+      primaryScreenFrame: primaryScreenFrame
+    )
     guard
       let window = preferredNaturalPointingWindow(
         content.windows,
@@ -244,13 +274,21 @@ public final class SystemContextCapture: NSObject, ContextCapturePort {
     else {
       throw ContextCaptureError.unavailable
     }
-    let focusPoint = pointer.flatMap { normalizedPoint($0, in: window.frame) }
+    guard let focusPoint = normalizedPoint(pointer, in: window.frame) else {
+      throw ContextCaptureError.unavailable
+    }
     return try await capture(
       filter: SCContentFilter(desktopIndependentWindow: window),
       appBundleId: target.bundleIdentifier,
       focusPoint: focusPoint,
       region: nil
     )
+  }
+
+  private func clearNaturalPointingCapture() {
+    naturalPointingElement = nil
+    naturalPointingLocation = nil
+    naturalPointingTarget = nil
   }
 
   private func capturePickedWindow() async throws -> CapturedContext {

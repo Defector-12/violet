@@ -19,7 +19,14 @@ const grounded: ResolvedContext = {
 
 describe("formatVisualResult", () => {
   it("accepts grounded answers that match position and color", () => {
-    expect(JSON.parse(formatVisualResult(grounded, "右下角绿色按钮有什么作用"))).toMatchObject({
+    expect(
+      JSON.parse(
+        formatVisualResult(grounded, "右下角绿色按钮有什么作用", {
+          x: 0.96,
+          y: 0.95,
+        }),
+      ),
+    ).toMatchObject({
       answer: "右下角绿色上箭头是发送按钮。",
       status: "ready",
     });
@@ -38,6 +45,52 @@ describe("formatVisualResult", () => {
             },
           },
           "右下角绿色按钮有什么作用",
+          { x: 0.11, y: 0.11 },
+        ),
+      ),
+    ).toMatchObject({ status: "unavailable" });
+  });
+
+  it("rejects a visual answer without a captured pointer", () => {
+    expect(JSON.parse(formatVisualResult(grounded, "这个按钮有什么作用"))).toMatchObject({
+      status: "unavailable",
+    });
+  });
+
+  it("accepts a target whose bounds contain the captured pointer", () => {
+    expect(
+      JSON.parse(
+        formatVisualResult(grounded, "这个按钮有什么作用", {
+          x: 0.96,
+          y: 0.95,
+        }),
+      ),
+    ).toMatchObject({ status: "ready" });
+  });
+
+  it("rejects a target whose bounds do not contain the captured pointer", () => {
+    expect(
+      JSON.parse(
+        formatVisualResult(grounded, "这个按钮有什么作用", {
+          x: 0.1,
+          y: 0.1,
+        }),
+      ),
+    ).toMatchObject({ status: "unavailable" });
+  });
+
+  it("rejects an ungrounded answer when a pointer was captured", () => {
+    expect(
+      JSON.parse(
+        formatVisualResult(
+          {
+            ...grounded,
+            target: {
+              kind: "button",
+            },
+          },
+          "这个按钮有什么作用",
+          { x: 0.96, y: 0.95 },
         ),
       ),
     ).toMatchObject({ status: "unavailable" });
