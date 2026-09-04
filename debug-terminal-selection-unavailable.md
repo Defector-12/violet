@@ -26,19 +26,27 @@
 | C | DeepSeek confidence was below `0.7`. | Medium | Low | Pending confidence metadata. |
 | D | The frozen app, window, or normalized pointer did not refer to the selected terminal text. | Medium | Medium | Pending capture metadata. |
 | E | The anchor expired or the capture task was cancelled. | Low | Low | Current timing is within 30 seconds; pending capture outcome metadata. |
+| F | Core sends a late `response.cancel` after Qwen has already finished the active response, and Qwen's benign rejection terminates the session before capture completes. | High | Low | Pending fallback-cancel and provider-error metadata. |
 
 ## Log Evidence
-Pending pre-fix reproduction with privacy-safe metadata instrumentation.
+- Reproduction turn `48804C5D-9AF3-4C18-8367-5363408D5488` stopped speech at `2026-09-04T09:50:37.857Z`.
+- Qwen response started 12 ms later and audio started 85 ms later.
+- The session ended with reason `failure` at `2026-09-04T09:50:38.029Z`.
+- ScreenCaptureKit initialized at approximately `2026-09-04T09:50:38.045Z`, showing that a capture request had begun.
+- No Envelope/model/gate instrumentation event was emitted, proving the capture never reached Core resolution.
+- User-visible provider error: `conversation has no active response`.
 
 ## Instrumentation Plan
 - D/E: Record Context Envelope type, source app, presence of `focusPoint`, coordinates, and freshness.
 - A/B/C: Record only model confidence and target metadata, never answer, question, image, or OCR text.
 - A/B/C: Record the final grounding status and rejection reason.
+- F: Record fallback cancellation timing, capture-request creation, and privacy-safe Qwen provider error metadata.
 
 ## Instrumentation Status
 - Added four temporary network reporting regions to `services/core/src/realtime/realtime-session.ts`.
+- Added fallback-cancel, capture-request, and Qwen provider-error points after the first reproduction failed before Envelope resolution.
 - `@violet/core` TypeScript build passes.
-- Focused realtime-session tests pass.
+- Focused realtime-session and Qwen adapter tests pass.
 - Biome check passes with formatter suppression limited to the required single-line debug reporters.
 
 ## Verification Conclusion

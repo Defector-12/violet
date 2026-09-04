@@ -393,6 +393,10 @@ export class RealtimeSession {
       turnId: input.turnId,
     };
     this.#pendingContextCaptures.set(requestId, pending);
+    // #region debug-point F:capture-request-created
+    // biome-ignore format: keep temporary debug reporting collapsible
+    void fetch("http://172.19.0.1:7777/event", { method: "POST", body: JSON.stringify({ sessionId: "terminal-selection-unavailable", runId: "pre-fix", hypothesisId: "F", traceId: requestId, location: "realtime-session.ts:beginContextCapture", msg: "[DEBUG] Context capture request created", data: { hasCallId: input.callId !== undefined, pendingCaptureCount: this.#pendingContextCaptures.size, turnWasVisualRequired: this.#visualRequiredTurns.has(input.turnId) }, ts: Date.now() }) }).catch(() => undefined);
+    // #endregion
     return {
       expiresAt: expiresAt.toISOString(),
       requestId,
@@ -433,10 +437,18 @@ export class RealtimeSession {
       return null;
     }
     if (output.type !== "response-completed") {
+      // #region debug-point F:fallback-cancel
+      // biome-ignore format: keep temporary debug reporting collapsible
+      void fetch("http://172.19.0.1:7777/event", { method: "POST", body: JSON.stringify({ sessionId: "terminal-selection-unavailable", runId: "pre-fix", hypothesisId: "F", traceId: output.responseId, location: "realtime-session.ts:fallbackContextCapture:beforeCancel", msg: "[DEBUG] Fallback is cancelling provider response", data: { outputType: output.type, responseWasVisible: this.#visibleResponseIds.has(output.responseId), pendingCaptureCount: this.#pendingContextCaptures.size }, ts: Date.now() }) }).catch(() => undefined);
+      // #endregion
       await conversation.send({
         responseId: output.responseId,
         type: "cancel",
       });
+      // #region debug-point F:fallback-cancel-sent
+      // biome-ignore format: keep temporary debug reporting collapsible
+      void fetch("http://172.19.0.1:7777/event", { method: "POST", body: JSON.stringify({ sessionId: "terminal-selection-unavailable", runId: "pre-fix", hypothesisId: "F", traceId: output.responseId, location: "realtime-session.ts:fallbackContextCapture:afterCancel", msg: "[DEBUG] Fallback cancel command sent", data: { outputType: output.type }, ts: Date.now() }) }).catch(() => undefined);
+      // #endregion
     }
     return this.#beginContextCapture({
       conversation,
