@@ -7,11 +7,11 @@
 - Release 1A 已完成交付。当前 `main` 已包含 pnpm workspace、JSON Schema/OpenAPI 协议、TypeScript SDK、Swift 生成客户端边界、模块化 Core、`dev-cli`、PostgreSQL 迁移、应用层信封加密、DeepSeek Adapter、Docker Compose、可观测配置和加密备份恢复。
 - Release 1B 已完成实现、验收和合并。`RealtimeSession v1`、WebSocket、`RealtimeConversationPort`、确定性实时 Adapter 和最终事件落账可用；原生菜单栏 App、Keychain、可选 SSH 隧道、全局快捷键、系统生命周期和 `AudioIOPort` 边界已经构建。Qwen Adapter 已通过 MR !14 合并，持续会话、`smart_turn`、最近 20 轮上下文、点击与语音打断均已通过真实验收。2026-08-23 的批量设备验收通过 174 次触发、88 次语音、31 次打断和 54 次停止门禁，并覆盖 SSH 断线恢复、250ms 单向延迟和三类音频路由。`Paraformer → DeepSeek → CosyVoice` Pipeline 基线已通过 MR !15 合并，三次静默真实 canary 的断句到首音频为 1.34–1.94 秒且中文转写准确。Qwen 是默认运行时，Pipeline 只通过显式配置启用。
 - Release 1C 已形成实现候选并集成到代码主线：Context Envelope v1、短时 Context Session、DeepSeek `deepseek-v4-flash-vision-exp` Adapter、加密 TOS 临时对象、Mac 窗口/显示器选择、区域框选、Accessibility、Apple Vision OCR、本地敏感遮挡和文字/Realtime Context 注入已实现。本地 `sherpa-onnx v1.13.6` 唤醒 Adapter、`Violet` 开放词汇模型、显式启用开关和锁屏/睡眠停采也已实现。DeepSeek Vision 真实 canary、Screen Recording/Accessibility 冒烟和视觉矩阵 20/50 已通过；当前唤醒候选真实短门禁为 15/20，未达到 19/20。2026-08-30 恢复 1C.1 验收后发现精细目标定位缺陷，Release 1C 与 1C.1 均继续保持候选状态。
-- Release 1C.1 Natural Pointing 的按需视觉替换方案已形成实现候选：唤醒不再预先截图，`Look` 开启时由 Qwen 进行语义路由，Core 对明确视觉指代漏调工具进行确定性兜底，Mac 按当前 `turnId` 读取 AX 选区或即时截图，DeepSeek 基于原图和用户原问题直接作答。Core 校验新鲜度、位置、颜色和置信度，小目标会裁剪复核；旧轮结果被取消和丢弃。2026-09-03 前已完成 Devbox/Mac 部署、普通非视觉问答及连续三轮 AX 快速通道冒烟，并修复 UUID 大小写、跨设备时钟偏差和图片 Context 超出 WebSocket 上限的问题。2026-09-04 本地候选进一步在 `input.speech.stopped` 时按 `turnId` 固定鼠标和前台目标，并要求模型目标框包含该点。Trae 终端真实复测、精细定位、隐私和生命周期矩阵仍未完成，因此 Release 1C 与 1C.1 仍未正式交付。
+- Release 1C.1 Natural Pointing 的按需视觉替换方案已形成实现候选：唤醒不再预先截图，`Look` 开启时由 Qwen 进行语义路由，Core 对明确视觉指代漏调工具进行确定性兜底，Mac 按当前 `turnId` 读取 AX 选区或即时截图，DeepSeek 基于原图和用户原问题直接作答。Core 校验新鲜度、位置、颜色和置信度，小目标会裁剪复核；旧轮结果被取消和丢弃。2026-09-03 前已完成普通非视觉问答及连续三轮 AX 快速通道冒烟，并修复 UUID 大小写、跨设备时钟偏差和图片 Context 超出 WebSocket 上限的问题。2026-09-04 部署提交 `680f5c9`，进一步在 `input.speech.stopped` 时按 `turnId` 固定鼠标和前台目标，并要求模型目标框包含该点。Trae 终端真实复测、精细定位、隐私和生命周期矩阵仍未完成，因此 Release 1C 与 1C.1 仍未正式交付。
 - 已完成现有阅读工具 Sprinkle 的只读评估。Sprinkle 是 WXT、React、TypeScript 构建的浏览器扩展，可复用其页面提取、文字与图片选择、区域框选和浏览器内交互能力，但不能作为 Violet 本体。
 - 当前可使用一台公司 Devbox 作为临时云环境：32 核 CPU、128G 内存、120G 系统盘、500G 数据盘、veLinux 1.0。它足以支撑第一阶段的后端、数据库、Worker、沙箱和测试。
 - Violet 是单用户、云端智能优先、Mac 先行的绿地项目。
-- 当前功能分支的格式、生成物、类型和构建门禁通过，TypeScript/JavaScript 99 个测试和 Swift 58 个测试通过；Mac App 已完成打包与签名校验。Core 生产部署包已验证包含可用的 `sharp` 图像裁剪依赖；Devbox 与 Mac 当前运行无诊断代码的确定提交 `2753351`，加密事件账本包含连续的 `805 / 1..805`。本地唤醒模型使用合成 `Violet` 音频完成 100 次正样本和 100 次静音负样本验证，结果为 100/100 触发、0/100 误触发，CPU 处理 p95 为 22.2ms；该结果不能替代真实办公环境验收。Release 1A 的真实模型 20 轮纵向验证、两次物理重启、加密备份、TOS 上传下载和空库恢复已经通过，Release 1B Core 的 ready/sealed、认证、Realtime 握手和遥测白名单验证通过。
+- 当前功能分支的格式、生成物、类型和构建门禁通过，TypeScript/JavaScript 99 个测试和 Swift 58 个测试通过；Mac App 已完成打包与签名校验。Core 生产部署包已验证包含可用的 `sharp` 图像裁剪依赖；Devbox 与 Mac 当前运行确定提交 `680f5c9`，本次部署没有数据库结构变更。本地唤醒模型使用合成 `Violet` 音频完成 100 次正样本和 100 次静音负样本验证，结果为 100/100 触发、0/100 误触发，CPU 处理 p95 为 22.2ms；该结果不能替代真实办公环境验收。Release 1A 的真实模型 20 轮纵向验证、两次物理重启、加密备份、TOS 上传下载和空库恢复已经通过，Release 1B Core 的 ready/sealed、认证、Realtime 握手和遥测白名单验证通过。
 
 ## 2. 架构目标
 
@@ -114,7 +114,7 @@ Release 1C.1 增加独立且默认关闭的 `Look` 授权。旧候选只在语�
   定位，并退回显式区域框选。
 - 该流程按用户视觉问题触发，不持续采帧，不在 `Look` 关闭时采集，不进入长期记忆。
 - 当前 Qwen Audio 型号保留，不在本次改造中切换到 Qwen Omni。
-- AX 不可用时，当前本地候选把整窗截图、提问结束时固定的归一化鼠标坐标和用户原问题
+- AX 不可用时，当前部署候选把整窗截图、提问结束时固定的归一化鼠标坐标和用户原问题
   发送给 DeepSeek，并用模型目标框反向校验鼠标点。OCR 只用于设备端秘密阻断和敏感
   遮挡，不参与目标选择或限制视觉模型置信度。
 
@@ -497,7 +497,7 @@ Sprinkle 不扩建为 Violet 本体，而演化为浏览器结构化感官：
 - 任意应用中的指向、选区和结构化语义能否稳定融合，需要专项评估。
 - Trae 集成终端不暴露 `AXSelectedText`。旧候选的真实截图链路已证明能够安全传输和
   调用 DeepSeek，但视觉请求到达时鼠标已不在终端目标附近，模型只返回低置信度或无
-  目标框结果。当前本地候选已改为按语音轮次固定鼠标并校验点框包含关系，仍待真机复测。
+  目标框结果。当前部署候选已改为按语音轮次固定鼠标并校验点框包含关系，仍待真机复测。
 - 记忆的正确写入、相关检索、冲突处理与删除传播尚需专项设计和测试。
 - 开发 Agent、部署工具和外部平台是否提供稳定 API、CLI 或 MCP 尚需验证。
 - 用户已经接受真实个人记忆进入当前 DeepSeek API 的数据处理风险；供应商条款变化仍需持续复核。
@@ -510,4 +510,4 @@ Sprinkle 不扩建为 Violet 本体，而演化为浏览器结构化感官：
 
 ## 19. 下一步
 
-按《工程路线》执行第一阶段。Release 1A 基座与 Release 1B Presence 已完成；Qwen 是默认实时运行时，Pipeline 是显式配置的降级与替换基线，禁止静默自动切换。Release 1C Violet Sight 的代码已集成到主线；Release 1C.1 已完成“Qwen 路由、按需即时截图、DeepSeek 直接回答、Core 校验、Qwen 播报”的实现候选，普通非视觉问答和 AX 快速通道冒烟通过。按轮固定鼠标及点框包含校验已在本地实现，下一步是完成 Trae 终端精确选区真机复测。MR !20 仍不得合并，Release 1C/1C.1 达到完整门槛后才能进入 Release 1D。
+按《工程路线》执行第一阶段。Release 1A 基座与 Release 1B Presence 已完成；Qwen 是默认实时运行时，Pipeline 是显式配置的降级与替换基线，禁止静默自动切换。Release 1C Violet Sight 的代码已集成到主线；Release 1C.1 已完成“Qwen 路由、按需即时截图、DeepSeek 直接回答、Core 校验、Qwen 播报”的实现候选，普通非视觉问答和 AX 快速通道冒烟通过。按轮固定鼠标及点框包含校验已部署，下一步是完成 Trae 终端精确选区真机复测。MR !20 仍不得合并，Release 1C/1C.1 达到完整门槛后才能进入 Release 1D。

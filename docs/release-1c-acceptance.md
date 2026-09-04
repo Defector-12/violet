@@ -1,8 +1,8 @@
 # Release 1C Violet Sight 验收
 
 > 状态：Release 1C/1C.1 均为实现候选，未正式交付。手动 Context、视觉矩阵 20/50、
-> 普通非视觉问答和 AX 快速通道已通过；Trae 终端精确选区的鼠标锚点修复已在本地
-> 实现，尚待真实复测。完整门槛通过前不得合并 MR !20 或进入 Release 1D。变更过程见
+> 普通非视觉问答和 AX 快速通道已通过；Trae 终端精确选区的鼠标锚点修复已部署，
+> 尚待真实复测。完整门槛通过前不得合并 MR !20 或进入 Release 1D。变更过程见
 > [历史记录](./历史记录.md)。
 
 ## 1. 当前基线
@@ -17,7 +17,7 @@ VIOLET_SWIFTPM_DISABLE_SANDBOX=1 pnpm macos:app
 - Swift：58 项通过。
 - Mac App：资源打包、ad-hoc 签名和深度签名校验通过。
 - 分支：`feat/1c1-natural-pointing`；Codebase 与 GitHub 已同步。
-- 运行代码：无诊断提交 `2753351`；Devbox Core 健康，Mac 单进程在线。
+- 运行代码：提交 `680f5c9`；Devbox Core 健康，Mac 单进程在线。
 - 账本：`805 / 1..805`，连续。
 - 关键修复：`d3fbd55`（UUID/时钟）和 `2753351`（图片 WebSocket 容量）。
 
@@ -70,7 +70,7 @@ VIOLET_SWIFTPM_DISABLE_SANDBOX=1 pnpm macos:app
   也没有可验证的选区边界。
 - DeepSeek 曾返回置信度 `0.65` 且无目标框，也曾在理解失败后产生 `0.25` 无答案降级。
 - Core 按现有门禁明确拒绝回答；该行为符合“不把猜测伪装成证据”的要求。
-- 本地修复候选已在提问结束时按 `turnId` 固定鼠标锚点，并拒绝不包含该点的模型目标框；
+- 部署候选已在提问结束时按 `turnId` 固定鼠标锚点，并拒绝不包含该点的模型目标框；
   终端真实场景尚未复测，因此本项仍记录为失败。
 
 ### 其他未通过项
