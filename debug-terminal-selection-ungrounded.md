@@ -45,3 +45,13 @@ Root cause confirmed: the vision model omitted mandatory `target.text` while cla
 - Keep the Core confidence, bounds, pointer containment, target kind, and text gates unchanged.
 
 Post-fix runtime verification is pending.
+Post-fix commit `5898f6d` is deployed, Core is healthy, and the collector was cleared before verification.
+
+## Post-Fix Iteration 1
+- `target.text` is now present and the model confidence is `0.80`.
+- Core still rejects because `target.bounds` does not contain the frozen pointer.
+- Remaining hypotheses:
+  - E: The model returned a tight text box near the pointer, but excluded pointer whitespace.
+  - F: The model selected a different region elsewhere in the screenshot.
+  - G: Pointer and target use different Y-axis geometry.
+- Next evidence: numeric focus point and target bounds only; no image or text content.

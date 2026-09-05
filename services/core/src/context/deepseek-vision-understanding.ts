@@ -129,7 +129,7 @@ export class DeepSeekVisionUnderstandingPort implements ContextUnderstandingPort
       const grounded = parseGroundedAnswer(summary);
       // #region debug-point C:model-result
       // biome-ignore format: keep temporary debug reporting collapsible
-      void fetch("http://172.19.0.1:7777/event", { method: "POST", body: JSON.stringify({ sessionId: "terminal-selection-ungrounded", runId: "post-fix", hypothesisId: "C", traceId: request.requestId, location: "deepseek-vision-understanding.ts:model-result", msg: "[DEBUG] DeepSeek vision result parsed", data: { confidence: grounded.confidence, hasTarget: grounded.target !== undefined, targetKind: grounded.target?.kind, hasTargetBounds: grounded.target?.bounds !== undefined, hasTargetText: Boolean(grounded.target?.text), targetArea: grounded.target?.bounds ? grounded.target.bounds.width * grounded.target.bounds.height : undefined }, ts: Date.now() }) }).catch(() => undefined);
+      void fetch("http://172.19.0.1:7777/event", { method: "POST", body: JSON.stringify({ sessionId: "terminal-selection-ungrounded", runId: "post-fix", hypothesisId: "C", traceId: request.requestId, location: "deepseek-vision-understanding.ts:model-result", msg: "[DEBUG] DeepSeek vision result parsed", data: { confidence: grounded.confidence, hasTarget: grounded.target !== undefined, targetKind: grounded.target?.kind, targetBounds: grounded.target?.bounds, hasTargetText: Boolean(grounded.target?.text), targetArea: grounded.target?.bounds ? grounded.target.bounds.width * grounded.target.bounds.height : undefined }, ts: Date.now() }) }).catch(() => undefined);
       // #endregion
       return {
         answer: grounded.answer,

@@ -524,7 +524,7 @@ export class RealtimeSession {
       const result = formatVisualResult(context, question, focusPoint);
       // #region debug-point B:grounding-result
       // biome-ignore format: keep temporary debug reporting collapsible
-      (() => { const parsed = JSON.parse(result) as { message?: string; status?: string }; void fetch("http://172.19.0.1:7777/event", { method: "POST", body: JSON.stringify({ sessionId: "terminal-selection-ungrounded", runId: "post-fix", hypothesisId: "B", traceId: pending.requestId, location: "realtime-session.ts:visual-grounding-result", msg: "[DEBUG] Core visual grounding result", data: { status: parsed.status, reason: parsed.message, hasFocusPoint: focusPoint !== undefined, confidence: context.confidence, targetKind: context.target?.kind, hasTargetBounds: context.target?.bounds !== undefined, hasTargetText: Boolean(context.target?.text) }, ts: Date.now() }) }).catch(() => undefined); })();
+      (() => { const parsed = JSON.parse(result) as { message?: string; status?: string }; void fetch("http://172.19.0.1:7777/event", { method: "POST", body: JSON.stringify({ sessionId: "terminal-selection-ungrounded", runId: "post-fix", hypothesisId: "B", traceId: pending.requestId, location: "realtime-session.ts:visual-grounding-result", msg: "[DEBUG] Core visual grounding result", data: { status: parsed.status, reason: parsed.message, focusPoint, confidence: context.confidence, targetKind: context.target?.kind, targetBounds: context.target?.bounds, hasTargetText: Boolean(context.target?.text) }, ts: Date.now() }) }).catch(() => undefined); })();
       // #endregion
       this.#clearVisualTurn(pending.turnId);
       await this.#sendResolvedContext(pending, result);
