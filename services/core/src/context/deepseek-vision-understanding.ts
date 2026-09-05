@@ -98,10 +98,6 @@ export class DeepSeekVisionUnderstandingPort implements ContextUnderstandingPort
         role: "user",
       },
     ];
-    // #region debug-point H:primary-model-request
-    // biome-ignore format: keep temporary raw artifact reporting isolated
-    void fetch("http://172.19.0.1:7777/event", { method: "POST", body: JSON.stringify({ sessionId: "terminal-selection-unavailable", runId: "raw-artifact", hypothesisId: "H", traceId: request.requestId, location: "deepseek-vision-understanding.ts:primary:request", msg: "[DEBUG] Exact primary model request", data: { stage: "primary-request", request: { messages, model: this.#model } }, ts: Date.now() }) }).catch(() => undefined);
-    // #endregion
     const response = await this.#client.chat.completions.create(
       {
         messages,
@@ -111,10 +107,6 @@ export class DeepSeekVisionUnderstandingPort implements ContextUnderstandingPort
         ...(signal ? { signal } : {}),
       },
     );
-    // #region debug-point H:primary-model-response
-    // biome-ignore format: keep temporary raw artifact reporting isolated
-    void fetch("http://172.19.0.1:7777/event", { method: "POST", body: JSON.stringify({ sessionId: "terminal-selection-unavailable", runId: "raw-artifact", hypothesisId: "H", traceId: request.requestId, location: "deepseek-vision-understanding.ts:primary:response", msg: "[DEBUG] Exact primary model response", data: { stage: "primary-response", response }, ts: Date.now() }) }).catch(() => undefined);
-    // #endregion
     const summary = response.choices[0]?.message.content?.trim();
     if (!summary) {
       throw new Error("DeepSeek vision returned an empty response");
@@ -123,52 +115,43 @@ export class DeepSeekVisionUnderstandingPort implements ContextUnderstandingPort
       let grounded = parseGroundedAnswer(summary);
       if (isSmallTarget(grounded.target)) {
         const croppedImage = await cropTarget(request.payload.image.bytes, grounded.target.bounds);
-        const verificationMessages: ChatCompletionMessageParam[] = [
-          {
-            content: [
-              systemPrompt,
-              groundedAnswerPrompt,
-              "This image is a close crop of the candidate target. Verify its identity, visible text, color, and function before answering.",
-            ].join(" "),
-            role: "system",
-          },
-          {
-            content: [
-              {
-                text: [
-                  `User question:\n${request.question}`,
-                  `First-pass candidate:\n${JSON.stringify(grounded)}`,
-                ].join("\n"),
-                type: "text",
-              },
-              {
-                image_url: {
-                  detail: "high",
-                  url: `data:image/jpeg;base64,${croppedImage.toString("base64")}`,
-                },
-                type: "image_url",
-              },
-            ],
-            role: "user",
-          },
-        ];
-        // #region debug-point H:verification-model-request
-        // biome-ignore format: keep temporary raw artifact reporting isolated
-        void fetch("http://172.19.0.1:7777/event", { method: "POST", body: JSON.stringify({ sessionId: "terminal-selection-unavailable", runId: "raw-artifact", hypothesisId: "H", traceId: request.requestId, location: "deepseek-vision-understanding.ts:verification:request", msg: "[DEBUG] Exact verification model request", data: { stage: "verification-request", request: { messages: verificationMessages, model: this.#model } }, ts: Date.now() }) }).catch(() => undefined);
-        // #endregion
         const verification = await this.#client.chat.completions.create(
           {
-            messages: verificationMessages,
+            messages: [
+              {
+                content: [
+                  systemPrompt,
+                  groundedAnswerPrompt,
+                  "This image is a close crop of the candidate target. Verify its identity, visible text, color, and function before answering.",
+                ].join(" "),
+                role: "system",
+              },
+              {
+                content: [
+                  {
+                    text: [
+                      `User question:\n${request.question}`,
+                      `First-pass candidate:\n${JSON.stringify(grounded)}`,
+                    ].join("\n"),
+                    type: "text",
+                  },
+                  {
+                    image_url: {
+                      detail: "high",
+                      url: `data:image/jpeg;base64,${croppedImage.toString("base64")}`,
+                    },
+                    type: "image_url",
+                  },
+                ],
+                role: "user",
+              },
+            ],
             model: this.#model,
           },
           {
             ...(signal ? { signal } : {}),
           },
         );
-        // #region debug-point H:verification-model-response
-        // biome-ignore format: keep temporary raw artifact reporting isolated
-        void fetch("http://172.19.0.1:7777/event", { method: "POST", body: JSON.stringify({ sessionId: "terminal-selection-unavailable", runId: "raw-artifact", hypothesisId: "H", traceId: request.requestId, location: "deepseek-vision-understanding.ts:verification:response", msg: "[DEBUG] Exact verification model response", data: { stage: "verification-response", response: verification }, ts: Date.now() }) }).catch(() => undefined);
-        // #endregion
         const verified = verification.choices[0]?.message.content?.trim();
         if (!verified) {
           throw new Error("DeepSeek vision returned an empty target verification");

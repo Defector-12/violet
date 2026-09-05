@@ -412,10 +412,6 @@ export class RealtimeSession {
       turnId: input.turnId,
     };
     this.#pendingContextCaptures.set(requestId, pending);
-    // #region debug-point F:capture-request-created
-    // biome-ignore format: keep temporary debug reporting collapsible
-    void fetch("http://172.19.0.1:7777/event", { method: "POST", body: JSON.stringify({ sessionId: "terminal-selection-unavailable", runId: "post-fix", hypothesisId: "F", traceId: requestId, location: "realtime-session.ts:beginContextCapture", msg: "[DEBUG] Context capture request created", data: { hasCallId: input.callId !== undefined, pendingCaptureCount: this.#pendingContextCaptures.size, turnWasVisualRequired: this.#visualRequiredTurns.has(input.turnId) }, ts: Date.now() }) }).catch(() => undefined);
-    // #endregion
     return {
       expiresAt: expiresAt.toISOString(),
       requestId,
@@ -456,18 +452,10 @@ export class RealtimeSession {
       return null;
     }
     if (output.type !== "response-completed") {
-      // #region debug-point F:fallback-cancel
-      // biome-ignore format: keep temporary debug reporting collapsible
-      void fetch("http://172.19.0.1:7777/event", { method: "POST", body: JSON.stringify({ sessionId: "terminal-selection-unavailable", runId: "post-fix", hypothesisId: "F", traceId: output.responseId, location: "realtime-session.ts:fallbackContextCapture:beforeCancel", msg: "[DEBUG] Fallback is cancelling provider response", data: { outputType: output.type, responseWasVisible: this.#visibleResponseIds.has(output.responseId), pendingCaptureCount: this.#pendingContextCaptures.size }, ts: Date.now() }) }).catch(() => undefined);
-      // #endregion
       await conversation.send({
         responseId: output.responseId,
         type: "cancel",
       });
-      // #region debug-point F:fallback-cancel-sent
-      // biome-ignore format: keep temporary debug reporting collapsible
-      void fetch("http://172.19.0.1:7777/event", { method: "POST", body: JSON.stringify({ sessionId: "terminal-selection-unavailable", runId: "post-fix", hypothesisId: "F", traceId: output.responseId, location: "realtime-session.ts:fallbackContextCapture:afterCancel", msg: "[DEBUG] Fallback cancel command sent", data: { outputType: output.type }, ts: Date.now() }) }).catch(() => undefined);
-      // #endregion
     }
     return this.#beginContextCapture({
       conversation,
@@ -514,33 +502,17 @@ export class RealtimeSession {
   ): Promise<void> {
     try {
       const question = this.#finalTranscripts.get(pending.turnId) ?? pending.query;
-      // #region debug-point D-E:context-envelope
-      // biome-ignore format: keep temporary debug reporting collapsible
-      void fetch("http://172.19.0.1:7777/event", { method: "POST", body: JSON.stringify({ sessionId: "terminal-selection-unavailable", runId: "post-fix", hypothesisId: "D,E", traceId: pending.requestId, location: "realtime-session.ts:resolveOnDemandContext:envelope", msg: "[DEBUG] Context envelope received", data: { payloadType: envelope.payload.type, sourceModality: envelope.source.modality, appBundleId: envelope.source.appBundleId ?? null, hasFocusPoint: (envelope.payload.type === "focus.region" || envelope.payload.type === "screen.snapshot") && envelope.payload.focusPoint !== undefined, focusPoint: envelope.payload.type === "focus.region" || envelope.payload.type === "screen.snapshot" ? envelope.payload.focusPoint ?? null : null, ageMs: Date.now() - Date.parse(envelope.capturedAt), expiresInMs: Date.parse(envelope.expiresAt) - Date.now() }, ts: Date.now() }) }).catch(() => undefined);
-      // #endregion
       await this.#contextService.submit(envelope, pending.abortController.signal, question);
       const context = await this.#contextService.get(envelope.sessionId);
       pending.abortController.signal.throwIfAborted();
-      // #region debug-point A-C:model-metadata
-      // biome-ignore format: keep temporary debug reporting collapsible
-      void fetch("http://172.19.0.1:7777/event", { method: "POST", body: JSON.stringify({ sessionId: "terminal-selection-unavailable", runId: "post-fix", hypothesisId: "A,B,C", traceId: pending.requestId, location: "realtime-session.ts:resolveOnDemandContext:model", msg: "[DEBUG] Visual model metadata resolved", data: { confidence: context.confidence ?? null, hasAnswer: context.answer !== undefined, hasTarget: context.target !== undefined, targetKind: context.target?.kind ?? null, targetBounds: context.target?.bounds ?? null, targetColor: context.target?.color ?? null }, ts: Date.now() }) }).catch(() => undefined);
-      // #endregion
       const focusPoint =
         envelope.payload.type === "focus.region" || envelope.payload.type === "screen.snapshot"
           ? envelope.payload.focusPoint
           : undefined;
       const result = formatVisualResult(context, question, focusPoint);
-      // #region debug-point A-C:grounding-decision
-      // biome-ignore format: keep temporary debug reporting collapsible
-      (() => { try { const decision = JSON.parse(result) as { readonly message?: string; readonly status?: string }; void fetch("http://172.19.0.1:7777/event", { method: "POST", body: JSON.stringify({ sessionId: "terminal-selection-unavailable", runId: "post-fix", hypothesisId: "A,B,C", traceId: pending.requestId, location: "realtime-session.ts:resolveOnDemandContext:decision", msg: "[DEBUG] Grounding decision produced", data: { status: decision.status ?? null, reason: decision.message ?? null, focusPoint: focusPoint ?? null }, ts: Date.now() }) }).catch(() => undefined); } catch {} })();
-      // #endregion
       this.#clearVisualTurn(pending.turnId);
       await this.#sendResolvedContext(pending, result);
-    } catch (error) {
-      // #region debug-point E:context-error
-      // biome-ignore format: keep temporary debug reporting collapsible
-      void fetch("http://172.19.0.1:7777/event", { method: "POST", body: JSON.stringify({ sessionId: "terminal-selection-unavailable", runId: "post-fix", hypothesisId: "E", traceId: pending.requestId, location: "realtime-session.ts:resolveOnDemandContext:error", msg: "[DEBUG] Context resolution failed", data: { aborted: pending.abortController.signal.aborted, errorType: error instanceof Error ? error.name : typeof error }, ts: Date.now() }) }).catch(() => undefined);
-      // #endregion
+    } catch {
       if (pending.abortController.signal.aborted) {
         return;
       }

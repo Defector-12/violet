@@ -409,10 +409,6 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
   ): Promise<RealtimeConversationOutput | undefined> {
     if (event.type === "error") {
       const output = providerErrorOutput(event);
-      // #region debug-point F:provider-error
-      // biome-ignore format: keep temporary debug reporting collapsible
-      void fetch("http://172.19.0.1:7777/event", { method: "POST", body: JSON.stringify({ sessionId: "terminal-selection-unavailable", runId: "post-fix", hypothesisId: "F", location: "qwen-audio-realtime-conversation.ts:mapProviderEvent:error", msg: "[DEBUG] Qwen provider error received", data: { code: output.code, message: output.message, retryable: output.retryable, hasActiveResponse: this.#activeProviderResponseId !== null, pendingContextCallCount: this.#pendingContextCallIds.size }, ts: Date.now() }) }).catch(() => undefined);
-      // #endregion
       const cancelledProviderResponseId = this.#pendingCancellationProviderResponseId;
       if (
         cancelledProviderResponseId &&
