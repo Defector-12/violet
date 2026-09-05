@@ -64,6 +64,13 @@ Two independent failures are present:
 
 Fix the cancellation race first while retaining instrumentation, then use a post-fix reproduction to continue diagnosing target capture and grounding.
 
+## Feasibility Conclusion
+- The cancellation race and leaked audio prefix are ordinary state-machine defects and have test-backed fixes.
+- Precise terminal selection is not reliably recoverable from the current fallback contract. Trae exposes no `AXSelectedText`, while the fallback carries one pointer coordinate but no selection range.
+- A screenshot model can sometimes infer a visible highlight, but cannot guarantee exact multi-line selection boundaries when focus styling changes, text is soft-wrapped, or the pointer marks only one endpoint.
+- Prompt tuning, retries, or a lower confidence threshold cannot add the missing selection-range information and would weaken the no-guessing contract.
+- Reliable delivery requires either an explicit Region selection or a terminal/IDE integration that exposes the selected text. Under the current no-clipboard and no-Trae-adapter constraints, explicit Region is the viable path.
+
 ## Cancellation Race Fix
 - Added a failing Qwen adapter regression for the sequence `response.created` → audio → local cancel → provider `Conversation has no active response`.
 - The adapter now converts only that exact error, while a local cancellation is pending, into `response-cancelled`.
@@ -78,3 +85,12 @@ Fix the cancellation race first while retaining instrumentation, then use a post
 - On-demand sessions now buffer response events by turn until the final transcript is available.
 - Non-visual turns release the buffered events in order; visual turns suppress the old response and start Context capture without exposing an audio prefix.
 - New and existing focused tests pass; the full TypeScript/JavaScript gate passes with `102` tests.
+- Commit `01a1151` is deployed as `01a1151-post-fix`; post-fix logs were cleared before verification.
+
+## User-Authorized Raw Artifact Capture
+- Local destination: `tmp-test/` (untracked).
+- Capture scope: one explicitly requested reproduction.
+- Captured inputs: exact model name, system/user message payload, privacy-filtered image with focus marker, and pointer metadata.
+- Captured outputs: full primary and optional crop-verification response objects, including `reasoning_content` only if the provider returns it.
+- Excluded: API keys, Authorization headers, raw audio, and unrelated persisted Context.
+- Focused DeepSeek adapter tests, build, formatting, and the full `102`-test TypeScript/JavaScript gate pass.
