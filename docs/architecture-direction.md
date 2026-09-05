@@ -7,11 +7,11 @@
 - Release 1A 已完成交付。当前 `main` 已包含 pnpm workspace、JSON Schema/OpenAPI 协议、TypeScript SDK、Swift 生成客户端边界、模块化 Core、`dev-cli`、PostgreSQL 迁移、应用层信封加密、DeepSeek Adapter、Docker Compose、可观测配置和加密备份恢复。
 - Release 1B 已完成实现、验收和合并。`RealtimeSession v1`、WebSocket、`RealtimeConversationPort`、确定性实时 Adapter 和最终事件落账可用；原生菜单栏 App、Keychain、可选 SSH 隧道、全局快捷键、系统生命周期和 `AudioIOPort` 边界已经构建。Qwen Adapter 已通过 MR !14 合并，持续会话、`smart_turn`、最近 20 轮上下文、点击与语音打断均已通过真实验收。2026-08-23 的批量设备验收通过 174 次触发、88 次语音、31 次打断和 54 次停止门禁，并覆盖 SSH 断线恢复、250ms 单向延迟和三类音频路由。`Paraformer → DeepSeek → CosyVoice` Pipeline 基线已通过 MR !15 合并，三次静默真实 canary 的断句到首音频为 1.34–1.94 秒且中文转写准确。Qwen 是默认运行时，Pipeline 只通过显式配置启用。
 - Release 1C 已形成实现候选并集成到代码主线：Context Envelope v1、短时 Context Session、DeepSeek `deepseek-v4-flash-vision-exp` Adapter、加密 TOS 临时对象、Mac 窗口/显示器选择、区域框选、Accessibility、Apple Vision OCR、本地敏感遮挡和文字/Realtime Context 注入已实现。本地 `sherpa-onnx v1.13.6` 唤醒 Adapter、`Violet` 开放词汇模型、显式启用开关和锁屏/睡眠停采也已实现。DeepSeek Vision 真实 canary、Screen Recording/Accessibility 冒烟和视觉矩阵 20/50 已通过；当前唤醒候选真实短门禁为 15/20，未达到 19/20。2026-08-30 恢复 1C.1 验收后发现精细目标定位缺陷，Release 1C 与 1C.1 均继续保持候选状态。
-- Release 1C.1 Natural Pointing 的按需视觉替换方案已形成实现候选：唤醒不再预先截图，`Look` 开启时由 Qwen 进行语义路由，Core 对明确视觉指代漏调工具进行确定性兜底，Mac 按当前 `turnId` 读取 AX 选区或即时截图，DeepSeek 基于原图和用户原问题直接作答。Core 校验新鲜度、位置、颜色、目标语义和置信度，旧轮结果被取消和丢弃。2026-09-05 已完成单显示器原尺寸截图、超限等比缩放、意图驱动提示词和单次模型调用的代码修复；Trae 终端、徽标、按钮、隐私和生命周期矩阵仍待真实复测，因此 Release 1C 与 1C.1 仍未正式交付。
+- Release 1C.1 Natural Pointing 的按需视觉替换方案已形成实现候选：唤醒不再预先截图，`Look` 开启时由 Qwen 进行语义路由，Core 对明确视觉指代漏调工具进行确定性兜底，Mac 按当前 `turnId` 读取 AX 选区或即时截图，DeepSeek 基于原图和用户原问题直接作答。Core 校验新鲜度、位置、颜色、目标语义和置信度，旧轮结果被取消和丢弃。2026-09-05 已部署单显示器原尺寸截图、超限等比缩放、意图驱动提示词和单次模型调用修复 `490b26c`；Trae 终端、徽标、按钮、隐私和生命周期矩阵仍待真实复测，因此 Release 1C 与 1C.1 仍未正式交付。
 - 已完成现有阅读工具 Sprinkle 的只读评估。Sprinkle 是 WXT、React、TypeScript 构建的浏览器扩展，可复用其页面提取、文字与图片选择、区域框选和浏览器内交互能力，但不能作为 Violet 本体。
 - 当前可使用一台公司 Devbox 作为临时云环境：32 核 CPU、128G 内存、120G 系统盘、500G 数据盘、veLinux 1.0。它足以支撑第一阶段的后端、数据库、Worker、沙箱和测试。
 - Violet 是单用户、云端智能优先、Mac 先行的绿地项目。
-- 当前功能分支的格式、生成物、类型和构建门禁通过，TypeScript/JavaScript 107 个测试和 Swift 63 个测试通过；Mac App 已完成打包与签名校验。Devbox 与 Mac 当前运行确定提交 `88a0869`，截图与模型定位修复尚未部署，本次改动没有数据库、协议或依赖变更。本地唤醒模型使用合成 `Violet` 音频完成 100 次正样本和 100 次静音负样本验证，结果为 100/100 触发、0/100 误触发，CPU 处理 p95 为 22.2ms；该结果不能替代真实办公环境验收。Release 1A 的真实模型 20 轮纵向验证、两次物理重启、加密备份、TOS 上传下载和空库恢复已经通过，Release 1B Core 的 ready/sealed、认证、Realtime 握手和遥测白名单验证通过。
+- 当前功能分支的格式、生成物、类型和构建门禁通过，TypeScript/JavaScript 107 个测试和 Swift 63 个测试通过；Mac App 已完成打包与签名校验。Devbox 与 Mac 当前运行功能提交 `490b26c`，本次改动没有数据库、协议或依赖变更。本地唤醒模型使用合成 `Violet` 音频完成 100 次正样本和 100 次静音负样本验证，结果为 100/100 触发、0/100 误触发，CPU 处理 p95 为 22.2ms；该结果不能替代真实办公环境验收。Release 1A 的真实模型 20 轮纵向验证、两次物理重启、加密备份、TOS 上传下载和空库恢复已经通过，Release 1B Core 的 ready/sealed、认证、Realtime 握手和遥测白名单验证通过。
 
 ## 2. 架构目标
 

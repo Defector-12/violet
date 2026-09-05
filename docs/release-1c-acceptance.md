@@ -1,8 +1,8 @@
 # Release 1C Violet Sight 验收
 
 > 状态：Release 1C/1C.1 均为实现候选，未正式交付。手动 Context、视觉矩阵 20/50、
-> 普通非视觉问答和 AX 快速通道已通过；单显示器截图和模型定位修复已完成代码实现，
-> 尚待部署和真实复测。完整门槛通过前不得合并 MR !20 或进入 Release 1D。变更过程见
+> 普通非视觉问答和 AX 快速通道已通过；单显示器截图和模型定位修复已部署，尚待真实
+> 复测。完整门槛通过前不得合并 MR !20 或进入 Release 1D。变更过程见
 > [历史记录](./历史记录.md)。
 
 ## 1. 当前基线
@@ -16,8 +16,8 @@ VIOLET_SWIFTPM_DISABLE_SANDBOX=1 pnpm macos:app
 - TypeScript/JavaScript：107 项通过。
 - Swift：63 项通过。
 - Mac App：资源打包、ad-hoc 签名和深度签名校验通过。
-- 分支：`feat/1c1-natural-pointing`；本地候选尚未推送。
-- 运行代码：提交 `88a0869`；Devbox Core 健康，Mac 单进程在线。
+- 分支：`feat/1c1-natural-pointing`；Codebase 与 GitHub 已同步。
+- 运行代码：功能提交 `490b26c`；Devbox Core 健康，Mac 单进程在线。
 - 账本：`805 / 1..805`，连续。
 - 关键修复：`d3fbd55`（UUID/时钟）和 `2753351`（图片 WebSocket 容量）。
 
