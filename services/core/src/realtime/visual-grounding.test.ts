@@ -96,6 +96,80 @@ describe("formatVisualResult", () => {
     ).toMatchObject({ status: "unavailable" });
   });
 
+  it("rejects an artificial pointer marker as the semantic target", () => {
+    expect(
+      JSON.parse(
+        formatVisualResult(
+          {
+            ...grounded,
+            target: {
+              bounds: { height: 0.1, width: 0.1, x: 0.45, y: 0.45 },
+              kind: "pointer-marker",
+            },
+          },
+          "这个是什么？",
+          { x: 0.5, y: 0.5 },
+        ),
+      ),
+    ).toMatchObject({ status: "unavailable" });
+  });
+
+  it("rejects a non-text target for a selection question", () => {
+    expect(
+      JSON.parse(
+        formatVisualResult(
+          {
+            ...grounded,
+            target: {
+              bounds: { height: 0.1, width: 0.4, x: 0.1, y: 0.7 },
+              kind: "button",
+              text: "pkill -x Violet",
+            },
+          },
+          "我框选的内容是什么？",
+          { x: 0.25, y: 0.75 },
+        ),
+      ),
+    ).toMatchObject({ status: "unavailable" });
+  });
+
+  it("requires transcribed text for a selection question", () => {
+    expect(
+      JSON.parse(
+        formatVisualResult(
+          {
+            ...grounded,
+            target: {
+              bounds: { height: 0.1, width: 0.4, x: 0.1, y: 0.7 },
+              kind: "text-selection",
+            },
+          },
+          "我选中的代码是什么意思？",
+          { x: 0.25, y: 0.75 },
+        ),
+      ),
+    ).toMatchObject({ status: "unavailable" });
+  });
+
+  it("accepts transcribed text evidence for a selection question", () => {
+    expect(
+      JSON.parse(
+        formatVisualResult(
+          {
+            ...grounded,
+            target: {
+              bounds: { height: 0.1, width: 0.4, x: 0.1, y: 0.7 },
+              kind: "code-block",
+              text: "pkill -x Violet",
+            },
+          },
+          "我选中的代码是什么意思？",
+          { x: 0.25, y: 0.75 },
+        ),
+      ),
+    ).toMatchObject({ status: "ready" });
+  });
+
   it("keeps exact Accessibility text as evidence for Qwen", () => {
     expect(
       JSON.parse(

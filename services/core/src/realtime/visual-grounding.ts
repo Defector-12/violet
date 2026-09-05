@@ -30,6 +30,15 @@ export function formatVisualResult(
   if (!context.target?.bounds) {
     return unavailable("The visual answer did not include a target for the captured pointer.");
   }
+  if (isArtificialPointerTarget(context.target.kind)) {
+    return unavailable("The visual model identified the pointer annotation instead of its target.");
+  }
+  if (
+    isSelectionQuestion(question) &&
+    (!isTextTarget(context.target.kind) || !context.target.text?.trim())
+  ) {
+    return unavailable("The visual model did not return the selected text as evidence.");
+  }
   if (!containsPoint(context.target.bounds, focusPoint)) {
     return unavailable("The located target does not contain the captured pointer.");
   }
@@ -46,6 +55,18 @@ export function formatVisualResult(
     status: "ready",
     ...(context.target ? { target: context.target } : {}),
   });
+}
+
+function isArtificialPointerTarget(kind: string): boolean {
+  return /(?:pointer|cursor|marker|annotation|ring|指针|光标|定位环|标记|注释)/iu.test(kind);
+}
+
+function isSelectionQuestion(question: string): boolean {
+  return /(?:选中|框选|高亮|\bselected\b|\bselection\b|\bhighlighted\b)/iu.test(question);
+}
+
+function isTextTarget(kind: string): boolean {
+  return ["text-selection", "text", "code-block"].includes(kind.trim().toLowerCase());
 }
 
 function containsPoint(
