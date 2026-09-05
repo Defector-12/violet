@@ -1,4 +1,3 @@
-import sharp from "sharp";
 import { describe, expect, it } from "vitest";
 
 import { DeepSeekVisionUnderstandingPort } from "./deepseek-vision-understanding.js";
@@ -145,45 +144,23 @@ describe("DeepSeekVisionUnderstandingPort", () => {
     expect(JSON.stringify(body)).toContain("右下角绿色按钮有什么作用");
   });
 
-  it("rechecks a small target using a cropped image", async () => {
-    const source = await sharp({
-      create: {
-        background: { alpha: 1, b: 0, g: 255, r: 0 },
-        channels: 4,
-        height: 100,
-        width: 100,
-      },
-    })
-      .png()
-      .toBuffer();
-    const responses = [
-      {
-        answer: "右下角是一个绿色按钮。",
-        confidence: 0.91,
-        target: {
-          bounds: { height: 0.05, width: 0.05, x: 0.9, y: 0.9 },
-          color: "green",
-          kind: "button",
-        },
-      },
-      {
-        answer: "右下角绿色上箭头按钮用于发送消息。",
-        confidence: 0.96,
-        target: {
-          bounds: { height: 0.5, width: 0.5, x: 0.25, y: 0.25 },
-          color: "green",
-          kind: "send button",
-        },
-      },
-    ];
+  it("uses the full image once and treats the pointer as an attention anchor", async () => {
     const bodies: Record<string, unknown>[] = [];
     const fetch = async (_input: string | URL | Request, init?: RequestInit) => {
       bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
-      const content = JSON.stringify(responses[bodies.length - 1]);
+      const content = JSON.stringify({
+        answer: "选中的命令会终止正在运行的 Violet 进程。",
+        confidence: 0.91,
+        target: {
+          bounds: { height: 0.08, width: 0.4, x: 0.1, y: 0.7 },
+          kind: "text-selection",
+          text: "pkill -x Violet",
+        },
+      });
       return Response.json({
         choices: [{ finish_reason: "stop", index: 0, message: { content, role: "assistant" } }],
         created: 1,
-        id: `chatcmpl-${bodies.length}`,
+        id: "chatcmpl-selection",
         model: "deepseek-v4-flash-vision-exp",
         object: "chat.completion",
         usage: { completion_tokens: 20, prompt_tokens: 30, total_tokens: 50 },
@@ -199,8 +176,9 @@ describe("DeepSeekVisionUnderstandingPort", () => {
     await expect(
       adapter.understand({
         payload: {
+          focusPoint: { x: 0.25, y: 0.75 },
           image: {
-            bytes: source,
+            bytes: Buffer.from("image"),
             height: 100,
             mediaType: "image/png",
             sha256: "0".repeat(64),
@@ -208,20 +186,25 @@ describe("DeepSeekVisionUnderstandingPort", () => {
           },
           type: "screen.snapshot",
         },
-        question: "右下角绿色按钮有什么作用？",
+        question: "我选中的代码是什么意思？",
         requestId: "00000000-0000-4000-8000-000000000003",
       }),
     ).resolves.toMatchObject({
-      answer: "右下角绿色上箭头按钮用于发送消息。",
+      answer: "选中的命令会终止正在运行的 Violet 进程。",
       confidence: 0.91,
       target: {
-        bounds: { height: 0.05, width: 0.05, x: 0.9, y: 0.9 },
-        color: "green",
-        kind: "send button",
+        bounds: { height: 0.08, width: 0.4, x: 0.1, y: 0.7 },
+        kind: "text-selection",
+        text: "pkill -x Violet",
       },
     });
-    expect(bodies).toHaveLength(2);
-    expect(JSON.stringify(bodies[1])).toContain("close crop");
-    expect(JSON.stringify(bodies[1])).toContain("data:image/jpeg;base64");
+    const request = JSON.stringify(bodies[0]);
+    expect(bodies).toHaveLength(1);
+    expect(request).toContain("classify the user's task");
+    expect(request).toContain("attention anchor");
+    expect(request).toContain("must never be the target");
+    expect(request).toContain("rank candidate");
+    expect(request).toContain("supporting signals only");
+    expect(request).toContain("complete contiguous selection");
   });
 });
