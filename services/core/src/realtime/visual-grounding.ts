@@ -20,13 +20,6 @@ export function formatVisualResult(
     return unavailable("The visual model could not locate the requested target reliably.");
   }
 
-  const targetRequired =
-    /(?:鼠标|光标|按钮|图标|徽标|选中|高亮|pointer|cursor|button|icon|badge|selected|highlighted)/iu.test(
-      question,
-    );
-  if (targetRequired && !context.target?.bounds) {
-    return unavailable("The visual answer did not include a verifiable target location.");
-  }
   if (!context.target?.bounds) {
     return unavailable("The visual answer did not include a target for the captured pointer.");
   }
@@ -62,7 +55,14 @@ function isArtificialPointerTarget(kind: string): boolean {
 }
 
 function isSelectionQuestion(question: string): boolean {
-  return /(?:选中|框选|高亮|\bselected\b|\bselection\b|\bhighlighted\b)/iu.test(question);
+  return (
+    /选区|(?:(?:选中|框选|高亮|选的).{0,8}(?:内容|文字|文本|代码|单词|词语|段落|命令|行)|(?:内容|文字|文本|代码|单词|词语|段落|命令|行).{0,8}(?:选中|框选|高亮))/u.test(
+      question,
+    ) ||
+    /\bselection\b|(?:\b(?:selected|highlighted)\s+(?:content|text|code|word|paragraph|command|line)\b)|(?:\b(?:content|text|code|word|paragraph|command|line)\b.{0,24}\bselected\b)/iu.test(
+      question,
+    )
+  );
 }
 
 function isTextTarget(kind: string): boolean {

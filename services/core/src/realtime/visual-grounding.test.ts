@@ -133,6 +133,24 @@ describe("formatVisualResult", () => {
     ).toMatchObject({ status: "unavailable" });
   });
 
+  it("accepts a control target when the selected subject is explicitly a button", () => {
+    expect(
+      JSON.parse(
+        formatVisualResult(
+          {
+            ...grounded,
+            target: {
+              bounds: { height: 0.1, width: 0.1, x: 0.45, y: 0.45 },
+              kind: "button",
+            },
+          },
+          "我选中的按钮有什么作用？",
+          { x: 0.5, y: 0.5 },
+        ),
+      ),
+    ).toMatchObject({ status: "ready" });
+  });
+
   it("requires transcribed text for a selection question", () => {
     expect(
       JSON.parse(
