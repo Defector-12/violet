@@ -222,6 +222,10 @@ export class RealtimeSession {
       const requestId = event.requestId.toLowerCase();
       const turnId = event.turnId.toLowerCase();
       const pending = this.#pendingContextCaptures.get(requestId);
+      // #region debug-point B:capture-result
+      // biome-ignore format: keep temporary debug reporting collapsible
+      (() => { const payload = event.type === "context.capture.succeeded" ? event.context.payload : undefined; const image = payload?.type === "focus.region" || payload?.type === "screen.snapshot" ? payload.image : undefined; void fetch("http://172.19.0.1:7777/event", { method: "POST", body: JSON.stringify({ sessionId: "terminal-selection-ungrounded", runId: "pre-fix", hypothesisId: "B", traceId: requestId, location: "realtime-session.ts:context-capture-result", msg: "[DEBUG] Context capture result received", data: { eventType: event.type, pendingMatched: Boolean(pending && pending.turnId.toLowerCase() === turnId), reason: event.type === "context.capture.failed" ? event.reason : undefined, payloadType: payload?.type, hasFocusPoint: payload?.type === "focus.region" || payload?.type === "screen.snapshot" ? payload.focusPoint !== undefined : false, imageWidth: image?.width, imageHeight: image?.height, encodedLength: image?.data.length }, ts: Date.now() }) }).catch(() => undefined); })();
+      // #endregion
       if (!pending || pending.turnId.toLowerCase() !== turnId) {
         return;
       }
@@ -327,6 +331,10 @@ export class RealtimeSession {
         }
         if (output.type === "transcript" && output.final) {
           this.#finalTranscripts.set(output.turnId, output.text);
+          // #region debug-point A:visual-classification
+          // biome-ignore format: keep temporary debug reporting collapsible
+          void fetch("http://172.19.0.1:7777/event", { method: "POST", body: JSON.stringify({ sessionId: "terminal-selection-ungrounded", runId: "pre-fix", hypothesisId: "A", traceId: output.turnId, location: "realtime-session.ts:final-transcript", msg: "[DEBUG] Final transcript visual classification", data: { onDemandContext: this.#onDemandContext, explicitlyRequiresCurrentView: explicitlyRequiresCurrentView(output.text), alreadyRequested: this.#visualRequestedTurns.has(output.turnId), hasCanonicalSelectionWord: /(?:选中|高亮|\bselected\b|\bhighlighted\b)/iu.test(output.text), hasLooseSelectionWord: /(?:所选|选的|框选|选择|\bselection\b)/iu.test(output.text), textLength: output.text.length }, ts: Date.now() }) }).catch(() => undefined);
+          // #endregion
           if (
             this.#onDemandContext &&
             !this.#visualRequestedTurns.has(output.turnId) &&
@@ -412,6 +420,10 @@ export class RealtimeSession {
       turnId: input.turnId,
     };
     this.#pendingContextCaptures.set(requestId, pending);
+    // #region debug-point A:context-request
+    // biome-ignore format: keep temporary debug reporting collapsible
+    void fetch("http://172.19.0.1:7777/event", { method: "POST", body: JSON.stringify({ sessionId: "terminal-selection-ungrounded", runId: "pre-fix", hypothesisId: "A", traceId: requestId, location: "realtime-session.ts:begin-context-capture", msg: "[DEBUG] Context capture request created", data: { hasCallId: input.callId !== undefined, queryLength: input.query.length, explicitlyRequiresCurrentView: explicitlyRequiresCurrentView(input.query), pendingCaptureCount: this.#pendingContextCaptures.size }, ts: Date.now() }) }).catch(() => undefined);
+    // #endregion
     return {
       expiresAt: expiresAt.toISOString(),
       requestId,
@@ -510,9 +522,17 @@ export class RealtimeSession {
           ? envelope.payload.focusPoint
           : undefined;
       const result = formatVisualResult(context, question, focusPoint);
+      // #region debug-point B:grounding-result
+      // biome-ignore format: keep temporary debug reporting collapsible
+      (() => { const parsed = JSON.parse(result) as { message?: string; status?: string }; void fetch("http://172.19.0.1:7777/event", { method: "POST", body: JSON.stringify({ sessionId: "terminal-selection-ungrounded", runId: "pre-fix", hypothesisId: "B", traceId: pending.requestId, location: "realtime-session.ts:visual-grounding-result", msg: "[DEBUG] Core visual grounding result", data: { status: parsed.status, reason: parsed.message, hasFocusPoint: focusPoint !== undefined, confidence: context.confidence, targetKind: context.target?.kind, hasTargetBounds: context.target?.bounds !== undefined, hasTargetText: Boolean(context.target?.text) }, ts: Date.now() }) }).catch(() => undefined); })();
+      // #endregion
       this.#clearVisualTurn(pending.turnId);
       await this.#sendResolvedContext(pending, result);
-    } catch {
+    } catch (error) {
+      // #region debug-point B:grounding-error
+      // biome-ignore format: keep temporary debug reporting collapsible
+      void fetch("http://172.19.0.1:7777/event", { method: "POST", body: JSON.stringify({ sessionId: "terminal-selection-ungrounded", runId: "pre-fix", hypothesisId: "B", traceId: pending.requestId, location: "realtime-session.ts:visual-grounding-error", msg: "[DEBUG] Context resolution failed", data: { errorName: error instanceof Error ? error.name : "unknown", errorMessage: error instanceof Error ? error.message : "unknown" }, ts: Date.now() }) }).catch(() => undefined);
+      // #endregion
       if (pending.abortController.signal.aborted) {
         return;
       }

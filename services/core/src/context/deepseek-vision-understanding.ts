@@ -105,6 +105,10 @@ export class DeepSeekVisionUnderstandingPort implements ContextUnderstandingPort
         role: "user",
       },
     ];
+    // #region debug-point C:model-request
+    // biome-ignore format: keep temporary debug reporting collapsible
+    void fetch("http://172.19.0.1:7777/event", { method: "POST", body: JSON.stringify({ sessionId: "terminal-selection-ungrounded", runId: "pre-fix", hypothesisId: "C", traceId: request.requestId, location: "deepseek-vision-understanding.ts:model-request", msg: "[DEBUG] DeepSeek vision request started", data: { imageWidth: request.payload.image.width, imageHeight: request.payload.image.height, imageBytes: request.payload.image.bytes.byteLength, hasFocusPoint: request.payload.focusPoint !== undefined, hasQuestion: request.question !== undefined, questionLength: request.question?.length }, ts: Date.now() }) }).catch(() => undefined);
+    // #endregion
     const response = await this.#client.chat.completions.create(
       {
         messages,
@@ -120,6 +124,10 @@ export class DeepSeekVisionUnderstandingPort implements ContextUnderstandingPort
     }
     if (request.question) {
       const grounded = parseGroundedAnswer(summary);
+      // #region debug-point C:model-result
+      // biome-ignore format: keep temporary debug reporting collapsible
+      void fetch("http://172.19.0.1:7777/event", { method: "POST", body: JSON.stringify({ sessionId: "terminal-selection-ungrounded", runId: "pre-fix", hypothesisId: "C", traceId: request.requestId, location: "deepseek-vision-understanding.ts:model-result", msg: "[DEBUG] DeepSeek vision result parsed", data: { confidence: grounded.confidence, hasTarget: grounded.target !== undefined, targetKind: grounded.target?.kind, hasTargetBounds: grounded.target?.bounds !== undefined, hasTargetText: Boolean(grounded.target?.text), targetArea: grounded.target?.bounds ? grounded.target.bounds.width * grounded.target.bounds.height : undefined }, ts: Date.now() }) }).catch(() => undefined);
+      // #endregion
       return {
         answer: grounded.answer,
         confidence: grounded.confidence,
