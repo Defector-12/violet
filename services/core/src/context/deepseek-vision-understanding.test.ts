@@ -206,5 +206,7 @@ describe("DeepSeekVisionUnderstandingPort", () => {
     expect(request).toContain("rank candidate");
     expect(request).toContain("supporting signals only");
     expect(request).toContain("complete contiguous selection");
+    expect(request).toContain("A text target without target.text is invalid");
+    expect(request).toContain("copy the exact complete visible text into target.text");
   });
 });

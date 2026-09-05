@@ -28,6 +28,9 @@ const groundedAnswerPrompt = [
   "Return only one JSON object with answer (string), confidence (number from 0 to 1), and target.",
   "The target must be the evidence used to answer, with kind and normalized top-left-origin bounds {x,y,width,height}.",
   "Use kind text-selection, text, or code-block for selected text; include target.text for every text task.",
+  "For a text target, copy the exact complete visible text into target.text. A text target without target.text is invalid.",
+  'Use this shape for selected text: {"answer":"direct answer","confidence":0.9,"target":{"kind":"text-selection","bounds":{"x":0.1,"y":0.7,"width":0.4,"height":0.08},"text":"exact complete selected text"}}.',
+  "If the exact complete visible text cannot be transcribed reliably, set confidence below 0.7 instead of returning a high-confidence text target without target.text.",
   "The target bounds must cover the complete relevant evidence and contain the pointer when the question refers to pointed or selected content.",
   "Never use pointer, cursor, ring, marker, or annotation as target.kind.",
   "Include color only when it is visibly relevant.",
@@ -107,7 +110,7 @@ export class DeepSeekVisionUnderstandingPort implements ContextUnderstandingPort
     ];
     // #region debug-point C:model-request
     // biome-ignore format: keep temporary debug reporting collapsible
-    void fetch("http://172.19.0.1:7777/event", { method: "POST", body: JSON.stringify({ sessionId: "terminal-selection-ungrounded", runId: "pre-fix", hypothesisId: "C", traceId: request.requestId, location: "deepseek-vision-understanding.ts:model-request", msg: "[DEBUG] DeepSeek vision request started", data: { imageWidth: request.payload.image.width, imageHeight: request.payload.image.height, imageBytes: request.payload.image.bytes.byteLength, hasFocusPoint: request.payload.focusPoint !== undefined, hasQuestion: request.question !== undefined, questionLength: request.question?.length }, ts: Date.now() }) }).catch(() => undefined);
+    void fetch("http://172.19.0.1:7777/event", { method: "POST", body: JSON.stringify({ sessionId: "terminal-selection-ungrounded", runId: "post-fix", hypothesisId: "C", traceId: request.requestId, location: "deepseek-vision-understanding.ts:model-request", msg: "[DEBUG] DeepSeek vision request started", data: { imageWidth: request.payload.image.width, imageHeight: request.payload.image.height, imageBytes: request.payload.image.bytes.byteLength, hasFocusPoint: request.payload.focusPoint !== undefined, hasQuestion: request.question !== undefined, questionLength: request.question?.length }, ts: Date.now() }) }).catch(() => undefined);
     // #endregion
     const response = await this.#client.chat.completions.create(
       {
@@ -126,7 +129,7 @@ export class DeepSeekVisionUnderstandingPort implements ContextUnderstandingPort
       const grounded = parseGroundedAnswer(summary);
       // #region debug-point C:model-result
       // biome-ignore format: keep temporary debug reporting collapsible
-      void fetch("http://172.19.0.1:7777/event", { method: "POST", body: JSON.stringify({ sessionId: "terminal-selection-ungrounded", runId: "pre-fix", hypothesisId: "C", traceId: request.requestId, location: "deepseek-vision-understanding.ts:model-result", msg: "[DEBUG] DeepSeek vision result parsed", data: { confidence: grounded.confidence, hasTarget: grounded.target !== undefined, targetKind: grounded.target?.kind, hasTargetBounds: grounded.target?.bounds !== undefined, hasTargetText: Boolean(grounded.target?.text), targetArea: grounded.target?.bounds ? grounded.target.bounds.width * grounded.target.bounds.height : undefined }, ts: Date.now() }) }).catch(() => undefined);
+      void fetch("http://172.19.0.1:7777/event", { method: "POST", body: JSON.stringify({ sessionId: "terminal-selection-ungrounded", runId: "post-fix", hypothesisId: "C", traceId: request.requestId, location: "deepseek-vision-understanding.ts:model-result", msg: "[DEBUG] DeepSeek vision result parsed", data: { confidence: grounded.confidence, hasTarget: grounded.target !== undefined, targetKind: grounded.target?.kind, hasTargetBounds: grounded.target?.bounds !== undefined, hasTargetText: Boolean(grounded.target?.text), targetArea: grounded.target?.bounds ? grounded.target.bounds.width * grounded.target.bounds.height : undefined }, ts: Date.now() }) }).catch(() => undefined);
       // #endregion
       return {
         answer: grounded.answer,
