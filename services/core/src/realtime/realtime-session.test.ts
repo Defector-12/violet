@@ -541,11 +541,7 @@ describe("RealtimeSession", () => {
     );
 
     const output = await collect(session.outputs());
-    expect(output.map((event) => event.type)).toEqual([
-      "response.started",
-      "response.cancelled",
-      "context.capture.requested",
-    ]);
+    expect(output.map((event) => event.type)).toEqual(["context.capture.requested"]);
     const request = output.find((event) => event.type === "context.capture.requested");
     expect(request).toMatchObject({
       turnId,
@@ -691,6 +687,84 @@ describe("RealtimeSession", () => {
     expect(grounding?.type === "context-grounding" && JSON.parse(grounding.output)).toMatchObject({
       status: "unavailable",
     });
+  });
+
+  it("buffers early response audio until a late visual transcript is classified", async () => {
+    const sessionId = randomUUID();
+    const turnId = randomUUID();
+    const responseId = randomUUID();
+    const receivedInputs: RealtimeConversationInput[] = [];
+    const session = new RealtimeSession({
+      conversationEndIntent: neverEndsConversation,
+      contextService: createContextService(),
+      conversationPort: {
+        supportsContextLookup: true,
+        async open() {
+          return {
+            capabilities: {
+              inputModalities: ["audio"],
+              interruption: true,
+              outputModalities: ["audio", "text"],
+              runtimeKind: "integrated",
+              transcription: true,
+              turnDetection: "smart_turn",
+              voiceKind: "preset",
+            },
+            async close() {},
+            async *outputs() {
+              yield { responseId, turnId, type: "response-started" } as const;
+              yield {
+                audio: Uint8Array.from([1, 2]),
+                responseId,
+                turnId,
+                type: "response-audio",
+              } as const;
+              yield {
+                final: true,
+                text: "我选中的代码是什么意思？",
+                turnId,
+                type: "transcript",
+              } as const;
+              yield {
+                audio: Uint8Array.from([3, 4]),
+                responseId,
+                turnId,
+                type: "response-audio",
+              } as const;
+              yield { responseId, type: "response-cancelled" } as const;
+            },
+            async send(input) {
+              receivedInputs.push(input);
+            },
+          };
+        },
+      },
+      generateId: randomUUID,
+      ledger: new InMemoryConversationLedger(),
+    });
+    await collect(
+      session.handle({
+        configuration: {
+          inputModalities: ["audio"],
+          onDemandContext: true,
+          outputModalities: ["audio", "text"],
+          protocolVersion: "1",
+          turnDetection: "smart_turn",
+        },
+        eventId: randomUUID(),
+        sequence: 1,
+        sessionId,
+        type: "session.configure",
+      }),
+    );
+
+    const output = await collect(session.outputs());
+
+    expect(output.map((event) => event.type)).toEqual([
+      "input.transcript",
+      "context.capture.requested",
+    ]);
+    expect(receivedInputs).toContainEqual({ responseId, type: "cancel" });
   });
 
   it("ignores a stale capture result after a newer speech turn starts", async () => {

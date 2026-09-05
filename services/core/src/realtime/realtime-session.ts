@@ -45,6 +45,7 @@ export class RealtimeSession {
   readonly #now: () => Date;
   readonly #assistantContent = new Map<string, string>();
   readonly #clientEventIds = new Set<string>();
+  readonly #deferredResponseOutputs = new Map<string, RealtimeConversationOutput[]>();
   readonly #endIntentByTurn = new Map<string, Promise<boolean>>();
   readonly #finalTranscripts = new Map<string, string>();
   readonly #pendingContextCaptures = new Map<string, PendingContextCapture>();
@@ -85,6 +86,7 @@ export class RealtimeSession {
     await this.#conversation?.close();
     this.#assistantContent.clear();
     this.#clientEventIds.clear();
+    this.#deferredResponseOutputs.clear();
     this.#endIntentByTurn.clear();
     this.#finalTranscripts.clear();
     for (const pending of this.#pendingContextCaptures.values()) {
@@ -279,77 +281,94 @@ export class RealtimeSession {
     if (!conversation) {
       return;
     }
-    for await (const output of conversation.outputs(signal)) {
-      if (output.type === "context-request") {
-        if (this.#onDemandContext) {
-          if (this.#visibleResponseIds.delete(output.responseId) && this.#sessionId) {
-            const cancelled = {
-              responseId: output.responseId,
-              type: "response-cancelled",
-            } as const;
-            await this.#persistOutput(cancelled);
-            yield this.#mapOutput(this.#sessionId, cancelled);
+    for await (const receivedOutput of conversation.outputs(signal)) {
+      const deferredTurnId = responseTurnIdForDeferral(receivedOutput);
+      if (this.#onDemandContext && deferredTurnId && !this.#finalTranscripts.has(deferredTurnId)) {
+        const deferred = this.#deferredResponseOutputs.get(deferredTurnId) ?? [];
+        deferred.push(receivedOutput);
+        this.#deferredResponseOutputs.set(deferredTurnId, deferred);
+        continue;
+      }
+      const outputs =
+        receivedOutput.type === "transcript" && receivedOutput.final
+          ? [receivedOutput, ...(this.#deferredResponseOutputs.get(receivedOutput.turnId) ?? [])]
+          : [receivedOutput];
+      if (receivedOutput.type === "transcript" && receivedOutput.final) {
+        this.#deferredResponseOutputs.delete(receivedOutput.turnId);
+      }
+      for (const output of outputs) {
+        if (output.type === "context-request") {
+          if (this.#onDemandContext) {
+            this.#deferredResponseOutputs.delete(output.turnId);
+            if (this.#visibleResponseIds.delete(output.responseId) && this.#sessionId) {
+              const cancelled = {
+                responseId: output.responseId,
+                type: "response-cancelled",
+              } as const;
+              await this.#persistOutput(cancelled);
+              yield this.#mapOutput(this.#sessionId, cancelled);
+            }
+            const request = this.#beginContextCapture({
+              callId: output.callId,
+              conversation,
+              query: this.#finalTranscripts.get(output.turnId) ?? output.query,
+              turnId: output.turnId,
+            });
+            if (request) {
+              yield request;
+            }
+          } else {
+            void this.#resolveContextRequest(conversation, output, signal).catch(() => undefined);
           }
-          const request = this.#beginContextCapture({
-            callId: output.callId,
-            conversation,
-            query: this.#finalTranscripts.get(output.turnId) ?? output.query,
-            turnId: output.turnId,
-          });
+          continue;
+        }
+        if (output.type === "speech-started") {
+          this.#cancelPendingContextCaptures(output.turnId);
+        }
+        if (output.type === "transcript" && output.final) {
+          this.#finalTranscripts.set(output.turnId, output.text);
+          if (
+            this.#onDemandContext &&
+            !this.#visualRequestedTurns.has(output.turnId) &&
+            explicitlyRequiresCurrentView(output.text)
+          ) {
+            this.#visualRequiredTurns.set(output.turnId, output.text);
+          }
+          this.#endIntentByTurn.set(
+            output.turnId,
+            this.#conversationEndIntent
+              .shouldEnd({ text: output.text, turnId: output.turnId }, signal)
+              .catch(() => false),
+          );
+        }
+        if (this.#shouldSuppressForVisualRouting(output)) {
+          const request = await this.#fallbackContextCapture(conversation, output);
           if (request) {
             yield request;
           }
-        } else {
-          void this.#resolveContextRequest(conversation, output, signal).catch(() => undefined);
+          continue;
         }
-        continue;
-      }
-      if (output.type === "speech-started") {
-        this.#cancelPendingContextCaptures(output.turnId);
-      }
-      if (output.type === "transcript" && output.final) {
-        this.#finalTranscripts.set(output.turnId, output.text);
-        if (
-          this.#onDemandContext &&
-          !this.#visualRequestedTurns.has(output.turnId) &&
-          explicitlyRequiresCurrentView(output.text)
-        ) {
-          this.#visualRequiredTurns.set(output.turnId, output.text);
+        await this.#persistOutput(output);
+        if (output.type === "response-started") {
+          this.#visibleResponseIds.add(output.responseId);
+        } else if (output.type === "response-completed" || output.type === "response-cancelled") {
+          this.#visibleResponseIds.delete(output.responseId);
         }
-        this.#endIntentByTurn.set(
-          output.turnId,
-          this.#conversationEndIntent
-            .shouldEnd({ text: output.text, turnId: output.turnId }, signal)
-            .catch(() => false),
-        );
-      }
-      if (this.#shouldSuppressForVisualRouting(output)) {
-        const request = await this.#fallbackContextCapture(conversation, output);
-        if (request) {
-          yield request;
+        if (!this.#sessionId) {
+          return;
         }
-        continue;
-      }
-      await this.#persistOutput(output);
-      if (output.type === "response-started") {
-        this.#visibleResponseIds.add(output.responseId);
-      } else if (output.type === "response-completed" || output.type === "response-cancelled") {
-        this.#visibleResponseIds.delete(output.responseId);
-      }
-      if (!this.#sessionId) {
-        return;
-      }
-      yield this.#mapOutput(this.#sessionId, output);
-      if (output.type === "response-completed") {
-        const shouldEnd = await this.#takeEndIntent(output.turnId);
-        this.#finalTranscripts.delete(output.turnId);
-        if (shouldEnd) {
-          yield {
-            reason: "user_intent",
-            turnId: output.turnId,
-            ...this.#baseEvent(this.#sessionId),
-            type: "session.end_requested",
-          };
+        yield this.#mapOutput(this.#sessionId, output);
+        if (output.type === "response-completed") {
+          const shouldEnd = await this.#takeEndIntent(output.turnId);
+          this.#finalTranscripts.delete(output.turnId);
+          if (shouldEnd) {
+            yield {
+              reason: "user_intent",
+              turnId: output.turnId,
+              ...this.#baseEvent(this.#sessionId),
+              type: "session.end_requested",
+            };
+          }
         }
       }
     }
@@ -463,6 +482,11 @@ export class RealtimeSession {
   }
 
   #cancelPendingContextCaptures(activeTurnId: string): void {
+    for (const turnId of this.#deferredResponseOutputs.keys()) {
+      if (turnId !== activeTurnId) {
+        this.#deferredResponseOutputs.delete(turnId);
+      }
+    }
     for (const [requestId, pending] of this.#pendingContextCaptures) {
       if (pending.turnId === activeTurnId) {
         continue;
@@ -771,6 +795,23 @@ function mapConfiguration(
       : { turnDetection: "manual" as const }),
     ...(configuration.voice ? { voice: configuration.voice } : {}),
   };
+}
+
+function responseTurnIdForDeferral(output: RealtimeConversationOutput): string | undefined {
+  switch (output.type) {
+    case "response-audio":
+    case "response-completed":
+    case "response-started":
+    case "response-text":
+      return output.turnId;
+    case "context-request":
+    case "error":
+    case "response-cancelled":
+    case "speech-started":
+    case "speech-stopped":
+    case "transcript":
+      return undefined;
+  }
 }
 
 function mapInput(

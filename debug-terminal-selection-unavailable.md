@@ -27,6 +27,7 @@
 | D | The frozen app, window, or normalized pointer did not refer to the selected terminal text. | Medium | Medium | **Likely**: debug log line 2 reports `appBundleId=com.google.Chrome` for the intended Trae sample. |
 | E | The anchor expired or the capture task was cancelled. | Low | Low | **Rejected for the completed capture**: line 2 reports `ageMs=368`; **confirmed downstream** for failed cancellation runs. |
 | F | Core sends a late `response.cancel` after Qwen has already finished the active response, and Qwen's benign rejection terminates the session before capture completes. | High | Low | **Confirmed** by the user-visible provider error and acceptance runs that fail 25–183 ms after response audio begins. |
+| G | Provider response audio reaches the client before the late final transcript classifies the turn as visual. | High | Low | **Confirmed**: post-fix logs show fallback cancellation was first triggered by `response-audio` after the response was already visible. |
 
 ## Log Evidence
 - Reproduction turn `48804C5D-9AF3-4C18-8367-5363408D5488` stopped speech at `2026-09-04T09:50:37.857Z`.
@@ -38,6 +39,10 @@
 - Debug log line 2: screenshot Envelope arrived with `focusPoint=(0.5896, 0.7583)`, age `368 ms`, and source app `com.google.Chrome`.
 - Debug log line 3: DeepSeek returned an answer at confidence `0.95` and target kind `ring`, but no target bounds.
 - Debug log line 4: Core rejected the answer specifically because the target had no bounds.
+- Post-fix lines 1–5 and 6–10: Core sent fallback cancellation, Qwen returned `QWEN_INVALID_VALUE`, and Context Envelopes still arrived afterward.
+- Both post-fix Envelopes came from `cn.trae.app` with fresh pointer coordinates, rejecting the stale-app hypothesis for the current runs.
+- Acceptance events show `response.audio.scheduled` before `response.cancelled`, confirming that a short provider prefix reached playback before visual classification.
+- Post-fix Context resolutions were aborted only after subsequent user turns began, before DeepSeek returned.
 
 ## Instrumentation Plan
 - D/E: Record Context Envelope type, source app, presence of `focusPoint`, coordinates, and freshness.
@@ -66,3 +71,10 @@ Fix the cancellation race first while retaining instrumentation, then use a post
 - Focused RED reproduced `QWEN_INVALID_REQUEST_ERROR`; GREEN passes.
 - Full TypeScript/JavaScript gate passes with `101` tests.
 - Instrumentation remains enabled for post-fix runtime comparison.
+- Post-fix commit `f7590ba` is deployed and healthy; post-fix debug logs were cleared before verification.
+
+## Early Audio Buffer Fix
+- Added a failing RealtimeSession regression where `response.started/audio` arrives before the final visual transcript.
+- On-demand sessions now buffer response events by turn until the final transcript is available.
+- Non-visual turns release the buffered events in order; visual turns suppress the old response and start Context capture without exposing an audio prefix.
+- New and existing focused tests pass; the full TypeScript/JavaScript gate passes with `102` tests.
