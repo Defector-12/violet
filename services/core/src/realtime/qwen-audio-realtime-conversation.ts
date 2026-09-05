@@ -160,6 +160,7 @@ export class QwenAudioRealtimeConversationPort implements RealtimeConversationPo
 
 class QwenAudioRealtimeConversation implements RealtimeConversation {
   readonly capabilities: RealtimeCapabilities;
+  readonly #cancelledProviderResponseIds = new Set<string>();
   readonly #generateId: () => string;
   readonly #localResponseIds = new Map<string, string>();
   readonly #pendingContextCallIds = new Set<string>();
@@ -171,6 +172,7 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
   #activeProviderResponseId: string | null = null;
   #closed = false;
   #currentTurnId: string | null = null;
+  #pendingCancellationProviderResponseId: string | null = null;
   #pendingAudioTurnId: string | null = null;
 
   constructor(
@@ -200,6 +202,7 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
     }
     this.#closed = true;
     this.#transport.close();
+    this.#cancelledProviderResponseIds.clear();
     this.#localResponseIds.clear();
     this.#pendingContextCallIds.clear();
     this.#providerResponseIds.clear();
@@ -207,6 +210,7 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
     this.#toolResponseIds.clear();
     this.#activeProviderResponseId = null;
     this.#currentTurnId = null;
+    this.#pendingCancellationProviderResponseId = null;
     this.#pendingAudioTurnId = null;
   }
 
@@ -349,7 +353,15 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
     }
 
     this.#pendingContextCallIds.clear();
-    await this.#transport.send({ type: "response.cancel" });
+    this.#pendingCancellationProviderResponseId = providerResponseId;
+    try {
+      await this.#transport.send({ type: "response.cancel" });
+    } catch (error) {
+      if (this.#pendingCancellationProviderResponseId === providerResponseId) {
+        this.#pendingCancellationProviderResponseId = null;
+      }
+      throw error;
+    }
   }
 
   async #sendContextResult(callId: string, output: string): Promise<void> {
@@ -399,8 +411,26 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
       const output = providerErrorOutput(event);
       // #region debug-point F:provider-error
       // biome-ignore format: keep temporary debug reporting collapsible
-      void fetch("http://172.19.0.1:7777/event", { method: "POST", body: JSON.stringify({ sessionId: "terminal-selection-unavailable", runId: "pre-fix", hypothesisId: "F", location: "qwen-audio-realtime-conversation.ts:mapProviderEvent:error", msg: "[DEBUG] Qwen provider error received", data: { code: output.code, message: output.message, retryable: output.retryable, hasActiveResponse: this.#activeProviderResponseId !== null, pendingContextCallCount: this.#pendingContextCallIds.size }, ts: Date.now() }) }).catch(() => undefined);
+      void fetch("http://172.19.0.1:7777/event", { method: "POST", body: JSON.stringify({ sessionId: "terminal-selection-unavailable", runId: "post-fix", hypothesisId: "F", location: "qwen-audio-realtime-conversation.ts:mapProviderEvent:error", msg: "[DEBUG] Qwen provider error received", data: { code: output.code, message: output.message, retryable: output.retryable, hasActiveResponse: this.#activeProviderResponseId !== null, pendingContextCallCount: this.#pendingContextCallIds.size }, ts: Date.now() }) }).catch(() => undefined);
       // #endregion
+      const cancelledProviderResponseId = this.#pendingCancellationProviderResponseId;
+      if (
+        cancelledProviderResponseId &&
+        /conversation has no active response\.?/iu.test(output.message)
+      ) {
+        this.#pendingCancellationProviderResponseId = null;
+        if (this.#activeProviderResponseId === cancelledProviderResponseId) {
+          this.#activeProviderResponseId = null;
+        }
+        this.#cancelledProviderResponseIds.add(cancelledProviderResponseId);
+        const localResponseId = this.#localResponseIds.get(cancelledProviderResponseId);
+        return localResponseId
+          ? {
+              responseId: localResponseId,
+              type: "response-cancelled",
+            }
+          : undefined;
+      }
       return output;
     }
     if (event.type === "input_audio_buffer.speech_started") {
@@ -474,6 +504,16 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
     if (!providerResponseId) {
       return undefined;
     }
+    if (this.#cancelledProviderResponseIds.has(providerResponseId)) {
+      if (event.type === "response.done") {
+        this.#cancelledProviderResponseIds.delete(providerResponseId);
+        const localResponseId = this.#localResponseIds.get(providerResponseId);
+        if (localResponseId) {
+          this.#forgetResponse(providerResponseId, localResponseId);
+        }
+      }
+      return undefined;
+    }
     const context = this.#responseContext(providerResponseId);
     if (event.type === "response.created") {
       this.#activeProviderResponseId = providerResponseId;
@@ -516,6 +556,9 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
 
     const response = record(event["response"]);
     const status = string(response?.["status"]);
+    if (this.#pendingCancellationProviderResponseId === providerResponseId) {
+      this.#pendingCancellationProviderResponseId = null;
+    }
     if (this.#toolResponseIds.delete(providerResponseId)) {
       if (status && status !== "completed") {
         this.#pendingContextCallIds.clear();

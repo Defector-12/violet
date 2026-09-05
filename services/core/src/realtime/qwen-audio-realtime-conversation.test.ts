@@ -527,6 +527,115 @@ describe("QwenAudioRealtimeConversationPort", () => {
     expect(transport.sent).not.toContainEqual({ type: "response.cancel" });
   });
 
+  it("treats a provider no-active-response error after cancellation as cancelled", async () => {
+    const transport = new FakeTransport([
+      { type: "session.created" },
+      { type: "session.updated" },
+      {
+        response: { id: "resp-qwen-1", status: "in_progress" },
+        type: "response.created",
+      },
+      {
+        delta: Buffer.from([1, 2]).toString("base64"),
+        response_id: "resp-qwen-1",
+        type: "response.audio.delta",
+      },
+      {
+        error: {
+          code: "invalid_request_error",
+          message: "Conversation has no active response.",
+          type: "invalid_request_error",
+        },
+        type: "error",
+      },
+      {
+        response: { id: "resp-qwen-1", status: "completed" },
+        type: "response.done",
+      },
+      {
+        response: { id: "resp-qwen-2", status: "in_progress" },
+        type: "response.created",
+      },
+    ]);
+    const generatedIds = ["local-response-1", "turn-1", "local-response-2"];
+    const port = new QwenAudioRealtimeConversationPort({
+      apiKey: "test-qwen-api-key",
+      createTransport: () => transport,
+      generateId: () => generatedIds.shift() ?? "unexpected-id",
+      model: "qwen-audio-3.0-realtime-plus",
+      voice: "longanqian",
+      workspaceId: "ws-jvh4fvlcktrjvtbj",
+    });
+    const conversation = await port.open(configuration());
+    const outputs = conversation.outputs()[Symbol.asyncIterator]();
+
+    const started = await outputs.next();
+    const audio = await outputs.next();
+    await conversation.send({
+      responseId: "local-response-1",
+      type: "cancel",
+    });
+    const cancelled = await outputs.next();
+    const nextResponse = await outputs.next();
+
+    expect(started.value).toMatchObject({ type: "response-started" });
+    expect(audio.value).toMatchObject({ type: "response-audio" });
+    expect(cancelled.value).toEqual({
+      responseId: "local-response-1",
+      type: "response-cancelled",
+    });
+    expect(nextResponse.value).toEqual({
+      responseId: "local-response-2",
+      turnId: "turn-1",
+      type: "response-started",
+    });
+    expect(transport.sent).toContainEqual({ type: "response.cancel" });
+  });
+
+  it("keeps unrelated provider errors visible after cancellation", async () => {
+    const transport = new FakeTransport([
+      { type: "session.created" },
+      { type: "session.updated" },
+      {
+        response: { id: "resp-qwen-1", status: "in_progress" },
+        type: "response.created",
+      },
+      {
+        error: {
+          code: "quota_exceeded",
+          message: "Realtime quota exceeded.",
+          type: "invalid_request_error",
+        },
+        type: "error",
+      },
+    ]);
+    const generatedIds = ["local-response-1", "turn-1"];
+    const port = new QwenAudioRealtimeConversationPort({
+      apiKey: "test-qwen-api-key",
+      createTransport: () => transport,
+      generateId: () => generatedIds.shift() ?? "unexpected-id",
+      model: "qwen-audio-3.0-realtime-plus",
+      voice: "longanqian",
+      workspaceId: "ws-jvh4fvlcktrjvtbj",
+    });
+    const conversation = await port.open(configuration());
+    const outputs = conversation.outputs()[Symbol.asyncIterator]();
+
+    await outputs.next();
+    await conversation.send({
+      responseId: "local-response-1",
+      type: "cancel",
+    });
+    const error = await outputs.next();
+
+    expect(error.value).toEqual({
+      code: "QWEN_QUOTA_EXCEEDED",
+      message: "Realtime quota exceeded.",
+      retryable: false,
+      type: "error",
+    });
+  });
+
   it("rejects an output format that Qwen cannot produce", async () => {
     let transportCreated = false;
     const port = new QwenAudioRealtimeConversationPort({
