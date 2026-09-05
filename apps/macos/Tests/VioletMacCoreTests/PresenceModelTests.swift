@@ -1,3 +1,4 @@
+import AppKit
 import CoreAudio
 import Foundation
 import Testing
@@ -1287,12 +1288,27 @@ struct PresenceModelTests {
   @MainActor
   func stripsLocalOCRFromOnDemandImageEvidence() async throws {
     let turnId = UUID()
+    let bitmap = NSBitmapImageRep(
+      bitmapDataPlanes: nil,
+      pixelsWide: 32,
+      pixelsHigh: 32,
+      bitsPerSample: 8,
+      samplesPerPixel: 4,
+      hasAlpha: true,
+      isPlanar: false,
+      colorSpaceName: .deviceRGB,
+      bytesPerRow: 0,
+      bitsPerPixel: 0
+    )
+    let imageData = try #require(
+      bitmap?.representation(using: .jpeg, properties: [.compressionFactor: 0.9])
+    )
     let capture = FakeContextCapture(
       result: .image(
         appBundleId: "com.example.Editor",
-        data: Data([0x01, 0x02, 0x03]),
+        data: imageData,
         focusPoint: nil,
-        height: 100,
+        height: 32,
         recognizedText: [
           .init(
             text: "Visible but not model evidence",
@@ -1301,7 +1317,7 @@ struct PresenceModelTests {
           )
         ],
         region: nil,
-        width: 100
+        width: 32
       )
     )
     let realtime = FakeRealtimeSessionClient(

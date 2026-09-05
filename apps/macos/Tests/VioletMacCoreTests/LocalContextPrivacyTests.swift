@@ -268,4 +268,67 @@ struct LocalContextPrivacyTests {
     #expect(focusPoint == .init(x: 0.25, y: 0.75))
     #expect(result.redactions == [.init(category: .controlledSensitive, count: 1)])
   }
+
+  @Test
+  func keepsOriginalDimensionsWhenTheJPEGFits() throws {
+    let image = try #require(noisyImage(width: 64, height: 32))
+
+    let encoded = try encodeBoundedContextImage(image, maximumBytes: 8 * 1024 * 1024)
+
+    #expect(encoded.width == 64)
+    #expect(encoded.height == 32)
+    #expect(encoded.data.count <= 8 * 1024 * 1024)
+  }
+
+  @Test
+  func uniformlyScalesOnlyWhenTheJPEGExceedsTheLimit() throws {
+    let image = try #require(noisyImage(width: 512, height: 256))
+
+    let encoded = try encodeBoundedContextImage(image, maximumBytes: 20 * 1024)
+    let decoded = try #require(NSBitmapImageRep(data: encoded.data))
+
+    #expect(encoded.data.count <= 20 * 1024)
+    #expect(encoded.width < 512)
+    #expect(encoded.height < 256)
+    #expect(abs(Double(encoded.width) / Double(encoded.height) - 2) < 0.02)
+    #expect(decoded.pixelsWide == encoded.width)
+    #expect(decoded.pixelsHigh == encoded.height)
+  }
+
+  @Test
+  func mapsThePointerToTheFinalImageWithinOnePixel() {
+    let point = contextImagePoint(
+      .init(x: 0.039, y: 0.907),
+      width: 2048,
+      height: 1286
+    )
+
+    #expect(abs(point.x - 79.872) <= 1)
+    #expect(abs(point.y - 119.598) <= 1)
+  }
+}
+
+private func noisyImage(width: Int, height: Int) -> CGImage? {
+  var bytes = [UInt8](repeating: 0, count: width * height * 4)
+  var state: UInt32 = 0x1234_5678
+  for index in bytes.indices {
+    state = 1_664_525 &* state &+ 1_013_904_223
+    bytes[index] = index % 4 == 3 ? 255 : UInt8(truncatingIfNeeded: state >> 24)
+  }
+  guard let provider = CGDataProvider(data: Data(bytes) as CFData) else {
+    return nil
+  }
+  return CGImage(
+    width: width,
+    height: height,
+    bitsPerComponent: 8,
+    bitsPerPixel: 32,
+    bytesPerRow: width * 4,
+    space: CGColorSpaceCreateDeviceRGB(),
+    bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.noneSkipLast.rawValue),
+    provider: provider,
+    decode: nil,
+    shouldInterpolate: false,
+    intent: .defaultIntent
+  )
 }

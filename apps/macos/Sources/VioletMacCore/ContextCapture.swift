@@ -266,19 +266,27 @@ public final class SystemContextCapture: NSObject, ContextCapturePort {
       primaryScreenFrame: primaryScreenFrame
     )
     guard
-      let window = preferredNaturalPointingWindow(
-        content.windows,
-        processIdentifier: target.processIdentifier,
-        pointer: pointer
+      let displayIndex = displayIndex(
+        containing: pointer,
+        in: content.displays.map(\.frame)
       )
     else {
       throw ContextCaptureError.unavailable
     }
-    guard let focusPoint = normalizedPoint(pointer, in: window.frame) else {
+    let display = content.displays[displayIndex]
+    guard let focusPoint = normalizedPoint(pointer, in: display.frame) else {
       throw ContextCaptureError.unavailable
     }
+    let excludedApplications = content.applications.filter {
+      $0.processID == currentProcessIdentifier
+        || excludedBundleIds.contains($0.bundleIdentifier)
+    }
     return try await capture(
-      filter: SCContentFilter(desktopIndependentWindow: window),
+      filter: SCContentFilter(
+        display: display,
+        excludingApplications: excludedApplications,
+        exceptingWindows: []
+      ),
       appBundleId: target.bundleIdentifier,
       focusPoint: focusPoint,
       region: nil
@@ -365,8 +373,12 @@ public final class SystemContextCapture: NSObject, ContextCapturePort {
         width: captureRect.width,
         height: captureRect.height
       )
-      configuration.width = min(Int(captureRect.width * 2), 2048)
-      configuration.height = min(Int(captureRect.height * 2), 2048)
+      let size = capturePixelSize(
+        contentRect: configuration.sourceRect,
+        pointPixelScale: CGFloat(filter.pointPixelScale)
+      )
+      configuration.width = Int(size.width)
+      configuration.height = Int(size.height)
       image = try await SCScreenshotManager.captureImage(
         contentFilter: filter,
         configuration: configuration
@@ -387,11 +399,12 @@ public final class SystemContextCapture: NSObject, ContextCapturePort {
     region: NormalizedContextRect?
   ) async throws -> CapturedContext {
     let configuration = SCStreamConfiguration()
-    configuration.width = min(Int(filter.contentRect.width * CGFloat(filter.pointPixelScale)), 2048)
-    configuration.height = min(
-      Int(filter.contentRect.height * CGFloat(filter.pointPixelScale)),
-      2048
+    let size = capturePixelSize(
+      contentRect: filter.contentRect,
+      pointPixelScale: CGFloat(filter.pointPixelScale)
     )
+    configuration.width = Int(size.width)
+    configuration.height = Int(size.height)
     let image = try await SCScreenshotManager.captureImage(
       contentFilter: filter,
       configuration: configuration
@@ -410,8 +423,7 @@ public final class SystemContextCapture: NSObject, ContextCapturePort {
     focusPoint: NormalizedContextPoint?,
     region: NormalizedContextRect?
   ) async throws -> CapturedContext {
-    let preparedImage = contextSizedImage(image)
-    let sendableImage = SendableCGImage(value: preparedImage)
+    let sendableImage = SendableCGImage(value: image)
     async let data = Task.detached(priority: .userInitiated) {
       try encodeContextImage(sendableImage.value)
     }.value
@@ -424,10 +436,10 @@ public final class SystemContextCapture: NSObject, ContextCapturePort {
       appBundleId: appBundleId,
       data: encodedData,
       focusPoint: focusPoint,
-      height: preparedImage.height,
+      height: image.height,
       recognizedText: observations,
       region: region,
-      width: preparedImage.width
+      width: image.width
     )
   }
 }
@@ -607,40 +619,12 @@ private struct SendableCGImage: @unchecked Sendable {
   let value: CGImage
 }
 
-private func contextSizedImage(_ image: CGImage) -> CGImage {
-  let maximumDimension = 2_048
-  let largestDimension = max(image.width, image.height)
-  guard largestDimension > maximumDimension else {
-    return image
-  }
-  let scale = Double(maximumDimension) / Double(largestDimension)
-  let width = max(1, Int((Double(image.width) * scale).rounded()))
-  let height = max(1, Int((Double(image.height) * scale).rounded()))
-  guard
-    let context = CGContext(
-      data: nil,
-      width: width,
-      height: height,
-      bitsPerComponent: 8,
-      bytesPerRow: 0,
-      space: CGColorSpaceCreateDeviceRGB(),
-      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-    )
-  else {
-    return image
-  }
-  context.interpolationQuality = .high
-  context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
-  return context.makeImage() ?? image
-}
-
 private func encodeContextImage(_ image: CGImage) throws -> Data {
   guard
     let data = NSBitmapImageRep(cgImage: image).representation(
       using: .jpeg,
-      properties: [.compressionFactor: 0.85]
-    ),
-    data.count <= 8 * 1024 * 1024
+      properties: [.compressionFactor: 0.9]
+    )
   else {
     throw LocalContextPrivacyError.imageEncodingFailed
   }
@@ -705,26 +689,21 @@ func normalizedPoint(
   )
 }
 
-private func preferredNaturalPointingWindow(
-  _ windows: [SCWindow],
-  processIdentifier: pid_t,
-  pointer: CGPoint?
-) -> SCWindow? {
-  let candidates = windows.filter {
-    $0.owningApplication?.processID == processIdentifier
-      && $0.isOnScreen
-      && $0.windowLayer == 0
-      && $0.frame.width >= 4
-      && $0.frame.height >= 4
-  }
-  if let pointer,
-    let pointed = candidates.first(where: { $0.frame.contains(pointer) })
-  {
-    return pointed
-  }
-  return candidates.max {
-    $0.frame.width * $0.frame.height < $1.frame.width * $1.frame.height
-  }
+func capturePixelSize(
+  contentRect: CGRect,
+  pointPixelScale: CGFloat
+) -> CGSize {
+  CGSize(
+    width: max(1, (contentRect.width * pointPixelScale).rounded()),
+    height: max(1, (contentRect.height * pointPixelScale).rounded())
+  )
+}
+
+func displayIndex(
+  containing point: CGPoint,
+  in frames: [CGRect]
+) -> Int? {
+  frames.firstIndex { $0.contains(point) }
 }
 
 func screenCapturePoint(

@@ -110,13 +110,11 @@ public struct LocalContextPrivacyFilter: LocalContextPrivacyFiltering {
       let preparedImage =
         sensitiveRegions.isEmpty && isBoundedJPEG(data)
           && focusPoint == nil
-        ? data
+        ? EncodedContextImage(data: data, height: height, width: width)
         : try prepareImage(
           data,
           focusPoint: focusPoint,
-          height: height,
-          regions: sensitiveRegions,
-          width: width
+          regions: sensitiveRegions
         )
       let safeText = prioritizedLocalText(
         recognizedText,
@@ -128,14 +126,14 @@ public struct LocalContextPrivacyFilter: LocalContextPrivacyFiltering {
         completeness: sensitiveRegions.isEmpty ? 1 : 0.8,
         confidence: 1,
         payload: .image(
-          data: preparedImage,
+          data: preparedImage.data,
           focusPoint: focusPoint,
-          height: height,
+          height: preparedImage.height,
           localText: safeText.isEmpty ? nil : safeText,
           mediaType: "image/jpeg",
           region: region,
-          sha256: contextImageHash(preparedImage),
-          width: width
+          sha256: contextImageHash(preparedImage.data),
+          width: preparedImage.width
         ),
         redactions: redactionCounts(categories),
         sensitivity: "personal"
@@ -202,6 +200,12 @@ extension FilteredContext {
 private struct SensitiveRegion {
   let categories: [ContextRedaction.Category]
   let normalizedBounds: NormalizedContextRect
+}
+
+struct EncodedContextImage {
+  let data: Data
+  let height: Int
+  let width: Int
 }
 
 private struct RedactedOCRText {
@@ -324,16 +328,16 @@ private func distanceSquared(
 private func prepareImage(
   _ data: Data,
   focusPoint: NormalizedContextPoint?,
-  height: Int,
-  regions: [SensitiveRegion],
-  width: Int
-) throws -> Data {
+  regions: [SensitiveRegion]
+) throws -> EncodedContextImage {
   guard
     let source = CGImageSourceCreateWithData(data as CFData, nil),
     let image = CGImageSourceCreateImageAtIndex(source, 0, nil)
   else {
-    return data
+    throw LocalContextPrivacyError.imageEncodingFailed
   }
+  let width = image.width
+  let height = image.height
   guard
     let context = CGContext(
       data: nil,
@@ -369,17 +373,10 @@ private func prepareImage(
       height: height
     )
   }
-  guard
-    let redacted = context.makeImage(),
-    let encoded = NSBitmapImageRep(cgImage: redacted).representation(
-      using: .jpeg,
-      properties: [.compressionFactor: 0.9]
-    ),
-    encoded.count <= 8 * 1024 * 1024
-  else {
+  guard let redacted = context.makeImage() else {
     throw LocalContextPrivacyError.imageEncodingFailed
   }
-  return encoded
+  return try encodeBoundedContextImage(redacted, maximumBytes: 8 * 1024 * 1024)
 }
 
 func contextImagePoint(
@@ -391,6 +388,75 @@ func contextImagePoint(
     x: min(max(point.x, 0), 1) * Double(width),
     y: (1 - min(max(point.y, 0), 1)) * Double(height)
   )
+}
+
+func encodeBoundedContextImage(
+  _ image: CGImage,
+  maximumBytes: Int
+) throws -> EncodedContextImage {
+  guard maximumBytes > 0 else {
+    throw LocalContextPrivacyError.imageEncodingFailed
+  }
+  if let data = jpegData(image, quality: 0.9), data.count <= maximumBytes {
+    return EncodedContextImage(data: data, height: image.height, width: image.width)
+  }
+
+  var candidateImage = image
+  guard var candidateData = jpegData(candidateImage, quality: 0.8) else {
+    throw LocalContextPrivacyError.imageEncodingFailed
+  }
+  while candidateData.count > maximumBytes {
+    let scale = min(
+      0.9,
+      sqrt(Double(maximumBytes) / Double(candidateData.count))
+    )
+    let width = max(1, Int((Double(candidateImage.width) * scale).rounded(.down)))
+    let height = max(1, Int((Double(candidateImage.height) * scale).rounded(.down)))
+    guard
+      width < candidateImage.width || height < candidateImage.height,
+      let resized = resizedImage(candidateImage, width: width, height: height),
+      let resizedData = jpegData(resized, quality: 0.8)
+    else {
+      throw LocalContextPrivacyError.imageEncodingFailed
+    }
+    candidateImage = resized
+    candidateData = resizedData
+  }
+  return EncodedContextImage(
+    data: candidateData,
+    height: candidateImage.height,
+    width: candidateImage.width
+  )
+}
+
+private func jpegData(_ image: CGImage, quality: Double) -> Data? {
+  NSBitmapImageRep(cgImage: image).representation(
+    using: .jpeg,
+    properties: [.compressionFactor: quality]
+  )
+}
+
+private func resizedImage(
+  _ image: CGImage,
+  width: Int,
+  height: Int
+) -> CGImage? {
+  guard
+    let context = CGContext(
+      data: nil,
+      width: width,
+      height: height,
+      bitsPerComponent: 8,
+      bytesPerRow: 0,
+      space: CGColorSpaceCreateDeviceRGB(),
+      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+    )
+  else {
+    return nil
+  }
+  context.interpolationQuality = .high
+  context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+  return context.makeImage()
 }
 
 private func drawFocusMarker(

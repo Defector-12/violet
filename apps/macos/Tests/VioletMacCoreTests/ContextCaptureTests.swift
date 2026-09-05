@@ -37,6 +37,26 @@ struct ContextCaptureTests {
   }
 
   @Test
+  func preservesNativeCaptureDimensions() {
+    let size = capturePixelSize(
+      contentRect: CGRect(x: 0, y: 0, width: 1470, height: 923),
+      pointPixelScale: 2
+    )
+
+    #expect(size == CGSize(width: 2940, height: 1846))
+  }
+
+  @Test
+  func selectsTheDisplayContainingTheFrozenPointer() {
+    let frames = [
+      CGRect(x: 0, y: 0, width: 1470, height: 956),
+      CGRect(x: 1470, y: 0, width: 1920, height: 1080),
+    ]
+
+    #expect(displayIndex(containing: CGPoint(x: 2000, y: 500), in: frames) == 1)
+  }
+
+  @Test
   @MainActor
   func readsSelectionFromApplicationPreparedBeforeVioletTakesFocus() async throws {
     let source = ContextApplicationTarget(
