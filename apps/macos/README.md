@@ -48,7 +48,7 @@ pnpm macos:migrate-token
 
 ## 音频会话
 
-用户只能通过浮层中的麦克风按钮主动启动音频会话。App 先连接
+用户可通过浮层中的麦克风按钮，或显式开启后的语音唤醒启动会话。App 先连接
 `RealtimeSession` 并检查服务端能力；只有服务端声明支持音频输入后，才请求
 macOS 麦克风权限并启动 `AudioIOPort`。会话启动后由 `smart_turn` 自动断句并持续多轮监听；播放回复时再次点击会取消当前回复，其余监听状态下再次点击会结束会话。
 
@@ -59,6 +59,48 @@ macOS 麦克风权限并启动 `AudioIOPort`。会话启动后由 `smart_turn` �
 
 浮层中的 Context 菜单支持 Accessibility 选中文本、系统窗口/显示器选择和区域框选。原始图片先在 Mac 使用 Apple Vision OCR 和本地规则遮挡，再装入五分钟有效的 Context Envelope。关闭浮层、锁屏、睡眠、撤权或主动清除会删除当前 Context。
 
-Wake 开关默认关闭。开启后，`sherpa-onnx` 只在本地监听关键词 `Violet`；唤醒前 PCM 不写盘、不上传、不记录。检测成功后 KWS 先停止，再显示浮层、播放本地打包的 Qwen `longanqian`“我在”，并在播放完成后启动现有 Realtime 会话。模型和动态库下载到被 Git 忽略的 `.local-wake/`，打包时复制进 App Resources。
+Wake 开关默认关闭。开启后，`sherpa-onnx` 只在本地监听关键词 `Violet`；唤醒前 PCM 不写盘、不上传、不记录。检测成功后 KWS 先停止，保持浮层隐藏，播放本地打包的 Qwen `longanqian`“我在”，播放完成后启动 Realtime 会话；稍后打开浮层会续接该会话。模型和动态库下载到被 Git 忽略的 `.local-wake/`，打包时复制进 App Resources。
+
+`Look` 独立且默认关闭。开启后，在语音结束时冻结本轮鼠标与 AX 目标；只有 Core 请求
+当前视觉证据时才读取，AX 可用时不截图，失败时截取鼠标所在单个显示器。它不是全天录屏。
 
 真实权限和视觉验收见 [Release 1C Violet Sight 验收](../../docs/release-1c-acceptance.md)。
+
+## 失败样本回放
+
+开发者先用保存的输入自行回放，候选通过后再交用户最终验收。普通启动不留图片。
+用户授权的验收窗口可显式保留下一次按需图片，避免错误放行时丢失输入：
+
+```bash
+./scripts/start-macos-acceptance.sh "$PWD/.local-acceptance/run.ndjson" --record-pointing
+```
+
+录制授权 15 分钟内有效，最多一张；输出为 `run-pointing/case.json`，包含过滤后的图、
+最终问题、鼠标、轮次和 hash，不含 OCR、音频、凭证。文件私有且拒绝覆盖；录制不产生
+额外截图。新样本 24 小时后拒绝回放，App 存活时自动删除。App 已退出时，由开发者清理：
+
+```bash
+swift run --package-path apps/macos violet-context-replay-capture \
+  --purge-expired .local-acceptance/run-pointing
+```
+
+需要重建受控画面时才调用一次显式采集工具；它会读取当前已授权的屏幕，不是后台任务：
+
+```bash
+swift run --package-path apps/macos violet-context-replay-capture \
+  --record .local-acceptance/pointing-case "我选中的代码是什么意思？"
+```
+
+开发者为样本标注 `expected.json`，格式为
+`{"text":"逐字选区","bounds":{"x":0.1,"y":0.7,"width":0.4,"height":0.1}}`。
+坐标相对完整截图，范围必须包含真实选区但排除邻接命令。用真实 Core Adapter 与门禁回放：
+
+```bash
+pnpm --filter @violet/core build
+VIOLET_MODEL_API_KEY_FILE=/run/violet-secrets/deepseek_api_key \
+  node scripts/replay-natural-pointing.mjs case.json expected.json results.json 5
+```
+
+最后一条在已有供应商凭证的受控 Core 环境运行；不要把凭证复制到样本或命令参数。
+回放不占用麦克风、不写对话账本，必须逐字和框位置同时通过，记录全部尝试。
+它不替代 Qwen 最终输出和真实设备生命周期验证。问题关闭后删除样本与远端诊断副本。

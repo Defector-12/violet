@@ -7,11 +7,11 @@
 - Release 1A 已完成交付。当前 `main` 已包含 pnpm workspace、JSON Schema/OpenAPI 协议、TypeScript SDK、Swift 生成客户端边界、模块化 Core、`dev-cli`、PostgreSQL 迁移、应用层信封加密、DeepSeek Adapter、Docker Compose、可观测配置和加密备份恢复。
 - Release 1B 已完成实现、验收和合并。`RealtimeSession v1`、WebSocket、`RealtimeConversationPort`、确定性实时 Adapter 和最终事件落账可用；原生菜单栏 App、Keychain、可选 SSH 隧道、全局快捷键、系统生命周期和 `AudioIOPort` 边界已经构建。Qwen Adapter 已通过 MR !14 合并，持续会话、`smart_turn`、最近 20 轮上下文、点击与语音打断均已通过真实验收。2026-08-23 的批量设备验收通过 174 次触发、88 次语音、31 次打断和 54 次停止门禁，并覆盖 SSH 断线恢复、250ms 单向延迟和三类音频路由。`Paraformer → DeepSeek → CosyVoice` Pipeline 基线已通过 MR !15 合并，三次静默真实 canary 的断句到首音频为 1.34–1.94 秒且中文转写准确。Qwen 是默认运行时，Pipeline 只通过显式配置启用。
 - Release 1C 已形成实现候选并集成到代码主线：Context Envelope v1、短时 Context Session、DeepSeek `deepseek-v4-flash-vision-exp` Adapter、加密 TOS 临时对象、Mac 窗口/显示器选择、区域框选、Accessibility、Apple Vision OCR、本地敏感遮挡和文字/Realtime Context 注入已实现。本地 `sherpa-onnx v1.13.6` 唤醒 Adapter、`Violet` 开放词汇模型、显式启用开关和锁屏/睡眠停采也已实现。DeepSeek Vision 真实 canary、Screen Recording/Accessibility 冒烟和视觉矩阵 20/50 已通过；当前唤醒候选真实短门禁为 15/20，未达到 19/20。2026-08-30 恢复 1C.1 验收后发现精细目标定位缺陷，Release 1C 与 1C.1 均继续保持候选状态。
-- Release 1C.1 Natural Pointing 的按需视觉替换方案已形成实现候选：唤醒不再预先截图，`Look` 开启时由 Qwen 进行语义路由，Core 对明确视觉指代漏调工具进行确定性兜底，Mac 按当前 `turnId` 读取 AX 选区或即时截图，DeepSeek 基于原图和用户原问题直接作答。Core 校验新鲜度、位置、颜色、目标语义和置信度，旧轮结果被取消和丢弃。2026-09-05 已部署单显示器原尺寸截图、超限等比缩放、意图驱动提示词和单次模型调用修复 `490b26c`；Trae 终端、徽标、按钮、隐私和生命周期矩阵仍待真实复测，因此 Release 1C 与 1C.1 仍未正式交付。
+- Release 1C.1 Natural Pointing 已形成按需视觉候选：不在唤醒时预截图，按当前 `turnId` 使用 AX 或单显示器截图，DeepSeek 按用户问题作答，Core 校验后交给 Qwen。终端曾错误放行相邻命令；本地候选现以鼠标所在连通高亮紧裁图约束目标，固定样本未再误选相邻命令，但逐字稳定率和超时仍未达到完整发布门槛。当前部署与测试统一见 [Release 1C 验收](./release-1c-acceptance.md)。
 - 已完成现有阅读工具 Sprinkle 的只读评估。Sprinkle 是 WXT、React、TypeScript 构建的浏览器扩展，可复用其页面提取、文字与图片选择、区域框选和浏览器内交互能力，但不能作为 Violet 本体。
 - 当前可使用一台公司 Devbox 作为临时云环境：32 核 CPU、128G 内存、120G 系统盘、500G 数据盘、veLinux 1.0。它足以支撑第一阶段的后端、数据库、Worker、沙箱和测试。
 - Violet 是单用户、云端智能优先、Mac 先行的绿地项目。
-- 当前功能分支的格式、生成物、类型和构建门禁通过，TypeScript/JavaScript 107 个测试和 Swift 63 个测试通过；Mac App 已完成打包与签名校验。Devbox 与 Mac 当前运行功能提交 `490b26c`，本次改动没有数据库、协议或依赖变更。本地唤醒模型使用合成 `Violet` 音频完成 100 次正样本和 100 次静音负样本验证，结果为 100/100 触发、0/100 误触发，CPU 处理 p95 为 22.2ms；该结果不能替代真实办公环境验收。Release 1A 的真实模型 20 轮纵向验证、两次物理重启、加密备份、TOS 上传下载和空库恢复已经通过，Release 1B Core 的 ready/sealed、认证、Realtime 握手和遥测白名单验证通过。
+- 历史合成唤醒评估为 100/100 正样本触发、0/100 静音误触发，CPU p95 22.2ms；不能替代真实办公环境验收。Release 1A 的真实对话、重启、加密备份和空库恢复，以及 Release 1B 的会话与设备验收已通过；最新候选必须重新验证，不能沿用旧测试数字宣称完成。
 
 ## 2. 架构目标
 
@@ -105,10 +105,12 @@ Release 1C.1 增加独立且默认关闭的 `Look` 授权。旧候选只在语�
   锚点最长保留 30 秒。
 - Qwen 判断当前问题需要视觉时，Core 才向 Mac 请求该轮即时截图；请求必须匹配并消费
   同一轮锚点，非视觉问题不截图。
-- Mac 不持久缓存截图，但任何图片出境前仍必须运行本地 OCR，仅用于秘密阻断和敏感遮挡，
+- Mac 默认不持久缓存截图，但任何图片出境前仍必须运行本地 OCR，仅用于秘密阻断和敏感遮挡，
   不再让 OCR 单独决定用户目标。
-- DeepSeek Vision 接收同一轮的原图和用户原问题，直接生成答案，并返回目标类型、边界、
-  颜色和置信度作为 Core 的内部校验证据。
+- DeepSeek Vision 接收同一轮图片和用户原问题，返回答案、目标类型、文字、边界、颜色
+  和置信度。本地候选附加确定性指针局部图；选区问题在问题语义、鼠标和宽扁连通蓝色
+  高亮同时成立时使用像素框，否则仍使用模型框。具体限制见
+  [Natural Pointing 交接](./natural-pointing-handoff.md)。
 - Core 校验位置、属性、新鲜度和置信度；图片缺少鼠标点或模型目标框未包含该点时直接
   拒绝，通过后才将最终答案作为工具结果交给 Qwen 播报。验证失败时明确说明无法可靠
   定位，并退回显式区域框选。
@@ -117,6 +119,8 @@ Release 1C.1 增加独立且默认关闭的 `Look` 授权。旧候选只在语�
 - DeepSeek 只调用一次。鼠标是注意力锚点，人工定位环不得成为目标；选区问题必须返回
   完整文本和包含鼠标点的证据框。
 - 该流程按用户视觉问题触发，不持续采帧，不在 `Look` 关闭时采集，不进入长期记忆。
+  用户显式授权的开发验收可一次性保留已过滤样本用于回放；它不是默认缓存或后台监控，
+  范围、过期和清理要求见验收文档。
 - 当前 Qwen Audio 型号保留，不在本次改造中切换到 Qwen Omni。
 - OCR 只用于设备端秘密阻断和敏感遮挡，不参与目标选择或限制视觉模型置信度。
 
@@ -204,7 +208,7 @@ Mac / 浏览器 / 未来设备
 
 ## 7. Violet 云端核心
 
-第一阶段采用模块化单体，而不是微服务集群。内部至少包含：
+第一阶段采用模块化单体，而不是微服务集群。以下是目标模块划分，不是当前实现清单：
 
 - **身份与关系模块**：维护 Violet 的人格、价值宪法、用户关系和连续身份。
 - **模型网关**：按任务质量、成本、延迟和多模态需求选择模型，避免绑定单一供应商。
@@ -380,11 +384,11 @@ Violet 只能通过只读诊断 Port 查询与当前目标相关的脱敏证据�
 
 第一阶段使用现有公司 Devbox 作为临时云环境，同时保持最少基础设施：
 
-- Mac 上一个 TypeScript 开发客户端，后续由原生 Mac 客户端接替日常入口。
+- Mac 原生菜单栏 App 是日常入口；TypeScript `dev-cli` 保留为文字调试与运维入口。
 - Devbox 上一个模块化后端核心。
 - Devbox 上一个 PostgreSQL + `pgvector` 开发数据库。
 - 火山引擎 TOS 私有普通桶，通过 S3 兼容 Port 接入；1A 用于加密备份，1C 起用于经过授权和信封加密的截图与附件。
-- Devbox 上一个或少量隔离执行 Worker 与任务沙箱。
+- 隔离执行 Worker 与任务沙箱属于后续 Release 1E，目前未实现。
 - Devbox 上 OpenTelemetry Collector 和 Grafana LGTM。
 - Release 1A 文字模型使用 DeepSeek OpenAI 兼容 API，模型为 `deepseek-v4-flash`；MCP 和开发 Agent 后续按需接入。
 - Release 1C 视觉理解使用独立的 `ContextUnderstandingPort`，首个 Adapter 为 DeepSeek OpenAI 兼容模型 `deepseek-v4-flash-vision-exp`。它只解析经过 Mac 本地门禁的图片证据，不替代文字模型或 Qwen 实时语音，并可由其他视觉 Adapter 显式替换。
@@ -497,9 +501,8 @@ Sprinkle 不扩建为 Violet 本体，而演化为浏览器结构化感官：
 - Qwen-Audio 3.0 Realtime Plus 是 Release 1B 默认运行时，Pipeline 是手动降级与替换基线。系统 Voice Processing 在已测耳机路由上会让采集 PCM 全部为零并压低系统输出音量，因此当前使用原始输入和保守的本地能量门保证及时停播；外置、Bluetooth、MacBook 内置路由和弱网恢复已验证。只有准备更换默认运行时，或 Qwen 的质量、费用、地域和稳定性证据恶化时，才恢复完整同集比较。
 - 端到端实时模型的预设音色不等于可克隆或任意设计音色；目标音色能力和合法使用边界尚需单独验证。
 - 任意应用中的指向、选区和结构化语义能否稳定融合，需要专项评估。
-- Trae 集成终端不暴露 `AXSelectedText`。旧候选的真实截图链路已证明能够安全传输和
-  调用 DeepSeek，但视觉请求到达时鼠标已不在终端目标附近，模型只返回低置信度或无
-  目标框结果。当前部署候选已改为按语音轮次固定鼠标并校验点框包含关系，仍待真机复测。
+- Trae 集成终端不暴露 `AXSelectedText`。固定鼠标和校验点框后仍出现误选相邻命令，
+  说明几何校验不是文字正确性验证。应保留失败输入，先由开发者回放，再交最终人工验收。
 - 记忆的正确写入、相关检索、冲突处理与删除传播尚需专项设计和测试。
 - 开发 Agent、部署工具和外部平台是否提供稳定 API、CLI 或 MCP 尚需验证。
 - 用户已经接受真实个人记忆进入当前 DeepSeek API 的数据处理风险；供应商条款变化仍需持续复核。
@@ -512,4 +515,6 @@ Sprinkle 不扩建为 Violet 本体，而演化为浏览器结构化感官：
 
 ## 19. 下一步
 
-按《工程路线》执行第一阶段。Release 1A 基座与 Release 1B Presence 已完成；Qwen 是默认实时运行时，Pipeline 是显式配置的降级与替换基线，禁止静默自动切换。Release 1C Violet Sight 的代码已集成到主线；Release 1C.1 已完成“Qwen 路由、按需即时单显示器截图、DeepSeek 单次回答、Core 校验、Qwen 播报”的实现候选。下一步是部署并完成 Trae 终端、徽标和按钮真机复测。MR !20 仍不得合并，Release 1C/1C.1 达到完整门槛后才能进入 Release 1D。
+按《工程路线》执行第一阶段。Release 1A/1B 已交付，1C/1C.1 仍为候选。先修复并自行
+回放终端误识别，再检查 Qwen 输出、执行回归、部署候选，最后交用户验收。MR !20
+保持 Draft；完整门槛未通过前不得合并或进入 1D。健康探测通过不代表功能验收通过。
