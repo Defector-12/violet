@@ -1,7 +1,7 @@
 # Release 1C Violet Sight 验收
 
-> 状态：Release 1C/1C.1 均为实现候选，未正式交付。终端选区已经多次复测失败，
-> 包括一次错误放行：回答了选区上方的 `printf`，而非选中的两行 `pnpm`。
+> 状态：Release 1C/1C.1 均为实现候选，未正式交付。终端相邻命令误识别已修复，
+> 2026-09-07 真实 Trae 终端复测正确回答了选中的两行 `pnpm`。
 > 本文是当前部署、测试和剩余门禁的事实源；结构化输出通过不等于识别正确。
 > 完整门槛通过前不得合并 MR !20 或进入 Release 1D。变更过程见
 > [历史记录](./历史记录.md)。
@@ -16,10 +16,9 @@ VIOLET_SWIFTPM_DISABLE_SANDBOX=1 pnpm macos:app
 
 - 当前本地候选：`pnpm check:ci` 通过，TypeScript/JavaScript 117 项通过；
   Swift 67 项通过；Mac App 打包、ad-hoc 签名和深度签名校验通过。
-- 分支：`feat/1c1-natural-pointing`；Codebase 与 GitHub 均为 `c2ea558`。
+- 分支：`feat/1c1-natural-pointing`；功能部署基线为 `c2ea558`，后续提交只记录验收状态。
 - 当前运行：Core `c2ea558-candidate` 健康；Mac App 使用同一提交构建，单进程在线。
-- 本轮候选已部署，启动后的 15 分钟内为下一次按需图片预留一次性失败样本。
-  下一步只需用户做最终终端验收。
+- 本轮终端验收通过；一次性录制也成功保存了隐私过滤后的输入，随后已按用途删除。
 - 关键修复：`d3fbd55`（UUID/时钟）和 `2753351`（图片 WebSocket 容量）。
 
 ## 2. 当前候选
@@ -64,6 +63,7 @@ VIOLET_SWIFTPM_DISABLE_SANDBOX=1 pnpm macos:app
 | 模型调用结构 | 自动测试覆盖单次请求、完整图字节不变、局部图尺寸和坐标回映；不证明识别准确率 |
 | 固定终端样本目标 | 最终原色紧裁候选的 9 次完成调用均识别为目标 `pnpm`，相邻 `printf` 误命中为 0 |
 | Qwen 最终交付 | 对固定正确 grounding 运行 3 次，均正确解释 `pnpm`，未重新引入 `printf` |
+| 真实 Trae 终端选区 | 2026-09-07 最终人工验收通过，正确识别并解释选中的两行 `pnpm` |
 
 已确认的稳定性修复：
 
@@ -75,7 +75,7 @@ VIOLET_SWIFTPM_DISABLE_SANDBOX=1 pnpm macos:app
 
 ## 4. 已知失败
 
-### Trae 终端精确选区
+### Trae 终端精确选区的残余边界
 
 - Trae 集成终端不暴露 `AXSelectedText`，只能退化为截图。
 - 旧候选将 `2940 x 1846` 图像错误变为 `2048 x 1846`，产生白区并导致定位环错位；
@@ -94,7 +94,7 @@ VIOLET_SWIFTPM_DISABLE_SANDBOX=1 pnpm macos:app
   不是确定性逐字 TTS，但没有改变命令含义。
 - 高对比图与空格占位符实验均使结果变差，已停止且不进入候选。
 - 本项的“相邻目标误识别”已有固定回放证据，但逐字稳定率和供应商超时仍未达到正式
-  90% 门槛。可部署为下一轮人工候选，不得将整个 Release 1C/1C.1 标记为通过。
+  90% 门槛。最终人工用例已通过，但不得据一次通过将整个 Release 1C/1C.1 标记为通过。
 - 非默认高亮色、长选区、按钮和图表需专项回归，
   不能用一张终端样本的通过替代完整能力验收。
 
