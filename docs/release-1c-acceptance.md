@@ -16,9 +16,10 @@ VIOLET_SWIFTPM_DISABLE_SANDBOX=1 pnpm macos:app
 
 - 当前本地候选：`pnpm check:ci` 通过，TypeScript/JavaScript 117 项通过；
   Swift 67 项通过；Mac App 打包、ad-hoc 签名和深度签名校验通过。
-- 分支：`feat/1c1-natural-pointing`。当前本地候选与运行版本不同，不能以 HEAD 推断部署。
-- 最后健康探测：Core `05fc590-debug`；Mac 仍为此前 `490b26c` 功能构建。
-- 本轮候选尚未部署。固定样本回放与 Qwen 交付检查已完成，未要求用户重做选区操作。
+- 分支：`feat/1c1-natural-pointing`；Codebase 与 GitHub 均为 `c2ea558`。
+- 当前运行：Core `c2ea558-candidate` 健康；Mac App 使用同一提交构建，单进程在线。
+- 本轮候选已部署，启动后的 15 分钟内为下一次按需图片预留一次性失败样本。
+  下一步只需用户做最终终端验收。
 - 关键修复：`d3fbd55`（UUID/时钟）和 `2753351`（图片 WebSocket 容量）。
 
 ## 2. 当前候选
