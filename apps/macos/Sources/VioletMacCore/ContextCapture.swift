@@ -399,6 +399,7 @@ public final class SystemContextCapture: NSObject, ContextCapturePort {
     region: NormalizedContextRect?
   ) async throws -> CapturedContext {
     let configuration = SCStreamConfiguration()
+    configuration.showsCursor = false
     let size = capturePixelSize(
       contentRect: filter.contentRect,
       pointPixelScale: CGFloat(filter.pointPixelScale)

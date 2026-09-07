@@ -4,6 +4,7 @@ export function formatVisualResult(
   context: ResolvedContext,
   question: string,
   focusPoint?: NormalizedPoint,
+  imageSize?: { readonly height: number; readonly width: number },
 ): string {
   if (!context.answer) {
     return context.summary.includes("Selected text:")
@@ -32,7 +33,7 @@ export function formatVisualResult(
   ) {
     return unavailable("The visual model did not return the selected text as evidence.");
   }
-  if (!containsPoint(context.target.bounds, focusPoint)) {
+  if (!containsPoint(context.target.bounds, focusPoint, imageSize)) {
     return unavailable("The located target does not contain the captured pointer.");
   }
   if (context.target?.bounds && !matchesPosition(question, context.target.bounds)) {
@@ -77,12 +78,19 @@ function containsPoint(
     readonly y: number;
   },
   point: NormalizedPoint,
+  imageSize?: { readonly height: number; readonly width: number },
 ): boolean {
+  const toleranceX =
+    imageSize && Number.isInteger(imageSize.width) && imageSize.width > 0 ? 1 / imageSize.width : 0;
+  const toleranceY =
+    imageSize && Number.isInteger(imageSize.height) && imageSize.height > 0
+      ? 1 / imageSize.height
+      : 0;
   return (
-    point.x >= bounds.x &&
-    point.x <= bounds.x + bounds.width &&
-    point.y >= bounds.y &&
-    point.y <= bounds.y + bounds.height
+    point.x >= bounds.x - toleranceX &&
+    point.x <= bounds.x + bounds.width + toleranceX &&
+    point.y >= bounds.y - toleranceY &&
+    point.y <= bounds.y + bounds.height + toleranceY
   );
 }
 

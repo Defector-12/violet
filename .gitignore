@@ -10,6 +10,7 @@ coverage/
 .local-backups/
 .local-acceptance/
 .local-wake/
+.dbg/
 .swiftpm/
 .build/
 .swift-home/

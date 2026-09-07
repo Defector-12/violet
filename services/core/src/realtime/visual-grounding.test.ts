@@ -79,6 +79,37 @@ describe("formatVisualResult", () => {
     ).toMatchObject({ status: "unavailable" });
   });
 
+  it("accepts at most one source pixel of model coordinate rounding", () => {
+    const context = {
+      ...grounded,
+      target: {
+        bounds: { height: 0.03, width: 0.35, x: 0.04612, y: 0.9 },
+        kind: "text-selection",
+        text: "pnpm test",
+      },
+    };
+    expect(
+      JSON.parse(
+        formatVisualResult(
+          context,
+          "我选中的代码是什么意思？",
+          { x: 0.046, y: 0.918 },
+          { width: 2_940, height: 1_912 },
+        ),
+      ),
+    ).toMatchObject({ status: "ready" });
+    expect(
+      JSON.parse(
+        formatVisualResult(
+          context,
+          "我选中的代码是什么意思？",
+          { x: 0.045, y: 0.918 },
+          { width: 2_940, height: 1_912 },
+        ),
+      ),
+    ).toMatchObject({ status: "unavailable" });
+  });
+
   it("rejects an ungrounded answer when a pointer was captured", () => {
     expect(
       JSON.parse(

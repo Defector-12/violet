@@ -14,6 +14,7 @@
       "!**/dist",
       "!**/coverage",
       "!**/.build",
+      "!**/.dbg",
       "!**/.local-acceptance",
       "!**/.local-wake",
       "!**/.swift-home",

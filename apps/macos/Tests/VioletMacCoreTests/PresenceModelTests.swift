@@ -1284,9 +1284,12 @@ struct PresenceModelTests {
     model.cancelAudioSession()
   }
 
-  @Test
+  @Test(arguments: [false, true])
   @MainActor
-  func stripsLocalOCRFromOnDemandImageEvidence() async throws {
+  func stripsLocalOCRFromOnDemandImageEvidence(recordsReplay: Bool) async throws {
+    let directory = FileManager.default.temporaryDirectory
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
     let turnId = UUID()
     let bitmap = NSBitmapImageRep(
       bitmapDataPlanes: nil,
@@ -1307,7 +1310,7 @@ struct PresenceModelTests {
       result: .image(
         appBundleId: "com.example.Editor",
         data: imageData,
-        focusPoint: nil,
+        focusPoint: .init(x: 0.1, y: 0.9),
         height: 32,
         recognizedText: [
           .init(
@@ -1324,6 +1327,7 @@ struct PresenceModelTests {
       capabilities: audioCapabilities,
       events: [
         .speechStopped(turnId: turnId),
+        .transcript(text: "Explain selected code", final: true, turnId: turnId),
         .contextCaptureRequested(
           requestId: UUID(),
           turnId: turnId,
@@ -1337,6 +1341,8 @@ struct PresenceModelTests {
       contextCapture: capture,
       contextClient: FakeContextClient(),
       defaults: isolatedPresenceDefaults(),
+      pointingReplayRecorder: recordsReplay
+        ? NaturalPointingReplayRecorder(directory: directory) : nil,
       realtimeClient: realtime
     )
     await model.refresh()
@@ -1346,6 +1352,19 @@ struct PresenceModelTests {
     try await waitUntilAsync { await realtime.captureImageLocalTexts == [nil] }
 
     #expect(await realtime.captureImageLocalTexts == [nil])
+    let file = directory.appendingPathComponent("case.json")
+    #expect(FileManager.default.fileExists(atPath: file.path) == recordsReplay)
+    if recordsReplay {
+      let object = try #require(
+        JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any]
+      )
+      #expect(object["question"] as? String == "Explain selected code")
+      #expect(object["turnId"] as? String == turnId.uuidString)
+      #expect(object["localText"] == nil)
+      let image = try #require(object["image"] as? [String: Any])
+      #expect(image["sha256"] as? String == contextImageHash(imageData))
+      #expect(image["localText"] == nil)
+    }
     model.cancelAudioSession()
   }
 

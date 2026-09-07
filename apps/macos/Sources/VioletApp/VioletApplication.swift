@@ -92,6 +92,8 @@ private final class VioletApplicationDelegate: NSObject, NSApplicationDelegate {
         )
       ),
       deviceId: LocalDeviceIdentity().deviceId(),
+      pointingReplayRecorder: dependencies.configuration.testMode
+        ? nil : configuredNaturalPointingReplayRecorder(),
       realtimeClient: dependencies.realtimeClient,
       acceptanceRecorder: acceptanceRecorder
     )

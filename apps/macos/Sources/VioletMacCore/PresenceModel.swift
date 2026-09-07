@@ -63,6 +63,7 @@ public final class PresenceModel: ObservableObject {
   private let defaults: UserDefaults
   private let naturalPointingAnchorLifetime: Duration
   private let naturalPointingPreferenceKey: String
+  private let pointingReplayRecorder: NaturalPointingReplayRecorder?
   private let realtimeClient: (any RealtimeSessionClientPort)?
   private var activeContextSessionId: UUID?
   private var activeRealtimeResponseId: UUID?
@@ -81,6 +82,7 @@ public final class PresenceModel: ObservableObject {
   private var localBargeInFrameCount = 0
   private var monitoringTask: Task<Void, Never>?
   private var naturalPointingAnchor: (expiresAt: ContinuousClock.Instant, turnId: UUID)?
+  private var naturalPointingQuestion: (text: String, turnId: UUID)?
   private var pendingConversationEndTask: Task<Void, Never>?
   private var recordedAudioResponseIds = Set<UUID>()
   public var onAudioSessionEnded: (@MainActor @Sendable () -> Void)?
@@ -100,6 +102,7 @@ public final class PresenceModel: ObservableObject {
     defaults: UserDefaults = .standard,
     naturalPointingAnchorLifetime: Duration = .seconds(30),
     naturalPointingPreferenceKey: String = "violet.natural-pointing-enabled",
+    pointingReplayRecorder: NaturalPointingReplayRecorder? = nil,
     realtimeClient: (any RealtimeSessionClientPort)? = nil,
     acceptanceRecorder: any RealtimeAcceptanceRecording =
       NoopRealtimeAcceptanceRecorder()
@@ -116,6 +119,7 @@ public final class PresenceModel: ObservableObject {
     self.naturalPointingAnchorLifetime = naturalPointingAnchorLifetime
     self.naturalPointingPreferenceKey = naturalPointingPreferenceKey
     self.isNaturalPointingEnabled = defaults.bool(forKey: naturalPointingPreferenceKey)
+    self.pointingReplayRecorder = pointingReplayRecorder
     self.realtimeClient = realtimeClient
   }
 
@@ -323,6 +327,7 @@ public final class PresenceModel: ObservableObject {
     defaults.set(enabled, forKey: naturalPointingPreferenceKey)
     if !enabled {
       naturalPointingAnchor = nil
+      naturalPointingQuestion = nil
     }
     if !enabled, contextState == .selecting {
       clearContext()
@@ -518,6 +523,7 @@ public final class PresenceModel: ObservableObject {
   public func cancelAudioSession(
     reason: RealtimeAcceptanceReason = .userStop
   ) {
+    naturalPointingQuestion = nil
     let sessionId = audioSessionId
     if let sessionId {
       acceptanceRecorder.record(
@@ -622,6 +628,7 @@ public final class PresenceModel: ObservableObject {
     switch event {
     case .speechStarted(let turnId):
       naturalPointingAnchor = nil
+      naturalPointingQuestion = nil
       cancelContextTask()
       pendingConversationEndTask?.cancel()
       pendingConversationEndTask = nil
@@ -679,7 +686,10 @@ public final class PresenceModel: ObservableObject {
         .init(type: .speechStopped, sessionId: audioSessionId, turnId: turnId)
       )
       audioState = .processing
-    case .transcript(let text, let final, _):
+    case .transcript(let text, let final, let turnId):
+      if final {
+        naturalPointingQuestion = (text: text, turnId: turnId)
+      }
       resetAudioInactivityTimeout()
       if let audioTranscriptMessageId {
         replaceMessage(audioTranscriptMessageId, with: text)
@@ -843,6 +853,12 @@ public final class PresenceModel: ObservableObject {
         else {
           throw ContextCaptureError.cancelled
         }
+        if let question = naturalPointingQuestion, question.turnId == turnId {
+          // Recording is optional and must not turn a successful capture into a failure.
+          _ = try? pointingReplayRecorder?.record(
+            context: filtered, question: question.text, turnId: turnId
+          )
+        }
         try await realtimeClient.sendContextCaptureResult(
           .succeeded(filtered),
           deviceId: deviceId,
@@ -994,6 +1010,7 @@ public final class PresenceModel: ObservableObject {
     recordedAudioResponseIds.removeAll()
     audioTask = nil
     audioState = state
+    naturalPointingQuestion = nil
     if let sessionId {
       acceptanceRecorder.record(
         .init(type: .sessionEnded, reason: reason, sessionId: sessionId)

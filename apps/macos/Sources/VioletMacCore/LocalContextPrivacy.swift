@@ -109,11 +109,9 @@ public struct LocalContextPrivacyFilter: LocalContextPrivacyFiltering {
       }
       let preparedImage =
         sensitiveRegions.isEmpty && isBoundedJPEG(data)
-          && focusPoint == nil
         ? EncodedContextImage(data: data, height: height, width: width)
         : try prepareImage(
           data,
-          focusPoint: focusPoint,
           regions: sensitiveRegions
         )
       let safeText = prioritizedLocalText(
@@ -327,7 +325,6 @@ private func distanceSquared(
 
 private func prepareImage(
   _ data: Data,
-  focusPoint: NormalizedContextPoint?,
   regions: [SensitiveRegion]
 ) throws -> EncodedContextImage {
   guard
@@ -365,29 +362,10 @@ private func prepareImage(
       )
     )
   }
-  if let focusPoint {
-    drawFocusMarker(
-      in: context,
-      point: contextImagePoint(focusPoint, width: width, height: height),
-      width: width,
-      height: height
-    )
-  }
   guard let redacted = context.makeImage() else {
     throw LocalContextPrivacyError.imageEncodingFailed
   }
   return try encodeBoundedContextImage(redacted, maximumBytes: 8 * 1024 * 1024)
-}
-
-func contextImagePoint(
-  _ point: NormalizedContextPoint,
-  width: Int,
-  height: Int
-) -> CGPoint {
-  CGPoint(
-    x: min(max(point.x, 0), 1) * Double(width),
-    y: (1 - min(max(point.y, 0), 1)) * Double(height)
-  )
 }
 
 func encodeBoundedContextImage(
@@ -457,28 +435,6 @@ private func resizedImage(
   context.interpolationQuality = .high
   context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
   return context.makeImage()
-}
-
-private func drawFocusMarker(
-  in context: CGContext,
-  point: CGPoint,
-  width: Int,
-  height: Int
-) {
-  let radius = max(12, Double(min(width, height)) * 0.015)
-  let markerBounds = CGRect(
-    x: point.x - radius,
-    y: point.y - radius,
-    width: radius * 2,
-    height: radius * 2
-  )
-  context.setFillColor(NSColor.clear.cgColor)
-  context.setStrokeColor(NSColor.white.withAlphaComponent(0.95).cgColor)
-  context.setLineWidth(max(5, radius * 0.35))
-  context.strokeEllipse(in: markerBounds)
-  context.setStrokeColor(NSColor.systemPink.cgColor)
-  context.setLineWidth(max(2, radius * 0.16))
-  context.strokeEllipse(in: markerBounds)
 }
 
 private func isBoundedJPEG(_ data: Data) -> Bool {
