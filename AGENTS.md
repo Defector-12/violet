@@ -29,6 +29,15 @@
 - Prefer the smallest clear solution, but do not trade away correctness, readability,
   privacy, security, accessibility, or required evidence merely to reduce line count.
 
+## Local Toolchain
+
+- `.node-version` and the root `package.json` are the authoritative local Node.js and pnpm
+  requirements.
+- Agent shells may be non-interactive and inherit a stale fnm environment. Run local Node.js,
+  npm, npx, and pnpm commands through `fnm exec --using=.node-version -- <command>` so each
+  command resolves the repository version without relying on shell startup or `cd` hooks.
+- Do not work around a local runtime mismatch by changing package versions or lockfiles.
+
 ## Debugging And Verification
 
 - Diagnose from existing code, tests, logs, and saved failures before adding instrumentation.

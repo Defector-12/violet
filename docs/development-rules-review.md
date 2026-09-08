@@ -27,6 +27,18 @@
 - 用户安装的 `karpathy-guidelines` 已改为仅在用户明确要求额外谨慎审查时启用，不再与
   项目长期原则重复触发。
 
+## Node 工具链
+
+- 2026-09-08 确认仓库的 `.node-version` 已固定为 22.23.2，`package.json` 也声明了
+  Node.js 与 pnpm 版本范围；缺失的不是版本声明，而是非交互 Shell 的版本激活。
+- Agent 命令进程继承了 fnm 默认 Node.js 18.20.8。`fnm --use-on-cd` 依赖 Shell 初始化
+  或后续目录切换，无法覆盖直接以仓库为工作目录启动的非交互进程；单次执行 `fnm use`
+  也不会影响下一条 Agent 命令，因此此前的临时修复会重复失效。
+- 已将本机 fnm 默认版本切换到仓库已安装的 22.23.2，供新启动的进程使用；仓库同时在
+  `AGENTS.md` 要求本地 Agent 命令通过
+  `fnm exec --using=.node-version -- <command>` 执行，避免依赖父进程 PATH、登录 Shell
+  或 `cd` 钩子。
+
 ## 未修改
 
 - TRAE 为当前工作区生成的 Code Mode、Computer Use、Context7 和 Record & Replay
