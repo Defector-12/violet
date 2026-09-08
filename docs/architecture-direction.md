@@ -1,17 +1,19 @@
 # Violet 总体架构方向
 
-> 状态：架构方向基线。本文定义系统边界和候选技术，不代表具体框架与供应商已经完成最终选型。
+> 状态：架构方向基线。本文只定义稳定的系统边界和技术方向，不维护发布进度、
+> 部署版本、测试数量或临时故障结论。
 
-## 1. 当前状态
+## 1. 文档边界
 
-- Release 1A 已完成交付。当前 `main` 已包含 pnpm workspace、JSON Schema/OpenAPI 协议、TypeScript SDK、Swift 生成客户端边界、模块化 Core、`dev-cli`、PostgreSQL 迁移、应用层信封加密、DeepSeek Adapter、Docker Compose、可观测配置和加密备份恢复。
-- Release 1B 已完成实现、验收和合并。`RealtimeSession v1`、WebSocket、`RealtimeConversationPort`、确定性实时 Adapter 和最终事件落账可用；原生菜单栏 App、Keychain、可选 SSH 隧道、全局快捷键、系统生命周期和 `AudioIOPort` 边界已经构建。Qwen Adapter 已通过 MR !14 合并，持续会话、`smart_turn`、最近 20 轮上下文、点击与语音打断均已通过真实验收。2026-08-23 的批量设备验收通过 174 次触发、88 次语音、31 次打断和 54 次停止门禁，并覆盖 SSH 断线恢复、250ms 单向延迟和三类音频路由。`Paraformer → DeepSeek → CosyVoice` Pipeline 基线已通过 MR !15 合并，三次静默真实 canary 的断句到首音频为 1.34–1.94 秒且中文转写准确。Qwen 是默认运行时，Pipeline 只通过显式配置启用。
-- Release 1C 已形成实现候选并集成到代码主线：Context Envelope v1、短时 Context Session、DeepSeek `deepseek-v4-flash-vision-exp` Adapter、加密 TOS 临时对象、Mac 窗口/显示器选择、区域框选、Accessibility、Apple Vision OCR、本地敏感遮挡和文字/Realtime Context 注入已实现。本地 `sherpa-onnx v1.13.6` 唤醒 Adapter、`Violet` 开放词汇模型、显式启用开关和锁屏/睡眠停采也已实现。DeepSeek Vision 真实 canary、Screen Recording/Accessibility 冒烟和视觉矩阵 20/50 已通过；当前唤醒候选真实短门禁为 15/20，未达到 19/20。2026-08-30 恢复 1C.1 验收后发现精细目标定位缺陷，Release 1C 与 1C.1 均继续保持候选状态。
-- Release 1C.1 Natural Pointing 已形成按需视觉候选：不在唤醒时预截图，按当前 `turnId` 使用 AX 或单显示器截图，DeepSeek 按用户问题作答，Core 校验后交给 Qwen。终端曾错误放行相邻命令；`c2ea558-candidate` 以鼠标所在连通高亮紧裁图约束目标，2026-09-07 真实终端验收通过，但逐字稳定率和超时仍未达到完整发布门槛。当前部署与测试统一见 [Release 1C 验收](./release-1c-acceptance.md)。
-- 已完成现有阅读工具 Sprinkle 的只读评估。Sprinkle 是 WXT、React、TypeScript 构建的浏览器扩展，可复用其页面提取、文字与图片选择、区域框选和浏览器内交互能力，但不能作为 Violet 本体。
-- 当前可使用一台公司 Devbox 作为临时云环境：32 核 CPU、128G 内存、120G 系统盘、500G 数据盘、veLinux 1.0。它足以支撑第一阶段的后端、数据库、Worker、沙箱和测试。
 - Violet 是单用户、云端智能优先、Mac 先行的绿地项目。
-- 历史合成唤醒评估为 100/100 正样本触发、0/100 静音误触发，CPU p95 22.2ms；不能替代真实办公环境验收。Release 1A 的真实对话、重启、加密备份和空库恢复，以及 Release 1B 的会话与设备验收已通过；最新候选必须重新验证，不能沿用旧测试数字宣称完成。
+- 产品原则与不可突破的用户边界见
+  [产品设计理念与宪法](./product-philosophy-and-constitution.md)。
+- 当前实现、部署、测试证据和剩余门禁以对应 Release 验收文档为准；Release 1C/1C.1
+  统一见 [Release 1C 验收](./release-1c-acceptance.md)。
+- 已发生的实现过程、失败案例和历史决策见 [历史记录](./历史记录.md)，不得用历史状态
+  覆盖更新的验收事实。
+- 本文中的框架、供应商和组件名称表示当前架构选择或候选边界，不代表永久绑定，也不
+  单独证明相关能力已经交付。
 
 ## 2. 架构目标
 
