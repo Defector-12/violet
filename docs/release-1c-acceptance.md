@@ -2,6 +2,7 @@
 
 > 状态：Release 1C/1C.1 均为实现候选，未正式交付。终端相邻命令误识别已修复，
 > 2026-09-07 真实 Trae 终端复测正确回答了选中的两行 `pnpm`。
+> Source Control `33` 徽标已通过真实验收；绿色按钮修复候选已部署，待一次真实验收。
 > 本文是当前部署、测试和剩余门禁的事实源；结构化输出通过不等于识别正确。
 > 完整门槛通过前不得合并 MR !20 或进入 Release 1D。变更过程见
 > [历史记录](./历史记录.md)。
@@ -14,10 +15,10 @@ pnpm macos:test
 VIOLET_SWIFTPM_DISABLE_SANDBOX=1 pnpm macos:app
 ```
 
-- 当前本地候选：`pnpm check:ci` 通过，TypeScript/JavaScript 117 项通过；
+- 当前本地候选：`pnpm check:ci` 通过，TypeScript/JavaScript 120 项通过；
   Swift 67 项通过；Mac App 打包、ad-hoc 签名和深度签名校验通过。
-- 分支：`feat/1c1-natural-pointing`；功能部署基线为 `c2ea558`，后续提交只记录验收状态。
-- 当前运行：Core `c2ea558-candidate` 健康；Mac App 使用同一提交构建，单进程在线。
+- 分支：`feat/1c1-natural-pointing`；当前 Core 功能提交为 `520a4f1`。
+- 当前运行：Core `520a4f1-candidate` 健康；Mac App 无需为本次 Core-only 修复重建。
 - 本轮终端验收通过；一次性录制也成功保存了隐私过滤后的输入，随后已按用途删除。
 - 关键修复：`d3fbd55`（UUID/时钟）和 `2753351`（图片 WebSocket 容量）。
 
@@ -64,6 +65,8 @@ VIOLET_SWIFTPM_DISABLE_SANDBOX=1 pnpm macos:app
 | 固定终端样本目标 | 最终原色紧裁候选的 9 次完成调用均识别为目标 `pnpm`，相邻 `printf` 误命中为 0 |
 | Qwen 最终交付 | 对固定正确 grounding 运行 3 次，均正确解释 `pnpm`，未重新引入 `printf` |
 | 真实 Trae 终端选区 | 2026-09-07 最终人工验收通过，正确识别并解释选中的两行 `pnpm` |
+| 真实 Source Control 徽标 | `33` 徽标已由用户确认识别通过 |
+| 固定 Trae 绿色按钮 | `520a4f1` 对同一截图回放 5 次：颜色、框、Core 门禁及当前停止状态解释均 5/5 正确 |
 
 已确认的稳定性修复：
 
@@ -100,8 +103,9 @@ VIOLET_SWIFTPM_DISABLE_SANDBOX=1 pnpm macos:app
 
 ### 其他未通过项
 
-- 旧候选曾把 Source Control `33` 徽标识别为行号。
-- 旧候选曾把右下角绿色发送按钮识别为白色“全部确认”。
+- 旧候选曾把右下角绿色发送按钮识别为白色“全部确认”；随后 5 次都正确定位按钮但因
+  模型漏掉 `target.color` 被 Core 拒绝。`520a4f1` 只在高置信按钮框包含鼠标且框内
+  像素保守验证为绿色时补齐该字段，固定回放已通过，仍待一次真实路径验收。
 - 唤醒真实短门禁为 15/20，低于 19/20；不得继续降低 threshold。
 
 ## 5. 剩余门禁
