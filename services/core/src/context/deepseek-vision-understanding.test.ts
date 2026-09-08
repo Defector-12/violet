@@ -1,6 +1,6 @@
 import sharp from "sharp";
 import { describe, expect, it } from "vitest";
-
+import { formatVisualResult } from "../realtime/visual-grounding.js";
 import { DeepSeekVisionUnderstandingPort } from "./deepseek-vision-understanding.js";
 
 describe("DeepSeekVisionUnderstandingPort", () => {
@@ -422,6 +422,85 @@ describe("DeepSeekVisionUnderstandingPort", () => {
     });
     expect(JSON.stringify(body)).toContain("User question");
     expect(JSON.stringify(body)).toContain("右下角绿色按钮有什么作用");
+    expect(JSON.stringify(body)).toContain("target.color is mandatory");
+    expect(JSON.stringify(body)).toContain("up arrow means send");
+    expect(JSON.stringify(body)).toContain("square means stop");
+  });
+
+  it("fills a missing green color only from pixels inside the grounded control", async () => {
+    const result = await understandGreenButton({
+      buttonColor: "#17b26a",
+    });
+
+    expect(result.target?.color).toBe("green");
+    expect(
+      JSON.parse(
+        formatVisualResult(
+          {
+            ...result,
+            eventId: "event",
+            expiresAt: new Date("2026-09-08T00:05:00.000Z"),
+            sessionId: "session",
+          },
+          "我鼠标放置的地方有一个绿色的按钮，这个是什么意思啊？",
+          { x: 0.75, y: 0.75 },
+          { height: 100, width: 100 },
+        ),
+      ),
+    ).toMatchObject({ status: "ready" });
+  });
+
+  it("does not infer green when the grounded control pixels are red", async () => {
+    const result = await understandGreenButton({
+      buttonColor: "#d92d20",
+    });
+
+    expect(result.target?.color).toBeUndefined();
+    expect(
+      JSON.parse(
+        formatVisualResult(
+          {
+            ...result,
+            eventId: "event",
+            expiresAt: new Date("2026-09-08T00:05:00.000Z"),
+            sessionId: "session",
+          },
+          "我鼠标放置的地方有一个绿色的按钮，这个是什么意思啊？",
+          { x: 0.75, y: 0.75 },
+          { height: 100, width: 100 },
+        ),
+      ),
+    ).toMatchObject({
+      message: "The located target does not match the requested color.",
+      status: "unavailable",
+    });
+  });
+
+  it("does not override a conflicting model color with pixel evidence", async () => {
+    const result = await understandGreenButton({
+      buttonColor: "#17b26a",
+      modelColor: "red",
+    });
+
+    expect(result.target?.color).toBe("red");
+    expect(
+      JSON.parse(
+        formatVisualResult(
+          {
+            ...result,
+            eventId: "event",
+            expiresAt: new Date("2026-09-08T00:05:00.000Z"),
+            sessionId: "session",
+          },
+          "我鼠标放置的地方有一个绿色的按钮，这个是什么意思啊？",
+          { x: 0.75, y: 0.75 },
+          { height: 100, width: 100 },
+        ),
+      ),
+    ).toMatchObject({
+      message: "The located target does not match the requested color.",
+      status: "unavailable",
+    });
   });
 
   it("uses the full image once and treats the pointer as an attention anchor", async () => {
@@ -492,3 +571,61 @@ describe("DeepSeekVisionUnderstandingPort", () => {
     expect(request).toContain('"detail":"high"');
   });
 });
+
+async function understandGreenButton(input: {
+  readonly buttonColor: string;
+  readonly modelColor?: string;
+}) {
+  const bytes = await sharp({
+    create: { background: "#202124", channels: 3, height: 100, width: 100 },
+  })
+    .composite([
+      {
+        input: {
+          create: { background: input.buttonColor, channels: 3, height: 30, width: 30 },
+        },
+        left: 60,
+        top: 60,
+      },
+    ])
+    .png()
+    .toBuffer();
+  const adapter = new DeepSeekVisionUnderstandingPort({
+    apiKey: "test-key",
+    baseUrl: "https://api.deepseek.com",
+    model: "vision",
+    fetch: async () =>
+      Response.json({
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                answer: "这是输入框的操作按钮。",
+                confidence: 0.95,
+                target: {
+                  bounds: { height: 0.3, width: 0.3, x: 0.6, y: 0.6 },
+                  ...(input.modelColor ? { color: input.modelColor } : {}),
+                  kind: "button",
+                },
+              }),
+            },
+          },
+        ],
+      }),
+  });
+  return adapter.understand({
+    payload: {
+      focusPoint: { x: 0.75, y: 0.75 },
+      image: {
+        bytes,
+        height: 100,
+        mediaType: "image/png",
+        sha256: "0".repeat(64),
+        width: 100,
+      },
+      type: "screen.snapshot",
+    },
+    question: "我鼠标放置的地方有一个绿色的按钮，这个是什么意思啊？",
+    requestId: "green-button-test",
+  });
+}
