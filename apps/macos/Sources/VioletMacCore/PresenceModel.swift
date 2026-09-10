@@ -1034,7 +1034,9 @@ public final class PresenceModel: ObservableObject {
     } else {
       localBargeInFrameCount = 0
     }
-    guard localBargeInFrameCount >= 2 else {
+    // Four capture frames reject brief headset or keyboard transients while
+    // keeping local interruption comfortably below the 300 ms gate.
+    guard localBargeInFrameCount >= 4 else {
       return
     }
     interruptAudioResponse(reason: .localSpeech)

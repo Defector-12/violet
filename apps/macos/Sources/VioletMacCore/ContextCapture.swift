@@ -84,6 +84,7 @@ public final class SystemContextCapture: NSObject, ContextCapturePort {
   private var naturalPointingElement: AXUIElement?
   private var naturalPointingLocation: CGPoint?
   private var naturalPointingTarget: ContextApplicationTarget?
+  private let pointedTextReader: (pid_t, CGPoint) -> AccessibilitySelectionResult
   private var selectedTextElement: AXUIElement?
   private var selectedTextTarget: ContextApplicationTarget?
   private let selectionReader: (pid_t?, AXUIElement?) -> AccessibilitySelectionResult
@@ -104,6 +105,7 @@ public final class SystemContextCapture: NSObject, ContextCapturePort {
       accessibilityAccess: requestAccessibilityAccess,
       focusedElementReader: focusedAccessibilityElement,
       selectionReader: readAccessibilitySelection,
+      pointedTextReader: readAccessibilityTextAtPoint,
       mouseLocation: { NSEvent.mouseLocation }
     )
   }
@@ -115,6 +117,9 @@ public final class SystemContextCapture: NSObject, ContextCapturePort {
     accessibilityAccess: @escaping () -> Bool,
     focusedElementReader: @escaping (pid_t) -> AXUIElement?,
     selectionReader: @escaping (pid_t?, AXUIElement?) -> AccessibilitySelectionResult,
+    pointedTextReader: @escaping (pid_t, CGPoint) -> AccessibilitySelectionResult = {
+      _, _ in .unavailable
+    },
     mouseLocation: @escaping () -> CGPoint = { NSEvent.mouseLocation }
   ) {
     self.accessibilityAccess = accessibilityAccess
@@ -123,6 +128,7 @@ public final class SystemContextCapture: NSObject, ContextCapturePort {
     self.excludedBundleIds = excludedBundleIds
     self.focusedElementReader = focusedElementReader
     self.mouseLocation = mouseLocation
+    self.pointedTextReader = pointedTextReader
     self.selectionReader = selectionReader
     super.init()
   }
@@ -236,12 +242,22 @@ public final class SystemContextCapture: NSObject, ContextCapturePort {
       throw LocalContextPrivacyError.blockedApplication
     }
 
-    if accessibilityAccess(), let focusedElement {
-      let selection = selectionReader(
-        target.processIdentifier,
-        focusedElement
-      )
-      switch selection {
+    if accessibilityAccess() {
+      if let focusedElement {
+        let selection = selectionReader(
+          target.processIdentifier,
+          focusedElement
+        )
+        switch selection {
+        case .secureField:
+          throw LocalContextPrivacyError.blockedApplication
+        case .text(let text):
+          return .text(appBundleId: target.bundleIdentifier, text: text)
+        case .unavailable:
+          break
+        }
+      }
+      switch pointedTextReader(target.processIdentifier, naturalPointingLocation) {
       case .secureField:
         throw LocalContextPrivacyError.blockedApplication
       case .text(let text):
@@ -429,7 +445,7 @@ public final class SystemContextCapture: NSObject, ContextCapturePort {
       try encodeContextImage(sendableImage.value)
     }.value
     async let recognizedText = Task.detached(priority: .userInitiated) {
-      recognizeText(in: sendableImage.value)
+      recognizeContextText(in: sendableImage.value)
     }.value
     let encodedData = try await data
     let observations = await recognizedText
@@ -577,6 +593,69 @@ private func readAccessibilitySelection(
     : .text(selectedText)
 }
 
+private func readAccessibilityTextAtPoint(
+  processIdentifier: pid_t,
+  location: CGPoint
+) -> AccessibilitySelectionResult {
+  guard let primaryScreenFrame = NSScreen.screens.first?.frame else {
+    return .unavailable
+  }
+  let point = screenCapturePoint(
+    from: location,
+    primaryScreenFrame: primaryScreenFrame
+  )
+  let application = AXUIElementCreateApplication(processIdentifier)
+  var element: AXUIElement?
+  guard
+    AXUIElementCopyElementAtPosition(
+      application,
+      Float(point.x),
+      Float(point.y),
+      &element
+    ) == .success,
+    let element
+  else {
+    return .unavailable
+  }
+
+  var roleValue: CFTypeRef?
+  guard
+    AXUIElementCopyAttributeValue(
+      element,
+      kAXRoleAttribute as CFString,
+      &roleValue
+    ) == .success,
+    let role = roleValue as? String
+  else {
+    return .unavailable
+  }
+  if role == "AXSecureTextField" {
+    return .secureField
+  }
+  guard ["AXHeading", "AXLink", "AXStaticText"].contains(role) else {
+    return .unavailable
+  }
+
+  for attribute in [
+    kAXValueAttribute as CFString,
+    kAXTitleAttribute as CFString,
+    kAXDescriptionAttribute as CFString,
+  ] {
+    var value: CFTypeRef?
+    guard
+      AXUIElementCopyAttributeValue(element, attribute, &value) == .success,
+      let text = value as? String
+    else {
+      continue
+    }
+    let normalized = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    if !normalized.isEmpty, normalized.count <= 4_096 {
+      return .text(normalized)
+    }
+  }
+  return .unavailable
+}
+
 extension SystemContextCapture: SCContentSharingPickerObserver {
   nonisolated public func contentSharingPicker(
     _ picker: SCContentSharingPicker,
@@ -632,7 +711,7 @@ private func encodeContextImage(_ image: CGImage) throws -> Data {
   return data
 }
 
-private func recognizeText(in image: CGImage) -> [RecognizedContextText] {
+func recognizeContextText(in image: CGImage) -> [RecognizedContextText] {
   let request = VNRecognizeTextRequest()
   request.recognitionLevel = .accurate
   request.automaticallyDetectsLanguage = true

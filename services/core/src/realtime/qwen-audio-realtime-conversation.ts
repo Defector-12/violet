@@ -161,9 +161,12 @@ export class QwenAudioRealtimeConversationPort implements RealtimeConversationPo
 class QwenAudioRealtimeConversation implements RealtimeConversation {
   readonly capabilities: RealtimeCapabilities;
   readonly #cancelledProviderResponseIds = new Set<string>();
+  readonly #completedToolResponseIds = new Set<string>();
+  readonly #contextProviderResponseIds = new Map<string, string>();
   readonly #generateId: () => string;
   readonly #localResponseIds = new Map<string, string>();
   readonly #pendingContextCallIds = new Set<string>();
+  readonly #pendingContextResponseIds = new Set<string>();
   readonly #providerResponseIds = new Map<string, string>();
   readonly #toolResponseIds = new Set<string>();
   readonly #transport: QwenRealtimeTransport;
@@ -203,8 +206,8 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
     this.#closed = true;
     this.#transport.close();
     this.#cancelledProviderResponseIds.clear();
+    this.#clearPendingContextRequests();
     this.#localResponseIds.clear();
-    this.#pendingContextCallIds.clear();
     this.#providerResponseIds.clear();
     this.#turnIdsByProviderResponse.clear();
     this.#toolResponseIds.clear();
@@ -352,7 +355,7 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
       return;
     }
 
-    this.#pendingContextCallIds.clear();
+    this.#clearPendingContextRequests();
     this.#pendingCancellationProviderResponseId = providerResponseId;
     try {
       await this.#transport.send({ type: "response.cancel" });
@@ -368,6 +371,8 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
     if (!this.#pendingContextCallIds.delete(callId)) {
       return;
     }
+    const providerResponseId = this.#contextProviderResponseIds.get(callId);
+    this.#contextProviderResponseIds.delete(callId);
     await this.#transport.send({
       item: {
         call_id: callId,
@@ -376,7 +381,14 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
       },
       type: "conversation.item.create",
     });
-    await this.#transport.send({ type: "response.create" });
+    if (!providerResponseId) {
+      return;
+    }
+    if (this.#completedToolResponseIds.delete(providerResponseId)) {
+      await this.#transport.send({ type: "response.create" });
+    } else {
+      this.#pendingContextResponseIds.add(providerResponseId);
+    }
   }
 
   async #sendGroundedContext(
@@ -433,7 +445,7 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
       if (this.#activeProviderResponseId) {
         await this.#transport.send({ type: "response.cancel" });
       }
-      this.#pendingContextCallIds.clear();
+      this.#clearPendingContextRequests();
       this.#currentTurnId = this.#generateId();
       return {
         turnId: this.#currentTurnId,
@@ -487,6 +499,7 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
       const context = this.#responseContext(providerResponseId);
       this.#toolResponseIds.add(providerResponseId);
       this.#pendingContextCallIds.add(callId);
+      this.#contextProviderResponseIds.set(callId, providerResponseId);
       return {
         callId,
         query: contextQuestion(event["arguments"]),
@@ -557,7 +570,13 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
     }
     if (this.#toolResponseIds.delete(providerResponseId)) {
       if (status && status !== "completed") {
-        this.#pendingContextCallIds.clear();
+        this.#forgetContextProviderResponse(providerResponseId);
+      } else if (this.#pendingContextResponseIds.delete(providerResponseId)) {
+        await this.#transport.send({ type: "response.create" });
+      } else if (
+        Array.from(this.#contextProviderResponseIds.values()).includes(providerResponseId)
+      ) {
+        this.#completedToolResponseIds.add(providerResponseId);
       }
       this.#forgetResponse(providerResponseId, context.localResponseId);
       return undefined;
@@ -619,6 +638,24 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
     this.#turnIdsByProviderResponse.delete(providerResponseId);
     if (this.#activeProviderResponseId === providerResponseId) {
       this.#activeProviderResponseId = null;
+    }
+  }
+
+  #clearPendingContextRequests(): void {
+    this.#completedToolResponseIds.clear();
+    this.#contextProviderResponseIds.clear();
+    this.#pendingContextCallIds.clear();
+    this.#pendingContextResponseIds.clear();
+  }
+
+  #forgetContextProviderResponse(providerResponseId: string): void {
+    this.#completedToolResponseIds.delete(providerResponseId);
+    this.#pendingContextResponseIds.delete(providerResponseId);
+    for (const [callId, responseId] of this.#contextProviderResponseIds) {
+      if (responseId === providerResponseId) {
+        this.#contextProviderResponseIds.delete(callId);
+        this.#pendingContextCallIds.delete(callId);
+      }
     }
   }
 }

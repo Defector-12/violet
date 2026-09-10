@@ -509,6 +509,14 @@ struct PresenceModelTests {
 
     audio.emit(voicedFrame)
     audio.emit(voicedFrame)
+    audio.emit(voicedFrame)
+    try await Task.sleep(for: .milliseconds(30))
+
+    #expect(model.audioState == .processing)
+    #expect(audio.isPlaying)
+    #expect(await realtime.cancelResponseCount == 0)
+
+    audio.emit(voicedFrame)
     try await Task.sleep(for: .milliseconds(30))
 
     #expect(model.audioState == .listening)

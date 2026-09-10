@@ -113,11 +113,9 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
   func stop() {
     isStopping = true
     cancelWakeAcknowledgement()
+    wakeWord.suspend(for: .appTermination)
     shortcut.stop()
     popover.close()
-    wakeWord.suspend()
-    wakeStartTask?.cancel()
-    wakeStartTask = nil
     if let outsideClickMonitor {
       NSEvent.removeMonitor(outsideClickMonitor)
       self.outsideClickMonitor = nil
@@ -128,6 +126,21 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
       object: nil
     )
     NSStatusBar.system.removeStatusItem(statusItem)
+  }
+
+  @discardableResult
+  func suspendSensitiveActivity(
+    for reason: WakeWordSystemSuspension
+  ) -> Bool {
+    cancelWakeAcknowledgement()
+    return wakeWord.suspend(for: reason)
+  }
+
+  @discardableResult
+  func resumeSensitiveActivity(
+    from reason: WakeWordSystemSuspension
+  ) -> Bool {
+    wakeWord.resume(from: reason)
   }
 
   func popoverDidClose(_ notification: Notification) {

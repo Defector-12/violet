@@ -45,6 +45,114 @@ struct LocalContextPrivacyTests {
   }
 
   @Test
+  func blocksSyntheticSecretsAfterLocalOCR() throws {
+    let samples = [
+      "password: VioletPass123",
+      "passwd = localOnly987",
+      "token: abcdefghijklmnop",
+      "secret = syntheticSecret42",
+      "sk-ABCDEFGHIJKLMNOPQRST",
+      "ak-abcdefghijklmnopqrst",
+      "eyJabcdefgh.ijklmnop.qrstuvwx",
+      "-----BEGIN PRIVATE KEY-----",
+    ]
+    let filter = LocalContextPrivacyFilter(excludedBundleIds: [])
+    var blocked = 0
+
+    for sample in samples {
+      let image = try syntheticOCRImage(sample)
+      let recognized = recognizeContextText(in: image)
+      let data = try #require(
+        NSBitmapImageRep(cgImage: image).representation(
+          using: .jpeg,
+          properties: [.compressionFactor: 0.9]
+        )
+      )
+      do {
+        _ = try filter.filter(
+          .image(
+            appBundleId: "com.example.Synthetic",
+            data: data,
+            focusPoint: nil,
+            height: image.height,
+            recognizedText: recognized,
+            region: nil,
+            width: image.width
+          )
+        )
+      } catch LocalContextPrivacyError.blockedSensitiveContent {
+        blocked += 1
+      }
+    }
+
+    #expect(blocked == samples.count)
+  }
+
+  @Test
+  func redactsAtLeastNineteenOfTwentySyntheticSensitiveValuesAfterLocalOCR() throws {
+    let samples = [
+      "ID 11010519491231002X",
+      "ID 110105198001010011",
+      "ID 310101199003070022",
+      "ID 440101200112120033",
+      "ID 510101197506230044",
+      "ID 120101196811300055",
+      "ID 320101200405160066",
+      "ID 330101199909090077",
+      "ID 420101198802280088",
+      "ID 610101197701150099",
+      "CARD 4111 1111 1111 1111",
+      "CARD 5555 5555 5555 4444",
+      "CARD 4000 0000 0000 0002",
+      "CARD 6011 1111 1111 1117",
+      "CARD 3530 1113 3330 0000",
+      "CARD 3782 822463 10005",
+      "CARD 3056 9309 0259 04",
+      "CARD 2223 0031 2200 3222",
+      "CARD 6759 6498 2643 8453",
+      "CARD 6200 0000 0000 0000 000",
+    ]
+    let filter = LocalContextPrivacyFilter(excludedBundleIds: [])
+    var misses: [String] = []
+    var redacted = 0
+
+    for sample in samples {
+      let image = try syntheticOCRImage(sample)
+      let recognized = recognizeContextText(in: image)
+      let data = try #require(
+        NSBitmapImageRep(cgImage: image).representation(
+          using: .jpeg,
+          properties: [.compressionFactor: 0.9]
+        )
+      )
+      let result = try filter.filter(
+        .image(
+          appBundleId: "com.example.Synthetic",
+          data: data,
+          focusPoint: nil,
+          height: image.height,
+          recognizedText: recognized,
+          region: nil,
+          width: image.width
+        )
+      )
+      if result.redactions.contains(where: { $0.category == .controlledSensitive }) {
+        guard case .image(let filteredData, _, _, let localText, _, _, _, _) = result.payload else {
+          Issue.record("Expected a filtered image")
+          continue
+        }
+        redacted += 1
+        #expect(filteredData != data)
+        #expect(localText?.contains(sample) != true)
+      } else {
+        misses.append("\(sample) -> \(recognized.map(\.text).joined(separator: " | "))")
+      }
+    }
+
+    #expect(redacted >= 19, "Missed samples: \(misses)")
+  }
+
+  @Test
   func rejectsExcludedApplicationsWithoutReturningTheirContent() {
     let filter = LocalContextPrivacyFilter(
       excludedBundleIds: ["com.example.confidential"]
@@ -489,6 +597,24 @@ private func imageWithSyntheticText() throws -> Data {
   context.fill(CGRect(x: 84, y: 46, width: 24, height: 4))
   let image = try #require(context.makeImage())
   return try #require(NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]))
+}
+
+private func syntheticOCRImage(_ text: String) throws -> CGImage {
+  let size = NSSize(width: 1_200, height: 160)
+  let image = NSImage(size: size)
+  image.lockFocus()
+  NSColor.white.setFill()
+  NSRect(origin: .zero, size: size).fill()
+  NSString(string: text).draw(
+    at: NSPoint(x: 30, y: 50),
+    withAttributes: [
+      .font: NSFont.monospacedSystemFont(ofSize: 44, weight: .semibold),
+      .foregroundColor: NSColor.black,
+    ]
+  )
+  image.unlockFocus()
+  let bitmap = try #require(image.tiffRepresentation.flatMap(NSBitmapImageRep.init(data:)))
+  return try #require(bitmap.cgImage)
 }
 
 private func noisyImage(width: Int, height: Int) -> CGImage? {

@@ -51,6 +51,7 @@ describe("realtime acceptance report", () => {
     expect(report.gates.interruption.p95Milliseconds).toBe(200);
     expect(report.gates.captureStop.sampleCount).toBe(50);
     expect(report.latePlaybackViolations).toBe(0);
+    expect(report.wake.suspendedListeningViolations).toBe(0);
   });
 
   it("fails incomplete runs and detects playback after cancellation", () => {
@@ -89,6 +90,38 @@ describe("realtime acceptance report", () => {
     });
 
     expect(() => parseAcceptanceLog(unsafe)).toThrow("unexpected field text");
+  });
+
+  it("counts wake detections and rejects listening while the system is suspended", () => {
+    const events = [
+      event(1, 0, "wake.listening.started"),
+      event(2, 10, "wake.detected"),
+      event(3, 11, "wake.listening.stopped"),
+      event(4, 20, "system.suspended"),
+      event(5, 21, "wake.listening.started"),
+      event(6, 30, "system.resumed"),
+    ];
+
+    const report = buildAcceptanceReport(events);
+
+    expect(report.wake).toEqual({
+      detectionCount: 1,
+      listeningAtEnd: true,
+      suspendedDetectionViolations: 0,
+      suspendedListeningViolations: 2,
+    });
+    expect(report.allPassed).toBe(false);
+  });
+
+  it("rejects a wake detection while the system is suspended", () => {
+    const report = buildAcceptanceReport([
+      event(1, 0, "system.suspended"),
+      event(2, 10, "wake.detected"),
+      event(3, 20, "system.resumed"),
+    ]);
+
+    expect(report.wake.suspendedDetectionViolations).toBe(1);
+    expect(report.allPassed).toBe(false);
   });
 });
 

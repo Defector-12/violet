@@ -114,7 +114,10 @@ private final class VioletApplicationDelegate: NSObject, NSApplicationDelegate {
           .appendingPathComponent("WakeWord", isDirectory: true)
           ?? URL(fileURLWithPath: "/nonexistent")
       )
-    let wakeWord = WakeWordCoordinator(detector: wakeDetector)
+    let wakeWord = WakeWordCoordinator(
+      detector: wakeDetector,
+      acceptanceRecorder: acceptanceRecorder
+    )
 
     self.model = model
     self.acceptanceRecorder = acceptanceRecorder
@@ -137,10 +140,10 @@ private final class VioletApplicationDelegate: NSObject, NSApplicationDelegate {
 
   func applicationWillTerminate(_ notification: Notification) {
     NSWorkspace.shared.notificationCenter.removeObserver(self)
+    statusController?.suspendSensitiveActivity(for: .appTermination)
     model?.stop(reason: .appTermination)
     acceptanceRecorder?.flush()
     model?.stopMonitoring()
-    wakeWord?.suspend()
     portForwarder?.stop()
     statusController?.stop()
   }
@@ -180,19 +183,31 @@ private final class VioletApplicationDelegate: NSObject, NSApplicationDelegate {
   }
 
   @objc
-  private func stopSensitiveActivity() {
-    wakeWord?.suspend()
+  private func stopSensitiveActivity(_ notification: Notification) {
+    guard
+      let reason = wakeWordSuspension(for: notification.name),
+      statusController?.suspendSensitiveActivity(for: reason) == true
+    else {
+      return
+    }
+    acceptanceRecorder?.record(.init(type: .systemSuspended))
     model?.stop(reason: .systemLifecycle)
     acceptanceRecorder?.flush()
   }
 
   @objc
-  private func resumeAfterSystemActivity() {
+  private func resumeAfterSystemActivity(_ notification: Notification) {
+    guard
+      let reason = wakeWordSuspension(for: notification.name),
+      statusController?.resumeSensitiveActivity(from: reason) == true
+    else {
+      return
+    }
+    acceptanceRecorder?.record(.init(type: .systemResumed))
     try? portForwarder?.start()
     Task {
       await model?.refresh()
     }
-    wakeWord?.resume()
   }
 
   @objc
@@ -205,6 +220,24 @@ private final class VioletApplicationDelegate: NSObject, NSApplicationDelegate {
       return
     }
     model?.prepareSelectedTextCapture()
+  }
+}
+
+private func wakeWordSuspension(
+  for notification: Notification.Name
+) -> WakeWordSystemSuspension? {
+  switch notification {
+  case NSWorkspace.screensDidSleepNotification,
+    NSWorkspace.screensDidWakeNotification:
+    .screenSleep
+  case NSWorkspace.sessionDidResignActiveNotification,
+    NSWorkspace.sessionDidBecomeActiveNotification:
+    .sessionInactive
+  case NSWorkspace.willSleepNotification,
+    NSWorkspace.didWakeNotification:
+    .systemSleep
+  default:
+    nil
   }
 }
 

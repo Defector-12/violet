@@ -26,8 +26,10 @@ struct WakeWordCoordinatorTests {
   func enablesLocalDetectionAndPausesAfterWake() async throws {
     let defaults = isolatedDefaults()
     let detector = FakeWakeWordDetector()
+    let recorder = WakeAcceptanceRecorder()
     let coordinator = WakeWordCoordinator(
       detector: detector,
+      acceptanceRecorder: recorder,
       defaults: defaults
     )
     var detectionCount = 0
@@ -43,6 +45,10 @@ struct WakeWordCoordinatorTests {
     #expect(coordinator.state == .paused)
     #expect(!detector.isRunning)
     #expect(defaults.bool(forKey: "violet.wake-word-enabled"))
+    #expect(
+      recorder.marks.map(\.type)
+        == [.wakeListeningStarted, .wakeDetected, .wakeListeningStopped]
+    )
   }
 
   @Test
@@ -87,6 +93,75 @@ struct WakeWordCoordinatorTests {
 
     #expect(detector.stopCount == 1)
     #expect(detector.isRunning)
+  }
+
+  @Test
+  @MainActor
+  func refusesToResumeWhileTheSystemIsInactive() async throws {
+    let defaults = isolatedDefaults()
+    let detector = FakeWakeWordDetector()
+    let coordinator = WakeWordCoordinator(
+      detector: detector,
+      defaults: defaults
+    )
+    var detectionCount = 0
+    coordinator.onDetection = {
+      detectionCount += 1
+    }
+
+    coordinator.setEnabled(true)
+    try await waitUntil { coordinator.state == .listening }
+    coordinator.suspend(for: .sessionInactive)
+    coordinator.resume()
+    detector.trigger()
+
+    #expect(coordinator.state == .paused)
+    #expect(!detector.isRunning)
+    #expect(detector.startCount == 1)
+    #expect(detectionCount == 0)
+
+    coordinator.resume(from: .sessionInactive)
+    try await waitUntil {
+      coordinator.state == .listening && detector.startCount == 2
+    }
+    #expect(detector.isRunning)
+  }
+
+  @Test
+  @MainActor
+  func resumesOnlyAfterEverySystemSuspensionIsCleared() async throws {
+    let defaults = isolatedDefaults()
+    let detector = FakeWakeWordDetector()
+    let coordinator = WakeWordCoordinator(
+      detector: detector,
+      defaults: defaults
+    )
+
+    coordinator.setEnabled(true)
+    try await waitUntil { coordinator.state == .listening }
+    #expect(coordinator.suspend(for: .systemSleep))
+    #expect(!coordinator.suspend(for: .screenSleep))
+    #expect(!coordinator.resume(from: .systemSleep))
+
+    #expect(coordinator.state == .paused)
+    #expect(!detector.isRunning)
+    #expect(detector.startCount == 1)
+
+    #expect(coordinator.resume(from: .screenSleep))
+    try await waitUntil {
+      coordinator.state == .listening && detector.startCount == 2
+    }
+  }
+}
+
+@MainActor
+private final class WakeAcceptanceRecorder: RealtimeAcceptanceRecording {
+  private(set) var marks: [RealtimeAcceptanceMark] = []
+
+  func flush() {}
+
+  func record(_ mark: RealtimeAcceptanceMark) {
+    marks.append(mark)
   }
 }
 

@@ -128,6 +128,69 @@ struct ContextCaptureTests {
 
   @Test
   @MainActor
+  func naturalPointingReadsStaticTextAtTheFrozenPointerBeforeTakingAScreenshot() async throws {
+    let source = ContextApplicationTarget(
+      bundleIdentifier: "com.apple.Preview",
+      processIdentifier: 405
+    )
+    let frozenPoint = CGPoint(x: 360, y: 705)
+    var receivedProcessIdentifier: pid_t?
+    var receivedPoint: CGPoint?
+    let capture = SystemContextCapture(
+      excludedBundleIds: [],
+      currentProcessIdentifier: 406,
+      activeApplication: { source },
+      accessibilityAccess: { true },
+      focusedElementReader: { _ in nil },
+      selectionReader: { _, _ in .unavailable },
+      pointedTextReader: { processIdentifier, point in
+        receivedProcessIdentifier = processIdentifier
+        receivedPoint = point
+        return .text(
+          "The Aurora team will inspect Beacon Ridge on Thursday at 09:30."
+        )
+      },
+      mouseLocation: { frozenPoint }
+    )
+
+    #expect(capture.prepareNaturalPointingCapture())
+    let result = try await capture.capture(.naturalPointing)
+
+    #expect(receivedProcessIdentifier == source.processIdentifier)
+    #expect(receivedPoint == frozenPoint)
+    #expect(
+      result
+        == .text(
+          appBundleId: source.bundleIdentifier,
+          text: "The Aurora team will inspect Beacon Ridge on Thursday at 09:30."
+        ))
+  }
+
+  @Test
+  @MainActor
+  func naturalPointingBlocksASecureFieldAtTheFrozenPointer() async {
+    let source = ContextApplicationTarget(
+      bundleIdentifier: "com.example.Login",
+      processIdentifier: 407
+    )
+    let capture = SystemContextCapture(
+      excludedBundleIds: [],
+      currentProcessIdentifier: 408,
+      activeApplication: { source },
+      accessibilityAccess: { true },
+      focusedElementReader: { _ in AXUIElementCreateSystemWide() },
+      selectionReader: { _, _ in .unavailable },
+      pointedTextReader: { _, _ in .secureField }
+    )
+
+    #expect(capture.prepareNaturalPointingCapture())
+    await #expect(throws: LocalContextPrivacyError.blockedApplication) {
+      try await capture.capture(.naturalPointing)
+    }
+  }
+
+  @Test
+  @MainActor
   func naturalPointingUsesTheApplicationPreparedAtSpeechStop() async throws {
     let source = ContextApplicationTarget(
       bundleIdentifier: "com.example.Source",

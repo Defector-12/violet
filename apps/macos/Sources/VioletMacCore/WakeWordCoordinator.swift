@@ -8,6 +8,13 @@ public enum WakeWordState: Equatable, Sendable {
   case unavailable(message: String)
 }
 
+public enum WakeWordSystemSuspension: Hashable, Sendable {
+  case appTermination
+  case screenSleep
+  case sessionInactive
+  case systemSleep
+}
+
 @MainActor
 public final class WakeWordCoordinator: ObservableObject {
   @Published public private(set) var isEnabled: Bool
@@ -15,19 +22,24 @@ public final class WakeWordCoordinator: ObservableObject {
 
   public var onDetection: (@MainActor @Sendable () -> Void)?
 
+  private let acceptanceRecorder: any RealtimeAcceptanceRecording
   private let defaults: UserDefaults
   private let detector: any WakeWordDetectorPort
   private let preferenceKey: String
   private let routeRecoveryDelay: Duration
   private var routeRecoveryTask: Task<Void, Never>?
   private var startTask: Task<Void, Never>?
+  private var systemSuspensions = Set<WakeWordSystemSuspension>()
 
   public init(
     detector: any WakeWordDetectorPort,
+    acceptanceRecorder: any RealtimeAcceptanceRecording =
+      NoopRealtimeAcceptanceRecorder(),
     defaults: UserDefaults = .standard,
     preferenceKey: String = "violet.wake-word-enabled",
     routeRecoveryDelay: Duration = .milliseconds(500)
   ) {
+    self.acceptanceRecorder = acceptanceRecorder
     self.defaults = defaults
     self.detector = detector
     self.preferenceKey = preferenceKey
@@ -52,7 +64,7 @@ public final class WakeWordCoordinator: ObservableObject {
       routeRecoveryTask = nil
       startTask?.cancel()
       startTask = nil
-      detector.stop()
+      stopDetector()
       state = .disabled
     }
   }
@@ -60,6 +72,7 @@ public final class WakeWordCoordinator: ObservableObject {
   public func resume() {
     guard
       isEnabled,
+      systemSuspensions.isEmpty,
       !detector.isRunning,
       startTask == nil,
       routeRecoveryTask == nil
@@ -84,10 +97,11 @@ public final class WakeWordCoordinator: ObservableObject {
       do {
         try detector.start(
           onDetection: { [weak self] in
-            guard let self, self.isEnabled else {
+            guard let self, self.isEnabled, self.systemSuspensions.isEmpty else {
               return
             }
-            self.detector.stop()
+            self.acceptanceRecorder.record(.init(type: .wakeDetected))
+            self.stopDetector()
             self.state = .paused
             self.onDetection?()
           },
@@ -96,6 +110,7 @@ public final class WakeWordCoordinator: ObservableObject {
           }
         )
         self.state = .listening
+        self.acceptanceRecorder.record(.init(type: .wakeListeningStarted))
       } catch {
         self.state = .unavailable(
           message: (error as? LocalizedError)?.errorDescription
@@ -111,17 +126,34 @@ public final class WakeWordCoordinator: ObservableObject {
     routeRecoveryTask = nil
     startTask?.cancel()
     startTask = nil
-    detector.stop()
+    stopDetector()
     state = isEnabled ? .paused : .disabled
   }
 
+  @discardableResult
+  public func suspend(for reason: WakeWordSystemSuspension) -> Bool {
+    let wasActive = systemSuspensions.isEmpty
+    systemSuspensions.insert(reason)
+    suspend()
+    return wasActive
+  }
+
+  @discardableResult
+  public func resume(from reason: WakeWordSystemSuspension) -> Bool {
+    guard systemSuspensions.remove(reason) != nil, systemSuspensions.isEmpty else {
+      return false
+    }
+    resume()
+    return true
+  }
+
   private func recoverAfterAudioConfigurationInvalidation() {
-    guard isEnabled else {
+    guard isEnabled, systemSuspensions.isEmpty else {
       return
     }
     startTask?.cancel()
     startTask = nil
-    detector.stop()
+    stopDetector()
     state = .paused
     routeRecoveryTask?.cancel()
     routeRecoveryTask = Task { [weak self] in
@@ -133,12 +165,20 @@ public final class WakeWordCoordinator: ObservableObject {
       } catch {
         return
       }
-      guard self.isEnabled else {
+      guard self.isEnabled, self.systemSuspensions.isEmpty else {
         self.routeRecoveryTask = nil
         return
       }
       self.routeRecoveryTask = nil
       self.resume()
+    }
+  }
+
+  private func stopDetector() {
+    let wasRunning = detector.isRunning
+    detector.stop()
+    if wasRunning {
+      acceptanceRecorder.record(.init(type: .wakeListeningStopped))
     }
   }
 }

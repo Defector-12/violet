@@ -130,6 +130,15 @@ describe("QwenAudioRealtimeConversationPort", () => {
       output: '{"status":"ready","evidence":"The chart rises."}',
       type: "context-result",
     });
+    expect(transport.sent.at(-1)).toEqual({
+      item: {
+        call_id: "call-context",
+        output: '{"status":"ready","evidence":"The chart rises."}',
+        type: "function_call_output",
+      },
+      type: "conversation.item.create",
+    });
+    expect(transport.sent).not.toContainEqual({ type: "response.create" });
     const answered = [await outputs.next(), await outputs.next(), await outputs.next()].map(
       (result) => result.value,
     );

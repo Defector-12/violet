@@ -93,19 +93,25 @@ public struct LocalContextPrivacyFilter: LocalContextPrivacyFiltering {
       let width
     ):
       try ensureAllowed(appBundleId)
-      let combined = redact(recognizedText.map(\.text).joined(separator: "\n"))
-      if combined.categories.contains(.absoluteSecret) {
+      let analyzedLines = recognizedTextLines(recognizedText).map { observations in
+        (
+          observations: observations,
+          redaction: redact(observations.map(\.text).joined(separator: " "))
+        )
+      }
+      if analyzedLines.contains(where: { $0.redaction.categories.contains(.absoluteSecret) }) {
         throw LocalContextPrivacyError.blockedSensitiveContent
       }
-      let sensitiveRegions = recognizedText.compactMap { observation -> SensitiveRegion? in
-        let result = redact(observation.text)
-        guard result.count > 0 else {
-          return nil
+      let sensitiveRegions = analyzedLines.flatMap { line -> [SensitiveRegion] in
+        guard line.redaction.count > 0 else {
+          return []
         }
-        return SensitiveRegion(
-          categories: result.categories,
-          normalizedBounds: observation.normalizedBounds
-        )
+        return line.observations.map { observation in
+          SensitiveRegion(
+            categories: line.redaction.categories,
+            normalizedBounds: observation.normalizedBounds
+          )
+        }
       }
       let preparedImage =
         sensitiveRegions.isEmpty && isBoundedJPEG(data)
@@ -114,11 +120,23 @@ public struct LocalContextPrivacyFilter: LocalContextPrivacyFiltering {
           data,
           regions: sensitiveRegions
         )
+      let safeRecognizedText = analyzedLines.flatMap { line -> [RecognizedContextText] in
+        guard line.redaction.count > 0, let first = line.observations.first else {
+          return line.observations
+        }
+        return [
+          RecognizedContextText(
+            text: line.redaction.value,
+            confidence: line.observations.map(\.confidence).min() ?? first.confidence,
+            normalizedBounds: first.normalizedBounds
+          )
+        ]
+      }
       let safeText = prioritizedLocalText(
-        recognizedText,
+        safeRecognizedText,
         focusPoint: focusPoint
       )
-      let categories = sensitiveRegions.flatMap(\.categories)
+      let categories = analyzedLines.flatMap(\.redaction.categories)
       return FilteredContext(
         appBundleId: appBundleId,
         completeness: sensitiveRegions.isEmpty ? 1 : 0.8,
@@ -209,6 +227,36 @@ struct EncodedContextImage {
 private struct RedactedOCRText {
   let normalizedBounds: NormalizedContextRect
   let text: String
+}
+
+private func recognizedTextLines(
+  _ observations: [RecognizedContextText]
+) -> [[RecognizedContextText]] {
+  var lines: [[RecognizedContextText]] = []
+  for observation in observations.sorted(by: {
+    let leftY = $0.normalizedBounds.y + $0.normalizedBounds.height / 2
+    let rightY = $1.normalizedBounds.y + $1.normalizedBounds.height / 2
+    return leftY == rightY ? $0.normalizedBounds.x < $1.normalizedBounds.x : leftY > rightY
+  }) {
+    let centerY = observation.normalizedBounds.y + observation.normalizedBounds.height / 2
+    if let index = lines.firstIndex(where: { line in
+      let lineCenter =
+        line.reduce(0) {
+          $0 + $1.normalizedBounds.y + $1.normalizedBounds.height / 2
+        } / Double(line.count)
+      let maximumHeight =
+        line.map(\.normalizedBounds.height).max() ?? observation.normalizedBounds.height
+      return abs(lineCenter - centerY)
+        <= max(maximumHeight, observation.normalizedBounds.height) * 0.6
+    }) {
+      lines[index].append(observation)
+    } else {
+      lines.append([observation])
+    }
+  }
+  return lines.map { line in
+    line.sorted { $0.normalizedBounds.x < $1.normalizedBounds.x }
+  }
 }
 
 private let absoluteSecretPatterns: [NSRegularExpression] = [

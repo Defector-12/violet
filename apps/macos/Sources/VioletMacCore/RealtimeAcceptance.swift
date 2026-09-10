@@ -17,6 +17,11 @@ public enum RealtimeAcceptanceEventType: String, Codable, Sendable {
   case sessionStopRequested = "session.stop.requested"
   case speechStarted = "speech.started"
   case speechStopped = "speech.stopped"
+  case systemResumed = "system.resumed"
+  case systemSuspended = "system.suspended"
+  case wakeDetected = "wake.detected"
+  case wakeListeningStarted = "wake.listening.started"
+  case wakeListeningStopped = "wake.listening.stopped"
 }
 
 public enum RealtimeAcceptanceReason: String, Codable, Sendable {
