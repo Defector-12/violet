@@ -2,7 +2,6 @@ import CryptoKit
 import Foundation
 
 public enum ContextPayload: Equatable, Sendable {
-  case appState(bundleId: String, appName: String?)
   case image(
     data: Data,
     focusPoint: NormalizedContextPoint?,
@@ -264,7 +263,6 @@ struct ContextEnvelopeWire: Encodable {
 }
 
 enum ContextPayloadWire: Encodable {
-  case appState(bundleId: String, appName: String?)
   case image(
     data: Data,
     focusPoint: NormalizedContextPoint?,
@@ -278,8 +276,6 @@ enum ContextPayloadWire: Encodable {
 
   init(_ payload: ContextPayload) {
     switch payload {
-    case .appState(let bundleId, let appName):
-      self = .appState(bundleId: bundleId, appName: appName)
     case .image(
       let data,
       let focusPoint,
@@ -305,10 +301,6 @@ enum ContextPayloadWire: Encodable {
   func encode(to encoder: Encoder) throws {
     var container = encoder.container(keyedBy: CodingKeys.self)
     switch self {
-    case .appState(let bundleId, let appName):
-      try container.encode(bundleId, forKey: .appBundleId)
-      try container.encodeIfPresent(appName, forKey: .appName)
-      try container.encode("app.state", forKey: .type)
     case .image(
       let data,
       let focusPoint,
@@ -341,8 +333,6 @@ enum ContextPayloadWire: Encodable {
   }
 
   private enum CodingKeys: String, CodingKey {
-    case appBundleId
-    case appName
     case focusPoint
     case image
     case region
@@ -367,7 +357,7 @@ private struct ContextReceiptWire: Decodable {
 extension ContextPayload {
   fileprivate var modality: String {
     switch self {
-    case .appState, .text:
+    case .text:
       "accessibility"
     case .image:
       "screen"

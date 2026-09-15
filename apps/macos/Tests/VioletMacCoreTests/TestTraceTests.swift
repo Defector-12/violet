@@ -226,9 +226,9 @@ struct TestTraceTests {
     try recorder.collect(event)
     let content = try String(contentsOf: directory.appendingPathComponent("core.ndjson"), encoding: .utf8)
     #expect(content.split(separator: "\n").count == 1)
-    let report = try String(contentsOf: directory.appendingPathComponent("REPORT.md"), encoding: .utf8)
-    #expect(report.contains("Eastern gate."))
-    #expect(report.contains("not a product PASS"))
+    #expect(!FileManager.default.fileExists(
+      atPath: directory.appendingPathComponent("REPORT.md").path
+    ))
   }
 
   private func fixture(expired: Bool = false) throws -> URL {

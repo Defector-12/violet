@@ -370,14 +370,6 @@ function decodePayload(payload: ContextEnvelope["payload"]): ContextPayload {
   switch (payload.type) {
     case "focus.text":
       return payload;
-    case "app.state":
-      return {
-        appBundleId: payload.appBundleId,
-        ...(payload.appName ? { appName: payload.appName } : {}),
-        type: payload.type,
-      };
-    case "audio.utterance":
-      return payload;
     case "screen.snapshot": {
       const image = decodeImage(payload.image);
       return {
@@ -454,20 +446,6 @@ async function resolvePayload(
         model: "accessibility-v1",
         provider: "violet-device",
         summary: `Selected text:\n${payload.text}`,
-      };
-    case "app.state":
-      return {
-        confidence: 1,
-        model: "application-state-v1",
-        provider: "violet-device",
-        summary: `Current application: ${payload.appName ?? payload.appBundleId}.`,
-      };
-    case "audio.utterance":
-      return {
-        confidence: 1,
-        model: "transcript-v1",
-        provider: "violet-device",
-        summary: `Current utterance:\n${payload.transcript}`,
       };
     case "focus.region":
     case "screen.snapshot": {

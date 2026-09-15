@@ -34,28 +34,6 @@ DeepSeek 输出：
 已删除：`ContextTargetEvidence`、`localText`、`pointerTextVerified`、普通指针局部图、
 第二张图、二次模型调用、颜色/位置/OCR 答案校验和 AX 正文捷径。
 
-## 验收
-
-- Core/Node 全量 150/150：`03b12862-5beb-4c36-966f-23cfa984c10a`。
-- Swift 全量 92/92：`1340867c-ed31-45fa-b54e-735214e7cb0c`。
-- 受控 HTTP/WebSocket trace 116 个事件、0 个证据缺口：
-  `81357081-8e37-4e64-b982-2c37e6db604b`。
-- 图片预览前三题真人 3/3：
-  `7b740c4e-b051-4c6f-92e8-61d0a6cae39f`。
-- 后续用户抽测 3/3，覆盖 Tuesday 峰值、Wednesday 数值/日期和完整库存汇总；用户
-  明确接受图片预览整项通过：
-  `683bb61f-87e3-4a42-850c-8a238bd8c594`。
-
-## 运行与回滚
-
-- Commit：`3b9ffc12728dd7634d0fca160d8a766be98db442`
-- Core：`3b9ffc1-release-1c`
-- Core image：`sha256:8083a796621c94a9c103208d757e13af3bfe88081783858ec129fa88c5ee4000`
-- Mac App SHA-256：
-  `f19888af4dba2fe6fa0ca5f12717383439efa3c0c2bb2f0d978e8d7a69a890ad`
-- 回滚 Core：`violet-core:pre-release-1c-20260915`
-- 回滚 Mac：`.local-acceptance/rollback/Violet-freshness-v6-before-clean-vision.app`
-
-持续 Debug Trace 已由用户关闭；历史证据保留。测试记录规范见
-[Test Evidence](./testing/README.md)，最终发布状态见
-[Release 1C 验收](./release-1c-acceptance.md)。
+测试证据、部署版本和回滚信息只在
+[Release 1C 验收](./release-1c-acceptance.md)维护；记录规则见
+[Test Evidence](./testing/README.md)。

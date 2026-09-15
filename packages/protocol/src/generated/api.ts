@@ -147,7 +147,6 @@ export interface components {
         probability: number;
         /** Format: uuid */
         uuid: string;
-        bundleId: string;
         normalizedPoint: {
             x: components["schemas"]["probability"];
             y: components["schemas"]["probability"];
@@ -166,6 +165,7 @@ export interface components {
             x: components["schemas"]["probability"];
             y: components["schemas"]["probability"];
         };
+        bundleId: string;
         /** ContextEnvelope */
         "context-envelope.schema": {
             authorization: {
@@ -190,11 +190,6 @@ export interface components {
                 /** @constant */
                 type: "focus.text";
             } | {
-                appBundleId: components["schemas"]["bundleId"];
-                appName?: string;
-                /** @constant */
-                type: "app.state";
-            } | {
                 focusPoint?: components["schemas"]["normalizedPoint"];
                 image: components["schemas"]["image"];
                 /** @constant */
@@ -205,10 +200,6 @@ export interface components {
                 region: components["schemas"]["normalizedRect"];
                 /** @constant */
                 type: "focus.region";
-            } | {
-                transcript: string;
-                /** @constant */
-                type: "audio.utterance";
             };
             previousEventId?: components["schemas"]["uuid"];
             /** @constant */

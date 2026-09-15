@@ -944,11 +944,6 @@ components:
     uuid:
       type: string
       format: uuid
-    bundleId:
-      type: string
-      minLength: 3
-      maxLength: 255
-      pattern: ^[A-Za-z0-9][A-Za-z0-9.-]+$
     normalizedPoint:
       type: object
       additionalProperties: false
@@ -1008,6 +1003,11 @@ components:
           $ref: '#/components/schemas/probability'
         'y':
           $ref: '#/components/schemas/probability'
+    bundleId:
+      type: string
+      minLength: 3
+      maxLength: 255
+      pattern: ^[A-Za-z0-9][A-Za-z0-9.-]+$
     context-envelope.schema:
       $schema: https://json-schema.org/draft/2020-12/schema
       $id: https://violet.local/schemas/v1/context-envelope.schema.json
@@ -1078,20 +1078,6 @@ components:
             - type: object
               additionalProperties: false
               required:
-                - appBundleId
-                - type
-              properties:
-                appBundleId:
-                  $ref: '#/components/schemas/bundleId'
-                appName:
-                  type: string
-                  minLength: 1
-                  maxLength: 256
-                type:
-                  const: app.state
-            - type: object
-              additionalProperties: false
-              required:
                 - image
                 - type
               properties:
@@ -1116,18 +1102,6 @@ components:
                   $ref: '#/components/schemas/normalizedRect'
                 type:
                   const: focus.region
-            - type: object
-              additionalProperties: false
-              required:
-                - transcript
-                - type
-              properties:
-                transcript:
-                  type: string
-                  minLength: 1
-                  maxLength: 65536
-                type:
-                  const: audio.utterance
         previousEventId:
           $ref: '#/components/schemas/uuid'
         protocolVersion:

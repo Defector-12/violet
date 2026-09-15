@@ -241,39 +241,6 @@ public final class TestTraceRecorder: @unchecked Sendable {
       }
     }
     try handle.synchronize()
-    try writeReport()
-  }
-
-  private func writeReport() throws {
-    var events: [[String: Any]] = []
-    for url in try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
-    where url.lastPathComponent.hasPrefix("mac-") || url.lastPathComponent == "core.ndjson" {
-      let content = try String(contentsOf: url, encoding: .utf8)
-      for line in content.split(separator: "\n") {
-        if let value = try JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any] {
-          events.append(value)
-        }
-      }
-    }
-    events.sort { ($0["recordedAt"] as? String ?? "") < ($1["recordedAt"] as? String ?? "") }
-    var report = "# Test Run\n\nRun: `\(runId)`\n\n"
-      + "Recorder evidence is not a product PASS. Full events: [Core](./core.ndjson).\n\n"
-    for event in events {
-      let type = event["type"] as? String ?? ""
-      let data = event["data"] as? [String: Any] ?? [:]
-      let isFinalTranscript = data["type"] as? String == "input.transcript" && data["final"] as? Bool == true
-      guard isFinalTranscript || [
-        "answer.completed", "answer.cancelled", "capture.requested", "capture.path",
-        "capture.failed", "grounding.result", "tool.result", "core.trace.collection.failed",
-      ].contains(type) else { continue }
-      let json = try JSONSerialization.data(withJSONObject: data, options: [.prettyPrinted, .sortedKeys])
-      let text = (String(data: json, encoding: .utf8) ?? "").replacingOccurrences(of: "````", with: "` ` ` `")
-      report += "## \(type)\n\n\(event["recordedAt"] as? String ?? "")\n\n"
-        + "````json\n\(text)\n````\n\n"
-    }
-    let url = directory.appendingPathComponent("REPORT.md")
-    try Data(report.utf8).write(to: url, options: .atomic)
-    try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
   }
 
   private func saveCapture(_ event: [String: Any], turn: String) throws {

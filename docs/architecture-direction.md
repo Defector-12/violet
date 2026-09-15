@@ -94,37 +94,13 @@ Mac 客户端是 Violet 的第一具身体，不承载完整身份。
 
 Release 1C 的语音唤醒使用 `WakeWordDetectorPort` 隔离具体引擎。当前 Mac Adapter 使用 `sherpa-onnx v1.13.6` 和带 Apache-2.0 模型卡的 GigaSpeech 英文 KWS 权重；模型与动态库通过固定 SHA-256 下载到本地构建缓存，不进入 Git。唤醒功能默认关闭，用户开启开关后才构成持续本地监听授权；唤醒前 PCM 仅进入本地 KWS，不写盘、不上传、不记录。检测成功后先停止唤醒引擎，在不自动显示浮层的状态下播放本地打包的 Qwen `longanqian` 短回执，并在播放完成后启动现有 Realtime 会话；用户稍后打开浮层时续接该会话，实时会话结束后才恢复唤醒。
 
-Release 1C.1 增加独立且默认关闭的 `Look` 授权。旧候选只在语音唤醒时建立一次最长
-5 分钟的 Context：Mac 在浮窗夺取焦点前保存选区、前台应用和鼠标位置，优先发送选中
-文字，否则捕获前台窗口并附带归一化焦点坐标。图片先经过本地隐私门禁，再由 Core
-后台生成通用视觉摘要；Realtime 通过只读 Context 工具按需读取结果。
-
-真实验收已经证明该唤醒级静态 Context 不足以支撑多轮 Natural Pointing。当前实现候选为：
-
-- Qwen Audio 继续负责语音理解、视觉需求路由和最终语音播报。
-- Mac 在 `input.speech.stopped` 到达时按 `turnId` 固定前台目标、AX 焦点和鼠标坐标，
-  锚点最长保留 30 秒。
-- 只有 Qwen 调用 `inspect_current_view` 时，Core 才向 Mac 请求该轮即时截图；Core
-  不再维护关键词路由 fallback。请求必须匹配并消费同一轮锚点，非视觉问题不截图。
-- Natural Pointing 不使用 AX 正文直接回答。AX 只检查安全字段；手动
-  `Selected Text` 仍是独立的精确文字功能。
-- Mac 截取冻结鼠标所在的完整单个显示器，不生成普通指针、章节或选区局部图。图片在
-  限制内保持原始像素尺寸，超过
-  `8 MiB` 时先降低 JPEG 质量，仍超限才统一等比缩小。
-- 截图不包含 live cursor，避免异步采集期间鼠标移动后与冻结坐标形成两个目标；
-  DeepSeek 只使用同一冻结点的归一化、百分比和像素坐标。
-- 图片出境前运行本机 OCR，只负责绝对秘密阻断和受控敏感遮挡。OCR 原文不上传、不进入
-  模型提示、不验证答案。
-- DeepSeek Vision 一次接收完整单屏截图、冻结点的归一化/百分比/像素坐标和用户原问题，
-  只返回 `answer` 与 `confidence`。
-- Core 只保留授权、请求关联、当前 turn、过期、取消、生命周期和 confidence `>= 0.7`
-  门禁，不再按 OCR、位置词、颜色或 `target.bounds` 二次否决只读答案。严格点框属于
-  未来点击或执行动作，不属于当前问答。
-- 具体合同见 [Natural Pointing 交接](./natural-pointing-handoff.md)。
-- 该流程按用户视觉问题触发，不持续采帧，不在 `Look` 关闭时采集，不进入长期记忆。
-  用户显式授权的限时诊断可保留已过滤交互样本；它不是视觉缓存或后台监控。
-  记录边界见 [Test Evidence](./testing/README.md)。
-- 当前 Qwen Audio 型号保留，不在本次改造中切换到 Qwen Omni。
+Release 1C.1 增加独立且默认关闭的 `Look` 授权。Qwen 是唯一视觉意图路由器；Mac
+按当前 `turnId` 冻结目标和坐标，仅在收到同轮请求后采集完整单屏。图片先在本机执行
+保密应用阻断、绝对秘密阻断和受控敏感遮挡，再由 DeepSeek 一次返回答案与置信度。
+Core 只执行授权、关联、新鲜度、取消、生命周期和置信度门禁，不用 OCR、颜色、位置词
+或目标框二次裁决只读答案。该流程不持续采帧，不在 `Look` 关闭时采集，也不进入长期
+记忆。完整合同见 [Natural Pointing](./natural-pointing-handoff.md)，记录边界见
+[Test Evidence](./testing/README.md)。
 
 感知证据的默认优先级为：
 
@@ -182,7 +158,8 @@ Integrated Realtime Adapter
 - 完整度、置信度、敏感等级和已执行的遮挡。
 - 内容类型、完整性校验和前后事件关联。
 
-内容负载按感官独立建模，例如 `browser.document`、`screen.snapshot`、`focus.region`、`audio.utterance`、`file.document` 和 `app.state`。Context 表示当前证据，不等同于长期记忆、任务状态或工具执行结果。
+当前内容负载为 `screen.snapshot`、`focus.region` 和 `focus.text`。Context 表示当前
+证据，不等同于长期记忆、任务状态或工具执行结果；新增感官类型应由真实生产者驱动。
 
 Mac 数据出境网关是 Mac 设备数据的唯一出口。应用适配器先把结构化内容交给 Mac，Mac 完成本地授权与敏感过滤后再发送云端。保密工作区只发送“本地策略已阻止感知”的状态，不发送实际内容。云端调用模型、MCP、TOS 和其他外部服务时，必须再经过独立的云端出境策略，不能复用或绕过 Mac 的感知授权。
 

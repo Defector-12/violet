@@ -4,11 +4,6 @@ export type ContextPayload =
       readonly type: "focus.text";
     }
   | {
-      readonly appBundleId: string;
-      readonly appName?: string;
-      readonly type: "app.state";
-    }
-  | {
       readonly focusPoint?: NormalizedPoint;
       readonly image: ContextImage;
       readonly type: "screen.snapshot";
@@ -18,10 +13,6 @@ export type ContextPayload =
       readonly image: ContextImage;
       readonly region: NormalizedRect;
       readonly type: "focus.region";
-    }
-  | {
-      readonly transcript: string;
-      readonly type: "audio.utterance";
     };
 
 export interface ContextImage {

@@ -49,7 +49,7 @@
 
 ## 自动化与收尾
 
-- Core/Node 全量 150/150：
+- 1C 部署基线 Core/Node 全量 150/150：
   `03b12862-5beb-4c36-966f-23cfa984c10a`。
 - Swift 全量 92/92：
   `1340867c-ed31-45fa-b54e-735214e7cb0c`。
@@ -73,6 +73,13 @@
 - Core exact commit 产物部署验证：
   `ec5a59bc-4c30-4159-a4a7-2facdd5d87d6`；Mac 最终运行与隧道验证：
   `2132fb63-c60a-4a5b-ad97-eef966586bfb`。
+- 交付后删减回归：Node 148/148 `f3387aa4-d32f-49b5-b2a5-dd4386559454`，
+  TypeScript build/typecheck `71758662-3f84-4393-a703-10bd18db40df`，
+  Swift 92/92 `e36c02df-a8b4-4857-89a6-ab4f4a4d2be3`，受控 trace 116 事件且
+  0 缺口 `2f46e393-4ef3-4904-91a5-435a433e5eee`，协议生成一致
+  `71b9b5a0-e0e8-45fb-a691-5ab2e1a86a20`。
+- 上述删减是源码与文档整理，本轮不重新部署；运行态继续使用下方已验收的
+  `3b9ffc1-release-1c`。
 - 用户已授权提交并推送当前分支。未授权直接合并 MR !20 或开发 Release 1D。
 
 ## 历史失败与修复
