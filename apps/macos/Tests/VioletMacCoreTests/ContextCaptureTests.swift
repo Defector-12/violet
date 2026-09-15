@@ -57,6 +57,36 @@ struct ContextCaptureTests {
   }
 
   @Test
+  func rejectsARegionThatIntersectsAnExcludedApplication() {
+    let region = CGRect(x: 100, y: 100, width: 200, height: 100)
+    let windows = [
+      (
+        bundleIdentifier: Optional("com.example.Reader"),
+        frame: CGRect(x: 0, y: 0, width: 80, height: 80)
+      ),
+      (
+        bundleIdentifier: Optional("com.example.confidential"),
+        frame: CGRect(x: 250, y: 150, width: 300, height: 200)
+      ),
+    ]
+
+    #expect(
+      regionIntersectsExcludedApplication(
+        region,
+        windows: windows,
+        excludedBundleIds: ["com.example.confidential"]
+      )
+    )
+    #expect(
+      !regionIntersectsExcludedApplication(
+        region,
+        windows: windows,
+        excludedBundleIds: ["com.example.Reader"]
+      )
+    )
+  }
+
+  @Test
   @MainActor
   func readsSelectionFromApplicationPreparedBeforeVioletTakesFocus() async throws {
     let source = ContextApplicationTarget(

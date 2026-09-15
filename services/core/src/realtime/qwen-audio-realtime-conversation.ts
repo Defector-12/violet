@@ -176,6 +176,8 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
   readonly #pendingContextResponseIds = new Set<string>();
   readonly #pendingResponseTurnIds: string[] = [];
   readonly #providerResponseIds = new Map<string, string>();
+  readonly #retiredPendingTurnIds = new Set<string>();
+  readonly #suppressedProviderResponseIds = new Set<string>();
   readonly #toolResponseIds = new Set<string>();
   readonly #transport: QwenRealtimeTransport;
   readonly #turnDetection: "manual" | "server_vad" | "smart_turn";
@@ -218,6 +220,8 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
     this.#localResponseIds.clear();
     this.#pendingResponseTurnIds.length = 0;
     this.#providerResponseIds.clear();
+    this.#retiredPendingTurnIds.clear();
+    this.#suppressedProviderResponseIds.clear();
     this.#turnIdsByProviderResponse.clear();
     this.#toolResponseIds.clear();
     this.#activeProviderResponseId = null;
@@ -420,19 +424,27 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
           this.#activeProviderResponseId = null;
         }
         this.#cancelledProviderResponseIds.add(cancelledProviderResponseId);
+        const suppressed = this.#suppressedProviderResponseIds.has(cancelledProviderResponseId);
         const localResponseId = this.#localResponseIds.get(cancelledProviderResponseId);
-        return localResponseId
+        return !suppressed && localResponseId
           ? {
               responseId: localResponseId,
               type: "response-cancelled",
             }
           : undefined;
       }
+      const failedTurnId = this.#pendingResponseTurnIds.shift();
+      if (failedTurnId) {
+        this.#retiredPendingTurnIds.delete(failedTurnId);
+      }
       return output;
     }
     if (event.type === "input_audio_buffer.speech_started") {
       if (this.#activeProviderResponseId) {
         await this.#requestProviderCancellation(this.#activeProviderResponseId);
+      }
+      if (this.#currentTurnId && this.#pendingResponseTurnIds.includes(this.#currentTurnId)) {
+        this.#retiredPendingTurnIds.add(this.#currentTurnId);
       }
       this.#clearPendingContextRequests();
       this.#currentTurnId = this.#generateId();
@@ -442,8 +454,12 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
       };
     }
     if (event.type === "input_audio_buffer.speech_stopped") {
+      const turnId = this.#currentTurnId ?? this.#newTurnId();
+      if (this.#turnDetection !== "manual" && !this.#pendingResponseTurnIds.includes(turnId)) {
+        this.#pendingResponseTurnIds.push(turnId);
+      }
       return {
-        turnId: this.#currentTurnId ?? this.#newTurnId(),
+        turnId,
         type: "speech-stopped",
       };
     }
@@ -509,6 +525,7 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
     if (this.#cancelledProviderResponseIds.has(providerResponseId)) {
       if (event.type === "response.done") {
         this.#cancelledProviderResponseIds.delete(providerResponseId);
+        const suppressed = this.#suppressedProviderResponseIds.delete(providerResponseId);
         const localResponseId = this.#localResponseIds.get(providerResponseId);
         if (this.#pendingCancellationProviderResponseId === providerResponseId) {
           this.#pendingCancellationProviderResponseId = null;
@@ -516,7 +533,9 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
         if (localResponseId) {
           this.#forgetResponse(providerResponseId, localResponseId);
         }
-        return localResponseId && string(record(event["response"])?.["status"]) === "cancelled"
+        return !suppressed &&
+          localResponseId &&
+          string(record(event["response"])?.["status"]) === "cancelled"
           ? {
               responseId: localResponseId,
               type: "response-cancelled",
@@ -527,6 +546,11 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
     }
     const context = this.#responseContext(providerResponseId, event.type === "response.created");
     if (event.type === "response.created") {
+      if (this.#retiredPendingTurnIds.delete(context.turnId)) {
+        this.#suppressedProviderResponseIds.add(providerResponseId);
+        await this.#requestProviderCancellation(providerResponseId);
+        return undefined;
+      }
       this.#activeProviderResponseId = providerResponseId;
       return {
         responseId: context.localResponseId,

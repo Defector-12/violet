@@ -25,7 +25,7 @@ public enum CapturedContext: Equatable, Sendable {
     data: Data,
     focusPoint: NormalizedContextPoint?,
     height: Int,
-    recognizedText: [RecognizedContextText],
+    recognizedText: [RecognizedContextText]?,
     region: NormalizedContextRect?,
     width: Int
   )
@@ -37,6 +37,7 @@ public enum LocalContextPrivacyError: Error, Equatable, LocalizedError {
   case blockedSensitiveContent
   case emptyContext
   case imageEncodingFailed
+  case privacyAnalysisFailed
 
   public var errorDescription: String? {
     switch self {
@@ -48,6 +49,8 @@ public enum LocalContextPrivacyError: Error, Equatable, LocalizedError {
       "No readable context was selected."
     case .imageEncodingFailed:
       "Violet could not prepare the selected image."
+    case .privacyAnalysisFailed:
+      "Violet could not verify that this image is safe to upload."
     }
   }
 }
@@ -93,6 +96,9 @@ public struct LocalContextPrivacyFilter: LocalContextPrivacyFiltering {
       let width
     ):
       try ensureAllowed(appBundleId)
+      guard let recognizedText else {
+        throw LocalContextPrivacyError.privacyAnalysisFailed
+      }
       let analyzedLines = recognizedTextLines(recognizedText).map { observations in
         (
           observations: observations,
@@ -202,7 +208,10 @@ private func recognizedTextLines(
 }
 
 private let absoluteSecretPatterns: [NSRegularExpression] = [
-  regex(#"(?i)\b(?:password|passwd|token|secret|验证码)\s*[:=：]\s*\S+"#),
+  regex(
+    #"(?i)(?<![A-Za-z0-9])(?:[A-Za-z0-9]+[_-])*(?:password|passwd|token|secret|api[_-]?key|access[_-]?key|验证码)(?:[_-][A-Za-z0-9]+)*\s*[:=：]\s*\S+"#
+  ),
+  regex(#"(?i)\bBearer\s+\S+"#),
   regex(#"-----BEGIN [A-Z ]*PRIVATE KEY-----"#),
   regex(#"\b(?:sk|ak)-[A-Za-z0-9_-]{16,}\b"#),
   regex(#"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b"#),
