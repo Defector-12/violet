@@ -48,14 +48,17 @@ describe("formatVisualResult", () => {
         ),
       ),
     ).toEqual({
+      confidence: 1,
       evidence: "Selected text:\nexplicit selection",
       status: "ready",
     });
   });
 
-  it("rejects an image result without an answer", () => {
-    expect(JSON.parse(formatVisualResult(context({ confidence: 1 })))).toMatchObject({
-      status: "unavailable",
+  it("returns a reliable image summary for manually captured context", () => {
+    expect(JSON.parse(formatVisualResult(context({ confidence: 0.95 })))).toEqual({
+      confidence: 0.95,
+      evidence: "Visible answer.",
+      status: "ready",
     });
   });
 });

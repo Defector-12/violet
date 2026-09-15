@@ -516,6 +516,66 @@ describe("QwenAudioRealtimeConversationPort", () => {
     ]);
   });
 
+  it("cancels a response created after a newer smart-turn has started", async () => {
+    const transport = new FakeTransport([
+      { type: "session.created" },
+      { type: "session.updated" },
+      { type: "input_audio_buffer.speech_started" },
+      { type: "input_audio_buffer.speech_stopped" },
+      { type: "input_audio_buffer.speech_started" },
+      {
+        response: { id: "resp-qwen-old", status: "in_progress" },
+        type: "response.created",
+      },
+      {
+        error: {
+          code: "invalid_request_error",
+          message: "Conversation has no active response.",
+          type: "invalid_request_error",
+        },
+        type: "error",
+      },
+      {
+        response: { id: "resp-qwen-old", status: "cancelled" },
+        type: "response.done",
+      },
+      { type: "input_audio_buffer.speech_stopped" },
+      {
+        response: { id: "resp-qwen-new", status: "in_progress" },
+        type: "response.created",
+      },
+    ]);
+    const generatedIds = ["turn-1", "turn-2", "local-response-old", "local-response-new"];
+    const port = new QwenAudioRealtimeConversationPort({
+      apiKey: "test-qwen-api-key",
+      createTransport: () => transport,
+      generateId: () => generatedIds.shift() ?? "unexpected-id",
+      model: "qwen-audio-3.0-realtime-plus",
+      voice: "longanqian",
+      workspaceId: "ws-jvh4fvlcktrjvtbj",
+    });
+    const conversation = await port.open({
+      ...configuration(),
+      turnDetection: "smart_turn",
+    });
+
+    const output = await take(conversation.outputs(), 5);
+
+    expect(output.map((event) => event.type)).toEqual([
+      "speech-started",
+      "speech-stopped",
+      "speech-started",
+      "speech-stopped",
+      "response-started",
+    ]);
+    expect(output.at(-1)).toEqual({
+      responseId: "local-response-new",
+      turnId: "turn-2",
+      type: "response-started",
+    });
+    expect(transport.sent).toContainEqual({ type: "response.cancel" });
+  });
+
   it("treats a no-active-response race after automatic barge-in as cancelled", async () => {
     const transport = new FakeTransport([
       { type: "session.created" },

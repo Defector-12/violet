@@ -177,24 +177,26 @@ public final class SystemContextCapture: NSObject, ContextCapturePort {
   public func capture(_ kind: ContextCaptureKind) async throws -> CapturedContext {
     try testTrace?.record("capture.request", fields: ["kind": String(describing: kind)])
     do {
-    switch kind {
-    case .naturalPointing:
-      return try await captureNaturalPointing()
-    case .selectedText:
-      return try captureSelectedText()
-    case .window:
-      return try await capturePickedWindow()
-    case .region:
-      guard CGPreflightScreenCaptureAccess() || CGRequestScreenCaptureAccess() else {
-        throw ContextCaptureError.screenRecordingPermissionDenied
+      switch kind {
+      case .naturalPointing:
+        return try await captureNaturalPointing()
+      case .selectedText:
+        return try captureSelectedText()
+      case .window:
+        return try await capturePickedWindow()
+      case .region:
+        guard CGPreflightScreenCaptureAccess() || CGRequestScreenCaptureAccess() else {
+          throw ContextCaptureError.screenRecordingPermissionDenied
+        }
+        let rect = try await selectRegion()
+        return try await captureRegion(rect, appBundleId: nil)
       }
-      let rect = try await selectRegion()
-      return try await captureRegion(rect, appBundleId: nil)
-    }
     } catch {
-      try? testTrace?.record("capture.error", fields: [
-        "kind": String(describing: kind), "error": error.localizedDescription,
-      ])
+      try? testTrace?.record(
+        "capture.error",
+        fields: [
+          "kind": String(describing: kind), "error": error.localizedDescription,
+        ])
       throw error
     }
   }
@@ -256,11 +258,13 @@ public final class SystemContextCapture: NSObject, ContextCapturePort {
       try testTrace?.record("capture.blocked", fields: ["reason": "excluded-application"])
       throw LocalContextPrivacyError.blockedApplication
     }
-    try testTrace?.record("capture.target", fields: [
-      "appBundleId": target.bundleIdentifier ?? "",
-      "appKitPointer": ["x": naturalPointingLocation.x, "y": naturalPointingLocation.y],
-      "hasAXFocus": focusedElement != nil,
-    ])
+    try testTrace?.record(
+      "capture.target",
+      fields: [
+        "appBundleId": target.bundleIdentifier ?? "",
+        "appKitPointer": ["x": naturalPointingLocation.x, "y": naturalPointingLocation.y],
+        "hasAXFocus": focusedElement != nil,
+      ])
 
     if accessibilityAccess() {
       if let focusedElement {
@@ -276,10 +280,12 @@ public final class SystemContextCapture: NSObject, ContextCapturePort {
       }
     }
 
-    try testTrace?.record("capture.path", fields: [
-      "path": "screen",
-      "showsCursor": false,
-    ])
+    try testTrace?.record(
+      "capture.path",
+      fields: [
+        "path": "screen",
+        "showsCursor": false,
+      ])
     guard screenCaptureAccess() else {
       throw ContextCaptureError.screenRecordingPermissionDenied
     }
@@ -383,36 +389,49 @@ public final class SystemContextCapture: NSObject, ContextCapturePort {
       from: rect,
       primaryScreenFrame: primaryScreenFrame
     )
-    let image: CGImage
-    if #available(macOS 15.2, *) {
-      image = try await SCScreenshotManager.captureImage(in: captureRect)
-    } else {
-      let content = try await SCShareableContent.excludingDesktopWindows(
-        false,
-        onScreenWindowsOnly: true
-      )
-      guard let display = content.displays.first(where: { $0.frame.intersects(captureRect) }) else {
-        throw ContextCaptureError.unavailable
-      }
-      let filter = SCContentFilter(display: display, excludingWindows: [])
-      let configuration = SCStreamConfiguration()
-      configuration.sourceRect = CGRect(
-        x: captureRect.minX - display.frame.minX,
-        y: captureRect.minY - display.frame.minY,
-        width: captureRect.width,
-        height: captureRect.height
-      )
-      let size = capturePixelSize(
-        contentRect: configuration.sourceRect,
-        pointPixelScale: CGFloat(filter.pointPixelScale)
-      )
-      configuration.width = Int(size.width)
-      configuration.height = Int(size.height)
-      image = try await SCScreenshotManager.captureImage(
-        contentFilter: filter,
-        configuration: configuration
-      )
+    let content = try await SCShareableContent.excludingDesktopWindows(
+      false,
+      onScreenWindowsOnly: true
+    )
+    guard let display = content.displays.first(where: { $0.frame.intersects(captureRect) }) else {
+      throw ContextCaptureError.unavailable
     }
+    if regionIntersectsExcludedApplication(
+      captureRect,
+      windows: content.windows.map {
+        (bundleIdentifier: $0.owningApplication?.bundleIdentifier, frame: $0.frame)
+      },
+      excludedBundleIds: excludedBundleIds
+    ) {
+      try testTrace?.record("capture.blocked", fields: ["reason": "excluded-application"])
+      throw LocalContextPrivacyError.blockedApplication
+    }
+    let excludedApplications = content.applications.filter {
+      $0.processID == currentProcessIdentifier
+        || excludedBundleIds.contains($0.bundleIdentifier)
+    }
+    let filter = SCContentFilter(
+      display: display,
+      excludingApplications: excludedApplications,
+      exceptingWindows: []
+    )
+    let configuration = SCStreamConfiguration()
+    configuration.sourceRect = CGRect(
+      x: captureRect.minX - display.frame.minX,
+      y: captureRect.minY - display.frame.minY,
+      width: captureRect.width,
+      height: captureRect.height
+    )
+    let size = capturePixelSize(
+      contentRect: configuration.sourceRect,
+      pointPixelScale: CGFloat(filter.pointPixelScale)
+    )
+    configuration.width = Int(size.width)
+    configuration.height = Int(size.height)
+    let image = try await SCScreenshotManager.captureImage(
+      contentFilter: filter,
+      configuration: configuration
+    )
     return try await makeCapturedImage(
       image,
       appBundleId: appBundleId,
@@ -700,17 +719,19 @@ private func encodeContextImage(_ image: CGImage) throws -> Data {
   return data
 }
 
-func recognizeContextText(in image: CGImage) -> [RecognizedContextText] {
+func recognizeContextText(in image: CGImage) -> [RecognizedContextText]? {
   let request = VNRecognizeTextRequest()
   request.recognitionLevel = .accurate
   request.automaticallyDetectsLanguage = true
   request.usesLanguageCorrection = true
   let handler = VNImageRequestHandler(cgImage: image)
-  guard
-    (try? handler.perform([request])) != nil,
-    let observations = request.results
-  else {
-    return []
+  do {
+    try handler.perform([request])
+  } catch {
+    return nil
+  }
+  guard let observations = request.results else {
+    return nil
   }
   return observations.compactMap { observation in
     guard let candidate = observation.topCandidates(1).first else {
@@ -773,6 +794,19 @@ func displayIndex(
   in frames: [CGRect]
 ) -> Int? {
   frames.firstIndex { $0.contains(point) }
+}
+
+func regionIntersectsExcludedApplication(
+  _ region: CGRect,
+  windows: [(bundleIdentifier: String?, frame: CGRect)],
+  excludedBundleIds: Set<String>
+) -> Bool {
+  windows.contains { window in
+    guard let bundleIdentifier = window.bundleIdentifier else {
+      return false
+    }
+    return excludedBundleIds.contains(bundleIdentifier) && window.frame.intersects(region)
+  }
 }
 
 func screenCapturePoint(
