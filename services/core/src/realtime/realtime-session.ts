@@ -35,6 +35,7 @@ export interface RealtimeSessionOptions {
   readonly conversationEndIntent: ConversationEndIntentPort;
   readonly conversationPort: RealtimeConversationPort;
   readonly contextService: ContextService;
+  readonly endIntentWaitMs?: number;
   readonly generateId: () => string;
   readonly ledger: ConversationLedger;
   readonly now?: () => Date;
@@ -44,13 +45,17 @@ export class RealtimeSession {
   readonly #conversationEndIntent: ConversationEndIntentPort;
   readonly #conversationPort: RealtimeConversationPort;
   readonly #contextService: ContextService;
+  readonly #endIntentWaitMs: number;
   readonly #generateId: () => string;
   readonly #ledger: ConversationLedger;
   readonly #now: () => Date;
   readonly #assistantContent = new Map<string, string>();
   readonly #clientEventIds = new Set<string>();
   readonly #deferredResponseOutputs = new Map<string, RealtimeConversationOutput[]>();
-  readonly #endIntentByTurn = new Map<string, Promise<boolean>>();
+  readonly #endIntentByTurn = new Map<
+    string,
+    { readonly abortController: AbortController; readonly result: Promise<boolean> }
+  >();
   readonly #finalTranscripts = new Map<string, string>();
   readonly #pendingContextCaptures = new Map<string, PendingContextCapture>();
   readonly #persistedTurns = new Set<string>();
@@ -70,6 +75,7 @@ export class RealtimeSession {
     this.#conversationEndIntent = options.conversationEndIntent;
     this.#conversationPort = options.conversationPort;
     this.#contextService = options.contextService;
+    this.#endIntentWaitMs = options.endIntentWaitMs ?? 1_000;
     this.#generateId = options.generateId;
     this.#ledger = options.ledger;
     this.#now = options.now ?? (() => new Date());
@@ -91,6 +97,9 @@ export class RealtimeSession {
     this.#assistantContent.clear();
     this.#clientEventIds.clear();
     this.#deferredResponseOutputs.clear();
+    for (const pending of this.#endIntentByTurn.values()) {
+      pending.abortController.abort();
+    }
     this.#endIntentByTurn.clear();
     this.#finalTranscripts.clear();
     for (const pending of this.#pendingContextCaptures.values()) {
@@ -411,16 +420,41 @@ export class RealtimeSession {
 
   #recordFinalText(turnId: string, text: string, signal?: AbortSignal): void {
     this.#finalTranscripts.set(turnId, text);
-    this.#endIntentByTurn.set(
-      turnId,
-      this.#conversationEndIntent.shouldEnd({ text, turnId }, signal).catch(() => false),
-    );
+    this.#endIntentByTurn.get(turnId)?.abortController.abort();
+    const abortController = new AbortController();
+    const classifierSignal = signal
+      ? AbortSignal.any([signal, abortController.signal])
+      : abortController.signal;
+    this.#endIntentByTurn.set(turnId, {
+      abortController,
+      result: this.#conversationEndIntent
+        .shouldEnd({ text, turnId }, classifierSignal)
+        .catch(() => false),
+    });
   }
 
   async #takeEndIntent(turnId: string): Promise<boolean> {
     const pending = this.#endIntentByTurn.get(turnId);
     this.#endIntentByTurn.delete(turnId);
-    return pending ? pending : false;
+    if (!pending) {
+      return false;
+    }
+    let timeout: NodeJS.Timeout | undefined;
+    try {
+      return await Promise.race([
+        pending.result,
+        new Promise<boolean>((resolve) => {
+          timeout = setTimeout(() => {
+            pending.abortController.abort();
+            resolve(false);
+          }, this.#endIntentWaitMs);
+        }),
+      ]);
+    } finally {
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+    }
   }
 
   #beginContextCapture(input: {

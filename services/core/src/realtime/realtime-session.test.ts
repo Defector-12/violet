@@ -235,6 +235,86 @@ describe("RealtimeSession", () => {
     ]);
   });
 
+  it("bounds end-intent classification without blocking later realtime events", async () => {
+    const sessionId = randomUUID();
+    const turnId = randomUUID();
+    const responseId = randomUUID();
+    let classifierAborted = false;
+    const session = new RealtimeSession({
+      conversationEndIntent: {
+        async shouldEnd(_input, signal) {
+          return new Promise<boolean>((_resolve, reject) => {
+            signal?.addEventListener(
+              "abort",
+              () => {
+                classifierAborted = true;
+                reject(signal.reason);
+              },
+              { once: true },
+            );
+          });
+        },
+      },
+      conversationPort: {
+        async open() {
+          return {
+            capabilities: {
+              inputModalities: ["audio"],
+              interruption: true,
+              outputModalities: ["audio", "text"],
+              runtimeKind: "integrated",
+              transcription: true,
+              turnDetection: "smart_turn",
+              voiceKind: "preset",
+            } as const,
+            async close() {},
+            async *outputs() {
+              yield { final: true, text: "继续聊", turnId, type: "transcript" } as const;
+              yield { responseId, turnId, type: "response-started" } as const;
+              yield {
+                inputTokens: 1,
+                outputTokens: 1,
+                responseId,
+                turnId,
+                type: "response-completed",
+              } as const;
+              yield { turnId: randomUUID(), type: "speech-started" } as const;
+            },
+            async send() {},
+          };
+        },
+      },
+      contextService: createContextService(),
+      endIntentWaitMs: 5,
+      generateId: randomUUID,
+      ledger: new InMemoryConversationLedger(),
+    });
+    await collect(
+      session.handle({
+        configuration: {
+          inputModalities: ["audio"],
+          outputModalities: ["audio", "text"],
+          protocolVersion: "1",
+          turnDetection: "smart_turn",
+        },
+        eventId: randomUUID(),
+        sequence: 1,
+        sessionId,
+        type: "session.configure",
+      }),
+    );
+
+    const output = await collect(session.outputs());
+
+    expect(output.map((event) => event.type)).toEqual([
+      "input.transcript",
+      "response.started",
+      "response.completed",
+      "input.speech.started",
+    ]);
+    expect(classifierAborted).toBe(true);
+  });
+
   it("seeds a new realtime runtime with recent ledger history", async () => {
     const sessionId = randomUUID();
     const ledger = new InMemoryConversationLedger();
