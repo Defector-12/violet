@@ -42,12 +42,9 @@ public protocol ContextCapturePort: AnyObject {
 
 @MainActor
 public final class SilentContextCapture: ContextCapturePort {
-  public private(set) var captureCount = 0
-
   public init() {}
 
   public func capture(_ kind: ContextCaptureKind) async throws -> CapturedContext {
-    captureCount += 1
     return .text(appBundleId: "com.violet.test", text: "Synthetic selected context")
   }
 
@@ -85,7 +82,7 @@ public final class SystemContextCapture: NSObject, ContextCapturePort {
   private var naturalPointingElement: AXUIElement?
   private var naturalPointingLocation: CGPoint?
   private var naturalPointingTarget: ContextApplicationTarget?
-  private let pointedTextReader: (pid_t, CGPoint) -> AccessibilitySelectionResult
+  private let pointedElementIsSecure: (pid_t, CGPoint) -> Bool
   private var selectedTextElement: AXUIElement?
   private var selectedTextTarget: ContextApplicationTarget?
   private let selectionReader: (pid_t?, AXUIElement?) -> AccessibilitySelectionResult
@@ -110,7 +107,7 @@ public final class SystemContextCapture: NSObject, ContextCapturePort {
       accessibilityAccess: requestAccessibilityAccess,
       focusedElementReader: focusedAccessibilityElement,
       selectionReader: readAccessibilitySelection,
-      pointedTextReader: readAccessibilityTextAtPoint,
+      pointedElementIsSecure: isAccessibilityElementSecure,
       mouseLocation: { NSEvent.mouseLocation },
       screenCaptureAccess: { CGPreflightScreenCaptureAccess() },
       testTrace: testTrace
@@ -124,9 +121,7 @@ public final class SystemContextCapture: NSObject, ContextCapturePort {
     accessibilityAccess: @escaping () -> Bool,
     focusedElementReader: @escaping (pid_t) -> AXUIElement?,
     selectionReader: @escaping (pid_t?, AXUIElement?) -> AccessibilitySelectionResult,
-    pointedTextReader: @escaping (pid_t, CGPoint) -> AccessibilitySelectionResult = {
-      _, _ in .unavailable
-    },
+    pointedElementIsSecure: @escaping (pid_t, CGPoint) -> Bool = { _, _ in false },
     mouseLocation: @escaping () -> CGPoint = { NSEvent.mouseLocation },
     screenCaptureAccess: @escaping () -> Bool = { CGPreflightScreenCaptureAccess() },
     testTrace: TestTraceRecorder? = nil
@@ -137,7 +132,7 @@ public final class SystemContextCapture: NSObject, ContextCapturePort {
     self.excludedBundleIds = excludedBundleIds
     self.focusedElementReader = focusedElementReader
     self.mouseLocation = mouseLocation
-    self.pointedTextReader = pointedTextReader
+    self.pointedElementIsSecure = pointedElementIsSecure
     self.screenCaptureAccess = screenCaptureAccess
     self.selectionReader = selectionReader
     self.testTrace = testTrace
@@ -276,11 +271,8 @@ public final class SystemContextCapture: NSObject, ContextCapturePort {
           break
         }
       }
-      switch pointedTextReader(target.processIdentifier, naturalPointingLocation) {
-      case .secureField:
+      if pointedElementIsSecure(target.processIdentifier, naturalPointingLocation) {
         throw LocalContextPrivacyError.blockedApplication
-      case .text, .unavailable:
-        break
       }
     }
 
@@ -614,12 +606,12 @@ private func readAccessibilitySelection(
     : .text(selectedText)
 }
 
-private func readAccessibilityTextAtPoint(
+private func isAccessibilityElementSecure(
   processIdentifier: pid_t,
   location: CGPoint
-) -> AccessibilitySelectionResult {
+) -> Bool {
   guard let primaryScreenFrame = NSScreen.screens.first?.frame else {
-    return .unavailable
+    return false
   }
   let point = screenCapturePoint(
     from: location,
@@ -636,7 +628,7 @@ private func readAccessibilityTextAtPoint(
     ) == .success,
     let element
   else {
-    return .unavailable
+    return false
   }
 
   var roleValue: CFTypeRef?
@@ -648,12 +640,9 @@ private func readAccessibilityTextAtPoint(
     ) == .success,
     let role = roleValue as? String
   else {
-    return .unavailable
+    return false
   }
-  if role == "AXSecureTextField" {
-    return .secureField
-  }
-  return .unavailable
+  return role == "AXSecureTextField"
 }
 
 extension SystemContextCapture: SCContentSharingPickerObserver {

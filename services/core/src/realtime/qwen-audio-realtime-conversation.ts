@@ -7,6 +7,7 @@ import type {
   RealtimeSessionConfiguration,
 } from "@violet/domain";
 import WebSocket from "ws";
+import { AsyncQueue, abortReason, timeoutSignal } from "./async-queue.js";
 import { recordTestTrace, testTraceEnabled } from "./test-trace.js";
 
 const inputAudio = {
@@ -98,11 +99,11 @@ export class QwenAudioRealtimeConversationPort implements RealtimeConversationPo
       "User-Agent": "violet-core/0.1",
       "X-DashScope-WorkSpace": this.#workspaceId,
     });
-    const setup = createTimeoutSignal(signal, this.#connectTimeoutMs);
+    const setupSignal = timeoutSignal(signal, this.#connectTimeoutMs);
 
     try {
-      await transport.connect(setup.signal);
-      await waitForEvent(transport, "session.created", setup.signal);
+      await transport.connect(setupSignal);
+      await waitForEvent(transport, "session.created", setupSignal);
       const sessionUpdate = {
         session: {
           enable_speech_emotion: true,
@@ -135,7 +136,7 @@ export class QwenAudioRealtimeConversationPort implements RealtimeConversationPo
       };
       recordTestTrace("qwen.configure", { model: this.#model, ...sessionUpdate });
       await transport.send(sessionUpdate);
-      await waitForEvent(transport, "session.updated", setup.signal);
+      await waitForEvent(transport, "session.updated", setupSignal);
       for (const message of configuration.history ?? []) {
         await transport.send({
           item: {
@@ -159,8 +160,6 @@ export class QwenAudioRealtimeConversationPort implements RealtimeConversationPo
     } catch (error) {
       transport.close();
       throw error;
-    } finally {
-      setup.dispose();
     }
   }
 }
@@ -724,7 +723,7 @@ function contextQuestion(value: unknown): string {
 }
 
 class WebSocketQwenRealtimeTransport implements QwenRealtimeTransport {
-  readonly #events = new AsyncEventQueue<unknown>();
+  readonly #events = new AsyncQueue<unknown>();
   readonly #socket: WebSocket;
   #closed = false;
 
@@ -807,7 +806,7 @@ class WebSocketQwenRealtimeTransport implements QwenRealtimeTransport {
   }
 
   receive(signal?: AbortSignal): Promise<unknown> {
-    return this.#events.next(signal);
+    return this.#events.nextRequired(signal);
   }
 
   close(): void {
@@ -822,73 +821,6 @@ class WebSocketQwenRealtimeTransport implements QwenRealtimeTransport {
     ) {
       this.#socket.close(1000, "SESSION_CLOSED");
     }
-  }
-}
-
-class AsyncEventQueue<T> {
-  readonly #values: T[] = [];
-  readonly #waiters: Array<{
-    readonly reject: (error: unknown) => void;
-    readonly resolve: (value: T) => void;
-  }> = [];
-  #failure: unknown;
-
-  push(value: T): void {
-    const waiter = this.#waiters.shift();
-    if (waiter) {
-      waiter.resolve(value);
-    } else if (!this.#failure) {
-      this.#values.push(value);
-    }
-  }
-
-  fail(error: unknown): void {
-    if (this.#failure) {
-      return;
-    }
-    this.#failure = error;
-    for (const waiter of this.#waiters.splice(0)) {
-      waiter.reject(error);
-    }
-  }
-
-  async next(signal?: AbortSignal): Promise<T> {
-    const value = this.#values.shift();
-    if (value !== undefined) {
-      return value;
-    }
-    if (this.#failure) {
-      throw this.#failure;
-    }
-
-    return new Promise<T>((resolve, reject) => {
-      const waiter = {
-        reject: (error: unknown) => {
-          cleanup();
-          reject(error);
-        },
-        resolve: (nextValue: T) => {
-          cleanup();
-          resolve(nextValue);
-        },
-      };
-      const onAbort = () => {
-        const index = this.#waiters.indexOf(waiter);
-        if (index >= 0) {
-          this.#waiters.splice(index, 1);
-        }
-        waiter.reject(abortReason(signal));
-      };
-      const cleanup = () => {
-        signal?.removeEventListener("abort", onAbort);
-      };
-
-      this.#waiters.push(waiter);
-      signal?.addEventListener("abort", onAbort, { once: true });
-      if (signal?.aborted) {
-        onAbort();
-      }
-    });
   }
 }
 
@@ -1043,33 +975,4 @@ function required(value: string, label: string): string {
     throw new Error(`${label} is required`);
   }
   return result;
-}
-
-function abortReason(signal: AbortSignal | undefined): Error {
-  return signal?.reason instanceof Error ? signal.reason : new Error("Operation aborted");
-}
-
-function createTimeoutSignal(
-  parent: AbortSignal | undefined,
-  timeoutMs: number,
-): {
-  readonly dispose: () => void;
-  readonly signal: AbortSignal;
-} {
-  const controller = new AbortController();
-  const onAbort = () => controller.abort(parent?.reason);
-  const timeout = setTimeout(() => {
-    controller.abort(new Error("Qwen realtime setup timed out"));
-  }, timeoutMs);
-  parent?.addEventListener("abort", onAbort, { once: true });
-  if (parent?.aborted) {
-    onAbort();
-  }
-  return {
-    dispose: () => {
-      clearTimeout(timeout);
-      parent?.removeEventListener("abort", onAbort);
-    },
-    signal: controller.signal,
-  };
 }

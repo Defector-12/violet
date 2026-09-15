@@ -124,36 +124,7 @@ struct ContextCaptureTests {
 
   @Test
   @MainActor
-  func naturalPointingUsesAScreenshotEvenWhenAXHasShortText() async {
-    let source = ContextApplicationTarget(
-      bundleIdentifier: "com.apple.Preview",
-      processIdentifier: 303
-    )
-    var pointedTextRead = false
-    let capture = SystemContextCapture(
-      excludedBundleIds: [],
-      currentProcessIdentifier: 404,
-      activeApplication: { source },
-      accessibilityAccess: { true },
-      focusedElementReader: { _ in AXUIElementCreateSystemWide() },
-      selectionReader: { _, _ in .text("North ") },
-      pointedTextReader: { _, _ in
-        pointedTextRead = true
-        return .text("North")
-      },
-      screenCaptureAccess: { false }
-    )
-
-    #expect(capture.prepareNaturalPointingCapture())
-    await #expect(throws: ContextCaptureError.screenRecordingPermissionDenied) {
-      try await capture.capture(.naturalPointing)
-    }
-    #expect(pointedTextRead)
-  }
-
-  @Test
-  @MainActor
-  func naturalPointingAlwaysUsesAScreenshotEvenWhenAXHasPointedText() async {
+  func naturalPointingChecksThePointedElementBeforeTakingAScreenshot() async {
     let source = ContextApplicationTarget(
       bundleIdentifier: "com.apple.Preview",
       processIdentifier: 405
@@ -168,12 +139,10 @@ struct ContextCaptureTests {
       accessibilityAccess: { true },
       focusedElementReader: { _ in nil },
       selectionReader: { _, _ in .unavailable },
-      pointedTextReader: { processIdentifier, point in
+      pointedElementIsSecure: { processIdentifier, point in
         receivedProcessIdentifier = processIdentifier
         receivedPoint = point
-        return .text(
-          "The Aurora team will inspect Beacon Ridge on Thursday at 09:30."
-        )
+        return false
       },
       mouseLocation: { frozenPoint },
       screenCaptureAccess: { false }
@@ -202,7 +171,7 @@ struct ContextCaptureTests {
       accessibilityAccess: { true },
       focusedElementReader: { _ in AXUIElementCreateSystemWide() },
       selectionReader: { _, _ in .unavailable },
-      pointedTextReader: { _, _ in .secureField }
+      pointedElementIsSecure: { _, _ in true }
     )
 
     #expect(capture.prepareNaturalPointingCapture())
