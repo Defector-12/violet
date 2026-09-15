@@ -32,6 +32,11 @@ const eventTypes = new Set([
   "session.stop.requested",
   "speech.started",
   "speech.stopped",
+  "system.resumed",
+  "system.suspended",
+  "wake.detected",
+  "wake.listening.started",
+  "wake.listening.stopped",
 ]);
 
 const gateDefinitions = [
@@ -105,17 +110,21 @@ export function buildAcceptanceReport(events) {
   const failedSessions = events.filter(
     (event) => event.type === "session.ended" && event.reason === "failure",
   ).length;
+  const wake = wakeSummary(events);
 
   return {
     allPassed:
       Object.values(gates).every((gate) => gate.passed) &&
       latePlaybackViolations === 0 &&
-      failedSessions === 0,
+      failedSessions === 0 &&
+      wake.suspendedDetectionViolations === 0 &&
+      wake.suspendedListeningViolations === 0,
     failedSessions,
     gates,
     latePlaybackViolations,
     schemaVersion: 1,
     totalEvents: events.length,
+    wake,
   };
 }
 
@@ -208,6 +217,48 @@ function countLatePlayback(events) {
     }
   }
   return violations;
+}
+
+function wakeSummary(events) {
+  let detectionCount = 0;
+  let listening = false;
+  let suspended = false;
+  let suspendedDetectionViolations = 0;
+  let suspendedListeningViolations = 0;
+  for (const event of events) {
+    switch (event.type) {
+      case "system.resumed":
+        if (listening) {
+          suspendedListeningViolations += 1;
+        }
+        suspended = false;
+        break;
+      case "system.suspended":
+        suspended = true;
+        break;
+      case "wake.detected":
+        detectionCount += 1;
+        if (suspended) {
+          suspendedDetectionViolations += 1;
+        }
+        break;
+      case "wake.listening.started":
+        listening = true;
+        if (suspended) {
+          suspendedListeningViolations += 1;
+        }
+        break;
+      case "wake.listening.stopped":
+        listening = false;
+        break;
+    }
+  }
+  return {
+    detectionCount,
+    listeningAtEnd: listening,
+    suspendedDetectionViolations,
+    suspendedListeningViolations,
+  };
 }
 
 function main() {

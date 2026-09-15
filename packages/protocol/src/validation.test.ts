@@ -100,6 +100,47 @@ describe("protocol validation", () => {
     ).toThrow(ProtocolValidationError);
   });
 
+  it("accepts a normalized pointer location on image context", () => {
+    const capturedAt = new Date("2026-08-24T00:00:00.000Z");
+
+    expect(() =>
+      assertContextEnvelope({
+        authorization: {
+          controlledSensitiveAllowed: false,
+          grantId: randomUUID(),
+          mode: "explicit",
+          purpose: "conversation",
+          retention: "ephemeral",
+        },
+        capturedAt: capturedAt.toISOString(),
+        completeness: 1,
+        confidence: 0.8,
+        eventId: randomUUID(),
+        expiresAt: new Date(capturedAt.getTime() + 300_000).toISOString(),
+        payload: {
+          focusPoint: { x: 0.25, y: 0.75 },
+          image: {
+            data: Buffer.from("image").toString("base64"),
+            height: 100,
+            mediaType: "image/jpeg",
+            sha256: "0".repeat(64),
+            width: 200,
+          },
+          type: "screen.snapshot",
+        },
+        protocolVersion: "1",
+        redactions: [],
+        sensitivity: "personal",
+        sequence: 1,
+        sessionId: randomUUID(),
+        source: {
+          deviceId: randomUUID(),
+          modality: "screen",
+        },
+      }),
+    ).not.toThrow();
+  });
+
   it("accepts every stream event shape", () => {
     const requestId = randomUUID();
 
@@ -124,11 +165,14 @@ describe("protocol validation", () => {
     const sessionId = randomUUID();
     const turnId = randomUUID();
     const responseId = randomUUID();
+    const requestId = randomUUID();
+    const capturedAt = new Date("2026-08-31T00:00:00.000Z");
 
     expect(() =>
       assertRealtimeClientEvent({
         configuration: {
           inputModalities: ["audio", "text"],
+          onDemandContext: true,
           outputModalities: ["audio", "text"],
           protocolVersion: "1",
         },
@@ -193,6 +237,75 @@ describe("protocol validation", () => {
         turnId,
         type: "response.completed",
         usage: { inputTokens: 1, outputTokens: 1 },
+      }),
+    ).not.toThrow();
+    expect(() =>
+      assertRealtimeServerEvent({
+        eventId: randomUUID(),
+        reason: "user_intent",
+        sequence: 4,
+        sessionId,
+        turnId,
+        type: "session.end_requested",
+      }),
+    ).not.toThrow();
+    expect(() =>
+      assertRealtimeServerEvent({
+        eventId: randomUUID(),
+        expiresAt: new Date(capturedAt.getTime() + 10_000).toISOString(),
+        requestId,
+        sequence: 5,
+        sessionId,
+        turnId,
+        type: "context.capture.requested",
+      }),
+    ).not.toThrow();
+    expect(() =>
+      assertRealtimeClientEvent({
+        context: {
+          authorization: {
+            controlledSensitiveAllowed: false,
+            grantId: randomUUID(),
+            mode: "explicit",
+            purpose: "conversation",
+            retention: "ephemeral",
+          },
+          capturedAt: capturedAt.toISOString(),
+          completeness: 1,
+          confidence: 1,
+          eventId: randomUUID(),
+          expiresAt: new Date(capturedAt.getTime() + 300_000).toISOString(),
+          payload: {
+            text: "Selected local text",
+            type: "focus.text",
+          },
+          protocolVersion: "1",
+          redactions: [],
+          sensitivity: "personal",
+          sequence: 1,
+          sessionId: randomUUID(),
+          source: {
+            deviceId: randomUUID(),
+            modality: "accessibility",
+          },
+        },
+        eventId: randomUUID(),
+        requestId,
+        sequence: 2,
+        sessionId,
+        turnId,
+        type: "context.capture.succeeded",
+      }),
+    ).not.toThrow();
+    expect(() =>
+      assertRealtimeClientEvent({
+        eventId: randomUUID(),
+        reason: "blocked",
+        requestId,
+        sequence: 3,
+        sessionId,
+        turnId,
+        type: "context.capture.failed",
       }),
     ).not.toThrow();
   });

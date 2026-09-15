@@ -1,5 +1,6 @@
 import type { ConversationLedger, ModelGateway } from "@violet/domain";
 import type { ChatRequest, ChatStreamEvent } from "@violet/protocol";
+import { recordTestTrace } from "../realtime/test-trace.js";
 
 export interface ChatServiceOptions {
   readonly generateId: () => string;
@@ -112,7 +113,11 @@ export class ChatService {
           },
         };
       }
-    } catch {
+    } catch (error) {
+      recordTestTrace("chat.failed", {
+        requestId: request.requestId,
+        error: error instanceof Error ? error.message : "unknown",
+      });
       yield {
         error: {
           code: "MODEL_GATEWAY_FAILED",

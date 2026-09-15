@@ -67,6 +67,17 @@ struct PresenceView: View {
       .toggleStyle(.switch)
       .controlSize(.small)
       .help(wakeWordHelp)
+
+      Toggle(
+        "Look",
+        isOn: Binding(
+          get: { model.isNaturalPointingEnabled },
+          set: { model.setNaturalPointingEnabled($0) }
+        )
+      )
+      .toggleStyle(.switch)
+      .controlSize(.small)
+      .help("Read the selected text or frontmost window after a voice wake")
     }
     .padding(14)
   }

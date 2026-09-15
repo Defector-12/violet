@@ -12,6 +12,7 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
   private var outsideClickMonitor: Any?
   private var pendingTriggerId: UUID?
   private var wakeConversationPending = false
+  private var wakeStartTask: Task<Void, Never>?
   private let popover = NSPopover()
   private let shortcut: any GlobalShortcutPort
   private let wakeWord: WakeWordCoordinator
@@ -87,7 +88,6 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
       guard let self else {
         return
       }
-      self.showPopover()
       self.popover.behavior = .transient
     }
     model.onAudioSessionStarted = { [weak wakeWord] in
@@ -113,9 +113,9 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
   func stop() {
     isStopping = true
     cancelWakeAcknowledgement()
+    wakeWord.suspend(for: .appTermination)
     shortcut.stop()
     popover.close()
-    wakeWord.suspend()
     if let outsideClickMonitor {
       NSEvent.removeMonitor(outsideClickMonitor)
       self.outsideClickMonitor = nil
@@ -126,6 +126,21 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
       object: nil
     )
     NSStatusBar.system.removeStatusItem(statusItem)
+  }
+
+  @discardableResult
+  func suspendSensitiveActivity(
+    for reason: WakeWordSystemSuspension
+  ) -> Bool {
+    cancelWakeAcknowledgement()
+    return wakeWord.suspend(for: reason)
+  }
+
+  @discardableResult
+  func resumeSensitiveActivity(
+    from reason: WakeWordSystemSuspension
+  ) -> Bool {
+    wakeWord.resume(from: reason)
   }
 
   func popoverDidClose(_ notification: Notification) {
@@ -176,6 +191,11 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
   }
 
   private func toggle(source: RealtimeAcceptanceReason) {
+    if source == .shortcut, !popover.isShown, model.isAudioSessionActive {
+      model.cancelAudioSession(reason: .shortcut)
+      model.clearContext()
+      return
+    }
     if popover.isShown {
       popover.performClose(nil)
       return
@@ -206,8 +226,6 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
   }
 
   private func handleWakeWord() {
-    model.prepareSelectedTextCapture()
-    showPopover()
     wakeConversationPending = true
     acknowledgement?.currentTime = 0
     if acknowledgement?.play() != true {
@@ -217,6 +235,8 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
 
   private func cancelWakeAcknowledgement() {
     wakeConversationPending = false
+    wakeStartTask?.cancel()
+    wakeStartTask = nil
     acknowledgement?.stop()
     acknowledgement?.currentTime = 0
   }
@@ -226,9 +246,19 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
       return
     }
     wakeConversationPending = false
-    model.startAudioSession()
-    if !model.isAudioSessionActive {
-      wakeWord.resume()
+    wakeStartTask?.cancel()
+    wakeStartTask = Task { [weak self] in
+      guard let self else {
+        return
+      }
+      guard !Task.isCancelled else {
+        return
+      }
+      self.model.startAudioSession()
+      if !self.model.isAudioSessionActive {
+        self.wakeWord.resume()
+      }
+      self.wakeStartTask = nil
     }
   }
 }

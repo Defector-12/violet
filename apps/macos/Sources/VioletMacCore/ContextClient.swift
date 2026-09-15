@@ -2,17 +2,26 @@ import CryptoKit
 import Foundation
 
 public enum ContextPayload: Equatable, Sendable {
-  case appState(bundleId: String, appName: String?)
   case image(
     data: Data,
+    focusPoint: NormalizedContextPoint?,
     height: Int,
-    localText: String?,
     mediaType: String,
     region: NormalizedContextRect?,
     sha256: String,
     width: Int
   )
   case text(String)
+}
+
+public struct NormalizedContextPoint: Codable, Equatable, Sendable {
+  public let x: Double
+  public let y: Double
+
+  public init(x: Double, y: Double) {
+    self.x = x
+    self.y = y
+  }
 }
 
 public struct NormalizedContextRect: Codable, Equatable, Sendable {
@@ -132,15 +141,18 @@ public actor URLSessionContextClient: ContextClientPort {
   private let coreURL: URL
   private let deviceToken: String
   private let session: URLSession
+  private let testTrace: TestTraceRecorder?
 
   public init(
     coreURL: URL,
     deviceToken: String,
-    session: URLSession = .shared
+    session: URLSession = .shared,
+    testTrace: TestTraceRecorder? = nil
   ) {
     self.coreURL = coreURL
     self.deviceToken = deviceToken
     self.session = session
+    self.testTrace = testTrace
   }
 
   public func submitContext(
@@ -148,53 +160,58 @@ public actor URLSessionContextClient: ContextClientPort {
     deviceId: UUID,
     sessionId: UUID
   ) async throws -> ContextReceipt {
-    let capturedAt = Date()
-    let envelope = ContextEnvelopeWire(
-      authorization: .init(
-        controlledSensitiveAllowed: false,
-        grantId: UUID(),
-        mode: "explicit",
-        purpose: "conversation",
-        retention: "ephemeral"
-      ),
-      capturedAt: iso8601String(capturedAt),
-      completeness: context.completeness,
-      confidence: context.confidence,
-      eventId: UUID(),
-      expiresAt: iso8601String(capturedAt.addingTimeInterval(300)),
-      payload: .init(context.payload),
-      protocolVersion: "1",
-      redactions: context.redactions,
-      sensitivity: context.sensitivity,
-      sequence: 1,
-      sessionId: sessionId.uuidString.lowercased(),
-      source: .init(
-        appBundleId: context.appBundleId,
-        deviceId: deviceId,
-        modality: context.payload.modality
-      )
+    try await testTrace?.prepareCore(coreURL: coreURL, deviceToken: deviceToken)
+    let envelope = makeContextEnvelope(
+      context,
+      deviceId: deviceId,
+      sessionId: sessionId
     )
     var request = URLRequest(url: contextURL(path: "/v1/context/envelopes"))
     request.httpMethod = "POST"
     request.setValue("Bearer \(deviceToken)", forHTTPHeaderField: "Authorization")
     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    if let testTrace {
+      request.setValue(testTrace.runId, forHTTPHeaderField: "X-Violet-Test-Run")
+      request.setValue(testTrace.activeUntil, forHTTPHeaderField: "X-Violet-Test-Until")
+    }
     request.httpBody = try JSONEncoder().encode(envelope)
+    if let testTrace, let body = request.httpBody {
+      let object = try JSONSerialization.jsonObject(with: body)
+      let traced = try JSONSerialization.data(withJSONObject: [
+        "type": "context.capture.succeeded", "requestId": sessionId.uuidString,
+        "turnId": sessionId.uuidString, "context": object,
+      ])
+      try testTrace.wire("http.context.send", data: traced)
+    }
 
     let (data, response) = try await session.data(for: request)
     guard let http = response as? HTTPURLResponse else {
       throw VioletCoreClientError.invalidResponse
     }
     guard http.statusCode == 200 else {
+      try? testTrace?.record("http.context.failed", fields: ["status": http.statusCode, "requestId": sessionId.uuidString])
+      try? await testTrace?.collectCore(coreURL: coreURL, deviceToken: deviceToken)
       throw VioletCoreClientError.requestFailed(code: http.statusCode)
     }
-    let receipt = try JSONDecoder().decode(ContextReceiptWire.self, from: data)
-    guard
-      let id = UUID(uuidString: receipt.sessionId),
-      let expiresAt = parseISO8601(receipt.expiresAt)
-    else {
-      throw VioletCoreClientError.invalidResponse
+    do {
+      let receipt = try JSONDecoder().decode(ContextReceiptWire.self, from: data)
+      guard
+        let id = UUID(uuidString: receipt.sessionId),
+        id == sessionId,
+        let expiresAt = parseISO8601(receipt.expiresAt)
+      else {
+        throw VioletCoreClientError.invalidResponse
+      }
+      try await testTrace?.collectCore(coreURL: coreURL, deviceToken: deviceToken)
+      try testTrace?.record("http.context.received", fields: [
+        "sessionId": receipt.sessionId,
+        "expiresAt": receipt.expiresAt,
+      ])
+      return ContextReceipt(expiresAt: expiresAt, sessionId: id)
+    } catch {
+      await deleteContext(sessionId: sessionId)
+      throw error
     }
-    return ContextReceipt(expiresAt: expiresAt, sessionId: id)
   }
 
   public func deleteContext(sessionId: UUID) async {
@@ -215,7 +232,7 @@ public actor URLSessionContextClient: ContextClientPort {
   }
 }
 
-private struct ContextEnvelopeWire: Encodable {
+struct ContextEnvelopeWire: Encodable {
   struct Authorization: Encodable {
     let controlledSensitiveAllowed: Bool
     let grantId: UUID
@@ -245,12 +262,11 @@ private struct ContextEnvelopeWire: Encodable {
   let source: Source
 }
 
-private enum ContextPayloadWire: Encodable {
-  case appState(bundleId: String, appName: String?)
+enum ContextPayloadWire: Encodable {
   case image(
     data: Data,
+    focusPoint: NormalizedContextPoint?,
     height: Int,
-    localText: String?,
     mediaType: String,
     region: NormalizedContextRect?,
     sha256: String,
@@ -260,14 +276,18 @@ private enum ContextPayloadWire: Encodable {
 
   init(_ payload: ContextPayload) {
     switch payload {
-    case .appState(let bundleId, let appName):
-      self = .appState(bundleId: bundleId, appName: appName)
     case .image(
-      let data, let height, let localText, let mediaType, let region, let sha256, let width):
+      let data,
+      let focusPoint,
+      let height,
+      let mediaType,
+      let region,
+      let sha256,
+      let width):
       self = .image(
         data: data,
+        focusPoint: focusPoint,
         height: height,
-        localText: localText,
         mediaType: mediaType,
         region: region,
         sha256: sha256,
@@ -281,12 +301,15 @@ private enum ContextPayloadWire: Encodable {
   func encode(to encoder: Encoder) throws {
     var container = encoder.container(keyedBy: CodingKeys.self)
     switch self {
-    case .appState(let bundleId, let appName):
-      try container.encode(bundleId, forKey: .appBundleId)
-      try container.encodeIfPresent(appName, forKey: .appName)
-      try container.encode("app.state", forKey: .type)
     case .image(
-      let data, let height, let localText, let mediaType, let region, let sha256, let width):
+      let data,
+      let focusPoint,
+      let height,
+      let mediaType,
+      let region,
+      let sha256,
+      let width):
+      try container.encodeIfPresent(focusPoint, forKey: .focusPoint)
       try container.encode(
         ImageWire(
           data: data.base64EncodedString(),
@@ -297,7 +320,6 @@ private enum ContextPayloadWire: Encodable {
         ),
         forKey: .image
       )
-      try container.encodeIfPresent(localText, forKey: .localText)
       if let region {
         try container.encode(region, forKey: .region)
         try container.encode("focus.region", forKey: .type)
@@ -311,17 +333,15 @@ private enum ContextPayloadWire: Encodable {
   }
 
   private enum CodingKeys: String, CodingKey {
-    case appBundleId
-    case appName
+    case focusPoint
     case image
-    case localText
     case region
     case text
     case type
   }
 }
 
-private struct ImageWire: Encodable {
+struct ImageWire: Encodable {
   let data: String
   let height: Int
   let mediaType: String
@@ -337,12 +357,45 @@ private struct ContextReceiptWire: Decodable {
 extension ContextPayload {
   fileprivate var modality: String {
     switch self {
-    case .appState, .text:
+    case .text:
       "accessibility"
     case .image:
       "screen"
     }
   }
+}
+
+func makeContextEnvelope(
+  _ context: FilteredContext,
+  deviceId: UUID,
+  sessionId: UUID,
+  capturedAt: Date = Date()
+) -> ContextEnvelopeWire {
+  ContextEnvelopeWire(
+    authorization: .init(
+      controlledSensitiveAllowed: false,
+      grantId: UUID(),
+      mode: "explicit",
+      purpose: "conversation",
+      retention: "ephemeral"
+    ),
+    capturedAt: iso8601String(capturedAt),
+    completeness: context.completeness,
+    confidence: context.confidence,
+    eventId: UUID(),
+    expiresAt: iso8601String(capturedAt.addingTimeInterval(300)),
+    payload: .init(context.payload),
+    protocolVersion: "1",
+    redactions: context.redactions,
+    sensitivity: context.sensitivity,
+    sequence: 1,
+    sessionId: sessionId.uuidString.lowercased(),
+    source: .init(
+      appBundleId: context.appBundleId,
+      deviceId: deviceId,
+      modality: context.payload.modality
+    )
+  )
 }
 
 private func iso8601String(_ date: Date) -> String {
@@ -351,7 +404,7 @@ private func iso8601String(_ date: Date) -> String {
   return formatter.string(from: date)
 }
 
-private func parseISO8601(_ value: String) -> Date? {
+func parseISO8601(_ value: String) -> Date? {
   let fractional = ISO8601DateFormatter()
   fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
   return fractional.date(from: value) ?? ISO8601DateFormatter().date(from: value)

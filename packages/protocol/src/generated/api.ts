@@ -147,7 +147,10 @@ export interface components {
         probability: number;
         /** Format: uuid */
         uuid: string;
-        bundleId: string;
+        normalizedPoint: {
+            x: components["schemas"]["probability"];
+            y: components["schemas"]["probability"];
+        };
         image: {
             data: string;
             height: number;
@@ -162,6 +165,7 @@ export interface components {
             x: components["schemas"]["probability"];
             y: components["schemas"]["probability"];
         };
+        bundleId: string;
         /** ContextEnvelope */
         "context-envelope.schema": {
             authorization: {
@@ -186,25 +190,16 @@ export interface components {
                 /** @constant */
                 type: "focus.text";
             } | {
-                appBundleId: components["schemas"]["bundleId"];
-                appName?: string;
-                /** @constant */
-                type: "app.state";
-            } | {
+                focusPoint?: components["schemas"]["normalizedPoint"];
                 image: components["schemas"]["image"];
-                localText?: string;
                 /** @constant */
                 type: "screen.snapshot";
             } | {
+                focusPoint?: components["schemas"]["normalizedPoint"];
                 image: components["schemas"]["image"];
-                localText?: string;
                 region: components["schemas"]["normalizedRect"];
                 /** @constant */
                 type: "focus.region";
-            } | {
-                transcript: string;
-                /** @constant */
-                type: "audio.utterance";
             };
             previousEventId?: components["schemas"]["uuid"];
             /** @constant */
@@ -237,6 +232,10 @@ export interface components {
                 normalizedRect: {
                     height: components["schemas"]["probability"];
                     width: components["schemas"]["probability"];
+                    x: components["schemas"]["probability"];
+                    y: components["schemas"]["probability"];
+                };
+                normalizedPoint: {
                     x: components["schemas"]["probability"];
                     y: components["schemas"]["probability"];
                 };
@@ -336,6 +335,7 @@ export interface components {
                 inputAudio?: components["schemas"]["audioFormat"];
                 inputModalities: components["schemas"]["modalities"];
                 language?: string;
+                onDemandContext?: boolean;
                 outputAudio?: components["schemas"]["audioFormat"];
                 outputModalities: components["schemas"]["modalities"];
                 /** @constant */
@@ -379,6 +379,25 @@ export interface components {
             sessionId: components["schemas"]["uuid"];
             /** @constant */
             type: "response.cancel";
+        } | {
+            context: components["schemas"]["context-envelope.schema"];
+            eventId: components["schemas"]["uuid"];
+            requestId: components["schemas"]["uuid"];
+            sequence: components["schemas"]["sequence"];
+            sessionId: components["schemas"]["uuid"];
+            turnId: components["schemas"]["uuid"];
+            /** @constant */
+            type: "context.capture.succeeded";
+        } | {
+            eventId: components["schemas"]["uuid"];
+            /** @enum {string} */
+            reason: "blocked" | "cancelled" | "permission_denied" | "unavailable";
+            requestId: components["schemas"]["uuid"];
+            sequence: components["schemas"]["sequence"];
+            sessionId: components["schemas"]["uuid"];
+            turnId: components["schemas"]["uuid"];
+            /** @constant */
+            type: "context.capture.failed";
         } | {
             eventId: components["schemas"]["uuid"];
             sequence: components["schemas"]["sequence"];
@@ -495,6 +514,25 @@ export interface components {
             sessionId: components["schemas"]["uuid"];
             /** @constant */
             type: "response.cancelled";
+        } | {
+            eventId: components["schemas"]["uuid"];
+            /** @constant */
+            reason: "user_intent";
+            sequence: components["schemas"]["sequence"];
+            sessionId: components["schemas"]["uuid"];
+            turnId: components["schemas"]["uuid"];
+            /** @constant */
+            type: "session.end_requested";
+        } | {
+            eventId: components["schemas"]["uuid"];
+            /** Format: date-time */
+            expiresAt: string;
+            requestId: components["schemas"]["uuid"];
+            sequence: components["schemas"]["sequence"];
+            sessionId: components["schemas"]["uuid"];
+            turnId: components["schemas"]["uuid"];
+            /** @constant */
+            type: "context.capture.requested";
         } | {
             code: string;
             eventId: components["schemas"]["uuid"];

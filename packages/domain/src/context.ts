@@ -4,24 +4,15 @@ export type ContextPayload =
       readonly type: "focus.text";
     }
   | {
-      readonly appBundleId: string;
-      readonly appName?: string;
-      readonly type: "app.state";
-    }
-  | {
+      readonly focusPoint?: NormalizedPoint;
       readonly image: ContextImage;
-      readonly localText?: string;
       readonly type: "screen.snapshot";
     }
   | {
+      readonly focusPoint?: NormalizedPoint;
       readonly image: ContextImage;
-      readonly localText?: string;
       readonly region: NormalizedRect;
       readonly type: "focus.region";
-    }
-  | {
-      readonly transcript: string;
-      readonly type: "audio.utterance";
     };
 
 export interface ContextImage {
@@ -39,13 +30,19 @@ export interface NormalizedRect {
   readonly y: number;
 }
 
+export interface NormalizedPoint {
+  readonly x: number;
+  readonly y: number;
+}
+
 export interface ContextUnderstandingRequest {
-  readonly localText?: string;
   readonly payload: ContextPayload;
+  readonly question?: string;
   readonly requestId: string;
 }
 
 export interface ContextUnderstandingResult {
+  readonly answer?: string;
   readonly confidence: number;
   readonly model: string;
   readonly provider: string;
@@ -60,6 +57,8 @@ export interface ContextUnderstandingPort {
 }
 
 export interface ResolvedContext {
+  readonly answer?: string;
+  readonly confidence?: number;
   readonly eventId: string;
   readonly expiresAt: Date;
   readonly sessionId: string;

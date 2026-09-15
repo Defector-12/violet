@@ -1,71 +1,119 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import { parseEnv } from "node:util";
 
-const target = process.argv[2];
-if (!target) {
-  throw new Error("Usage: pnpm env:inject-devbox <user@host> [--include-tos]");
+const args = process.argv.slice(2);
+const target = args.find((argument) => !argument.startsWith("--"));
+const flags = args.filter((argument) => argument.startsWith("--"));
+const includeTos = flags.includes("--include-tos");
+const qwenOnly = flags.includes("--qwen-only");
+if (
+  !target ||
+  args.filter((argument) => !argument.startsWith("--")).length !== 1 ||
+  flags.some((argument) => argument !== "--include-tos" && argument !== "--qwen-only") ||
+  (includeTos && qwenOnly)
+) {
+  throw new Error(
+    "Usage: pnpm env:inject-devbox <user@host> [--include-tos] | pnpm env:inject-devbox-qwen <user@host>",
+  );
 }
-const includeTos = process.argv.slice(3).includes("--include-tos");
-if (process.argv.slice(3).some((argument) => argument !== "--include-tos")) {
-  throw new Error("Unknown argument");
+if (qwenOnly && !process.stdin.isTTY) {
+  throw new Error("Qwen API key injection requires an interactive terminal");
 }
-const dataDirectory = process.env.VIOLET_DEVBOX_DATA_DIR ?? "/data00/violet";
-if (!/^\/[A-Za-z0-9._/-]+$/.test(dataDirectory) || dataDirectory.split("/").includes("..")) {
-  throw new Error("VIOLET_DEVBOX_DATA_DIR must be an absolute path without parent traversal");
-}
-
-const env = parseEnv(await readFile(".env", "utf8"));
-const databasePassword = required(env, "VIOLET_DATABASE_PASSWORD");
-const configuration = {
-  device_token_expires_at: required(env, "VIOLET_DEVICE_TOKEN_EXPIRES_AT"),
-  device_token_sha256: createHash("sha256")
-    .update(required(env, "VIOLET_DEVICE_TOKEN"), "utf8")
-    .digest("hex"),
-};
-const secrets = {
-  backup_public_key: required(env, "VIOLET_BACKUP_PUBLIC_KEY"),
-  content_key: required(env, "VIOLET_CONTENT_KEY"),
-  database_url: `postgresql://violet:${encodeURIComponent(databasePassword)}@postgres:5432/violet`,
-  deepseek_api_key: required(env, "DEEPSEEK_API_KEY"),
-  grafana_admin_password: required(env, "VIOLET_GRAFANA_ADMIN_PASSWORD"),
-  postgres_password: databasePassword,
-  ...(includeTos
-    ? {
-        tos_access_key_id: required(env, "TOS_ACCESS_KEY_ID"),
-        tos_secret_access_key: required(env, "TOS_SECRET_ACCESS_KEY"),
-      }
-    : {}),
-};
-
-await ensureRemoteUserLinger(target);
-await prepareRemoteDirectory(target, `${dataDirectory}/config`, "755", false);
-await prepareRemoteDirectory(target, "/dev/shm/violet", "700", true);
-for (const [name, value] of Object.entries(configuration)) {
-  await writeRemoteFile(target, `${dataDirectory}/config`, "755", name, value);
-}
-for (const [name, value] of Object.entries(secrets)) {
-  await writeRemoteFile(target, "/dev/shm/violet", "700", name, value);
-}
-
-process.stdout.write(
-  `Injected ${Object.keys(configuration).join(", ")} into persistent non-secret configuration and ${Object.keys(secrets).join(", ")} into the Devbox memory filesystem.\n`,
-);
-
-function parseEnv(content) {
-  const values = {};
-  for (const rawLine of content.split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (!line || line.startsWith("#")) {
-      continue;
-    }
-    const separator = line.indexOf("=");
-    if (separator < 1) {
-      continue;
-    }
-    values[line.slice(0, separator)] = line.slice(separator + 1);
+if (qwenOnly) {
+  const apiKey = await readHidden("Qwen realtime API key: ");
+  if (apiKey.length < 16 || /\s/.test(apiKey)) {
+    throw new Error("Qwen API key is empty or malformed");
   }
-  return values;
+  await ensureRemoteUserLinger(target);
+  await prepareRemoteDirectory(target, "/dev/shm/violet", "700", false);
+  await writeRemoteFile(target, "/dev/shm/violet", "700", "qwen_realtime_api_key", apiKey);
+  process.stdout.write(
+    "Injected qwen_realtime_api_key into the Devbox memory filesystem. Restart or recreate a running Core container before validation so it loads the new key.\n",
+  );
+} else {
+  const dataDirectory = process.env.VIOLET_DEVBOX_DATA_DIR ?? "/data00/violet";
+  if (!/^\/[A-Za-z0-9._/-]+$/.test(dataDirectory) || dataDirectory.split("/").includes("..")) {
+    throw new Error("VIOLET_DEVBOX_DATA_DIR must be an absolute path without parent traversal");
+  }
+
+  const env = parseEnv(await readFile(".env", "utf8"));
+  const databasePassword = required(env, "VIOLET_DATABASE_PASSWORD");
+  const configuration = {
+    device_token_expires_at: required(env, "VIOLET_DEVICE_TOKEN_EXPIRES_AT"),
+    device_token_sha256: createHash("sha256")
+      .update(required(env, "VIOLET_DEVICE_TOKEN"), "utf8")
+      .digest("hex"),
+  };
+  const secrets = {
+    backup_public_key: required(env, "VIOLET_BACKUP_PUBLIC_KEY"),
+    content_key: required(env, "VIOLET_CONTENT_KEY"),
+    database_url: `postgresql://violet:${encodeURIComponent(databasePassword)}@postgres:5432/violet`,
+    deepseek_api_key: required(env, "DEEPSEEK_API_KEY"),
+    grafana_admin_password: required(env, "VIOLET_GRAFANA_ADMIN_PASSWORD"),
+    postgres_password: databasePassword,
+    ...(includeTos
+      ? {
+          tos_access_key_id: required(env, "TOS_ACCESS_KEY_ID"),
+          tos_secret_access_key: required(env, "TOS_SECRET_ACCESS_KEY"),
+        }
+      : {}),
+  };
+
+  await ensureRemoteUserLinger(target);
+  await prepareRemoteDirectory(target, `${dataDirectory}/config`, "755", false);
+  await prepareRemoteDirectory(target, "/dev/shm/violet", "700", true);
+  for (const [name, value] of Object.entries(configuration)) {
+    await writeRemoteFile(target, `${dataDirectory}/config`, "755", name, value);
+  }
+  for (const [name, value] of Object.entries(secrets)) {
+    await writeRemoteFile(target, "/dev/shm/violet", "700", name, value);
+  }
+
+  process.stdout.write(
+    `Injected ${Object.keys(configuration).join(", ")} into persistent non-secret configuration and ${Object.keys(secrets).join(", ")} into the Devbox memory filesystem.\n`,
+  );
+}
+
+async function readHidden(prompt) {
+  process.stdout.write(prompt);
+  process.stdin.setRawMode(true);
+  process.stdin.resume();
+  process.stdin.setEncoding("utf8");
+
+  try {
+    return await new Promise((resolve, reject) => {
+      let value = "";
+      const onData = (chunk) => {
+        for (const character of chunk) {
+          if (character === "\u0003") {
+            cleanup();
+            reject(new Error("Qwen API key injection cancelled"));
+            return;
+          }
+          if (character === "\r" || character === "\n") {
+            cleanup();
+            process.stdout.write("\n");
+            resolve(value.trim());
+            return;
+          }
+          if (character === "\u007f" || character === "\b") {
+            value = value.slice(0, -1);
+          } else {
+            value += character;
+          }
+        }
+      };
+      const cleanup = () => {
+        process.stdin.off("data", onData);
+      };
+      process.stdin.on("data", onData);
+    });
+  } finally {
+    process.stdin.setRawMode(false);
+    process.stdin.pause();
+  }
 }
 
 function required(values, name) {

@@ -70,6 +70,195 @@ describe("QwenAudioRealtimeConversationPort", () => {
     });
   });
 
+  it("registers and completes the read-only context tool when context is available", async () => {
+    const transport = new FakeTransport([
+      { type: "session.created" },
+      { type: "session.updated" },
+      {
+        response: { id: "resp-context", status: "in_progress" },
+        type: "response.created",
+      },
+      {
+        arguments: '{"question":"What is this chart?"}',
+        call_id: "call-context",
+        name: "inspect_current_view",
+        response_id: "resp-context",
+        type: "response.function_call_arguments.done",
+      },
+      {
+        response: { id: "resp-context", status: "completed" },
+        type: "response.done",
+      },
+      {
+        response: { id: "resp-answer", status: "in_progress" },
+        type: "response.created",
+      },
+      {
+        delta: "The chart rises.",
+        response_id: "resp-answer",
+        type: "response.audio_transcript.delta",
+      },
+      {
+        response: {
+          id: "resp-answer",
+          status: "completed",
+          usage: { input_tokens: 8, output_tokens: 4 },
+        },
+        type: "response.done",
+      },
+    ]);
+    let id = 0;
+    const port = new QwenAudioRealtimeConversationPort({
+      apiKey: "test-qwen-api-key",
+      createTransport: () => transport,
+      generateId: () => `id-${++id}`,
+      model: "qwen-audio-3.0-realtime-plus",
+      voice: "longanqian",
+      workspaceId: "ws-jvh4fvlcktrjvtbj",
+    });
+    const conversation = await port.open({
+      ...configuration(),
+      contextEvidence: "Local OCR is ready.",
+      contextLookupAvailable: true,
+    });
+
+    const outputs = conversation.outputs()[Symbol.asyncIterator]();
+    const started = await outputs.next();
+    const contextRequest = await outputs.next();
+    await conversation.send({
+      callId: "call-context",
+      output: '{"status":"ready","evidence":"The chart rises."}',
+      type: "context-result",
+    });
+    expect(transport.sent.at(-1)).toEqual({
+      item: {
+        call_id: "call-context",
+        output: '{"status":"ready","evidence":"The chart rises."}',
+        type: "function_call_output",
+      },
+      type: "conversation.item.create",
+    });
+    expect(transport.sent).not.toContainEqual({ type: "response.create" });
+    const answered = [await outputs.next(), await outputs.next(), await outputs.next()].map(
+      (result) => result.value,
+    );
+
+    expect(transport.sent[0]).toMatchObject({
+      session: {
+        tools: [
+          {
+            function: {
+              name: "inspect_current_view",
+            },
+            type: "function",
+          },
+        ],
+      },
+      type: "session.update",
+    });
+    expect(JSON.stringify(transport.sent[0])).toContain(
+      "you must call inspect_current_view before answering",
+    );
+    expect(JSON.stringify(transport.sent[0])).toContain(
+      "final answer grounded in a fresh screenshot",
+    );
+    expect(JSON.stringify(transport.sent[0])).toContain(
+      "do not infer the target from conversation history",
+    );
+    expect(JSON.stringify(transport.sent[0])).toContain(
+      "call inspect_current_view once in that turn, even when the same question was answered earlier",
+    );
+    expect(JSON.stringify(transport.sent[0])).toContain(
+      "when the user explicitly asks to recall, explain, or discuss that earlier answer",
+    );
+    expect(JSON.stringify(transport.sent[0])).toContain(
+      "Do not inspect for general knowledge, creative writing, translation, calculations, or questions fully answered by text the user already supplied",
+    );
+    expect(JSON.stringify(transport.sent[0])).not.toContain(
+      "When those details are missing from the conversation",
+    );
+    expect(started.value).toMatchObject({ type: "response-started" });
+    expect(contextRequest.value).toEqual({
+      callId: "call-context",
+      query: "What is this chart?",
+      responseId: "id-1",
+      turnId: "id-2",
+      type: "context-request",
+    });
+    expect(answered.map((event) => event?.type)).toEqual([
+      "response-started",
+      "response-text",
+      "response-completed",
+    ]);
+    expect(transport.sent.slice(-2)).toEqual([
+      {
+        item: {
+          call_id: "call-context",
+          output: '{"status":"ready","evidence":"The chart rises."}',
+          type: "function_call_output",
+        },
+        type: "conversation.item.create",
+      },
+      { type: "response.create" },
+    ]);
+  });
+
+  it("drops a context result after a new speech turn cancels the tool response", async () => {
+    const transport = new FakeTransport([
+      { type: "session.created" },
+      { type: "session.updated" },
+      {
+        response: { id: "resp-context", status: "in_progress" },
+        type: "response.created",
+      },
+      {
+        arguments: '{"question":"What is this?"}',
+        call_id: "call-context",
+        name: "inspect_current_view",
+        response_id: "resp-context",
+        type: "response.function_call_arguments.done",
+      },
+      { type: "input_audio_buffer.speech_started" },
+    ]);
+    let id = 0;
+    const port = new QwenAudioRealtimeConversationPort({
+      apiKey: "test-qwen-api-key",
+      createTransport: () => transport,
+      generateId: () => `id-${++id}`,
+      model: "qwen-audio-3.0-realtime-plus",
+      voice: "longanqian",
+      workspaceId: "ws-jvh4fvlcktrjvtbj",
+    });
+    const conversation = await port.open({
+      ...configuration(),
+      contextEvidence: "Local context",
+      contextLookupAvailable: true,
+      turnDetection: "smart_turn",
+    });
+    const outputs = await take(conversation.outputs(), 3);
+
+    await conversation.send({
+      callId: "call-context",
+      output: '{"status":"ready","evidence":"Late context"}',
+      type: "context-result",
+    });
+
+    expect(outputs.map((event) => event.type)).toEqual([
+      "response-started",
+      "context-request",
+      "speech-started",
+    ]);
+    expect(transport.sent).toContainEqual({ type: "response.cancel" });
+    expect(transport.sent).not.toContainEqual({
+      item: {
+        call_id: "call-context",
+        output: '{"status":"ready","evidence":"Late context"}',
+        type: "function_call_output",
+      },
+      type: "conversation.item.create",
+    });
+  });
+
   it("maps a push-to-talk audio turn into provider-neutral output", async () => {
     const transport = new FakeTransport([
       { type: "session.created" },
@@ -177,7 +366,7 @@ describe("QwenAudioRealtimeConversationPort", () => {
     ]);
   });
 
-  it("keeps a smart-turn session open, seeds history, and cancels on barge-in", async () => {
+  it("keeps a smart-turn session open and quarantines late tools on barge-in", async () => {
     const transport = new FakeTransport([
       { type: "session.created" },
       { type: "session.updated" },
@@ -202,6 +391,13 @@ describe("QwenAudioRealtimeConversationPort", () => {
         type: "response.audio.delta",
       },
       { type: "input_audio_buffer.speech_started" },
+      {
+        arguments: '{"question":"Stale view"}',
+        call_id: "late-call",
+        name: "inspect_current_view",
+        response_id: "resp-qwen-1",
+        type: "response.function_call_arguments.done",
+      },
       {
         response: { id: "resp-qwen-1", status: "cancelled" },
         type: "response.done",
@@ -275,6 +471,85 @@ describe("QwenAudioRealtimeConversationPort", () => {
     expect(output[2]).toMatchObject({ text: "First turn", turnId: "id-1" });
     expect(output[3]).toMatchObject({ responseId: "id-2", turnId: "id-1" });
     expect(output[6]).toMatchObject({ turnId: "id-3" });
+    expect(output.some((event) => event.type === "context-request")).toBe(false);
+    expect(transport.sent).toContainEqual({ type: "response.cancel" });
+  });
+
+  it("binds delayed provider responses to the turn that requested them", async () => {
+    const transport = new FakeTransport([
+      { type: "session.created" },
+      { type: "session.updated" },
+      {
+        response: { id: "resp-qwen-1", status: "in_progress" },
+        type: "response.created",
+      },
+      {
+        response: { id: "resp-qwen-2", status: "in_progress" },
+        type: "response.created",
+      },
+    ]);
+    const generatedIds = ["local-response-1", "local-response-2"];
+    const port = new QwenAudioRealtimeConversationPort({
+      apiKey: "test-qwen-api-key",
+      createTransport: () => transport,
+      generateId: () => generatedIds.shift() ?? "unexpected-id",
+      model: "qwen-audio-3.0-realtime-plus",
+      voice: "longanqian",
+      workspaceId: "ws-jvh4fvlcktrjvtbj",
+    });
+    const conversation = await port.open(configuration());
+
+    await conversation.send({ text: "First", turnId: "turn-1", type: "text" });
+    await conversation.send({ text: "Second", turnId: "turn-2", type: "text" });
+
+    expect(await take(conversation.outputs(), 2)).toEqual([
+      {
+        responseId: "local-response-1",
+        turnId: "turn-1",
+        type: "response-started",
+      },
+      {
+        responseId: "local-response-2",
+        turnId: "turn-2",
+        type: "response-started",
+      },
+    ]);
+  });
+
+  it("treats a no-active-response race after automatic barge-in as cancelled", async () => {
+    const transport = new FakeTransport([
+      { type: "session.created" },
+      { type: "session.updated" },
+      {
+        response: { id: "resp-qwen-1", status: "in_progress" },
+        type: "response.created",
+      },
+      { type: "input_audio_buffer.speech_started" },
+      {
+        error: {
+          code: "invalid_request_error",
+          message: "Conversation has no active response.",
+          type: "invalid_request_error",
+        },
+        type: "error",
+      },
+    ]);
+    const generatedIds = ["local-response-1", "turn-1", "turn-2"];
+    const port = new QwenAudioRealtimeConversationPort({
+      apiKey: "test-qwen-api-key",
+      createTransport: () => transport,
+      generateId: () => generatedIds.shift() ?? "unexpected-id",
+      model: "qwen-audio-3.0-realtime-plus",
+      voice: "longanqian",
+      workspaceId: "ws-jvh4fvlcktrjvtbj",
+    });
+    const conversation = await port.open(configuration());
+
+    expect((await take(conversation.outputs(), 3)).map((event) => event.type)).toEqual([
+      "response-started",
+      "speech-started",
+      "response-cancelled",
+    ]);
     expect(transport.sent).toContainEqual({ type: "response.cancel" });
   });
 
@@ -312,6 +587,182 @@ describe("QwenAudioRealtimeConversationPort", () => {
 
     expect(output.map((event) => event.type)).toEqual(["response-started", "response-completed"]);
     expect(transport.sent).not.toContainEqual({ type: "response.cancel" });
+  });
+
+  it("cancels an active response after a UUID case round trip", async () => {
+    const transport = new FakeTransport([
+      { type: "session.created" },
+      { type: "session.updated" },
+      {
+        response: { id: "resp-qwen-1", status: "in_progress" },
+        type: "response.created",
+      },
+    ]);
+    const responseId = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+    const port = new QwenAudioRealtimeConversationPort({
+      apiKey: "test-qwen-api-key",
+      createTransport: () => transport,
+      generateId: () => responseId,
+      model: "qwen-audio-3.0-realtime-plus",
+      voice: "longanqian",
+      workspaceId: "ws-jvh4fvlcktrjvtbj",
+    });
+    const conversation = await port.open(configuration());
+    const outputs = conversation.outputs()[Symbol.asyncIterator]();
+
+    expect((await outputs.next()).value).toMatchObject({ responseId, type: "response-started" });
+    await conversation.send({ responseId: responseId.toUpperCase(), type: "cancel" });
+
+    expect(transport.sent).toContainEqual({ type: "response.cancel" });
+  });
+
+  it("treats a provider no-active-response error after cancellation as cancelled", async () => {
+    const transport = new FakeTransport([
+      { type: "session.created" },
+      { type: "session.updated" },
+      {
+        response: { id: "resp-qwen-1", status: "in_progress" },
+        type: "response.created",
+      },
+      {
+        delta: Buffer.from([1, 2]).toString("base64"),
+        response_id: "resp-qwen-1",
+        type: "response.audio.delta",
+      },
+      {
+        error: {
+          code: "invalid_request_error",
+          message: "Conversation has no active response.",
+          type: "invalid_request_error",
+        },
+        type: "error",
+      },
+      {
+        response: { id: "resp-qwen-1", status: "completed" },
+        type: "response.done",
+      },
+      {
+        response: { id: "resp-qwen-2", status: "in_progress" },
+        type: "response.created",
+      },
+    ]);
+    const generatedIds = ["local-response-1", "turn-1", "local-response-2"];
+    const port = new QwenAudioRealtimeConversationPort({
+      apiKey: "test-qwen-api-key",
+      createTransport: () => transport,
+      generateId: () => generatedIds.shift() ?? "unexpected-id",
+      model: "qwen-audio-3.0-realtime-plus",
+      voice: "longanqian",
+      workspaceId: "ws-jvh4fvlcktrjvtbj",
+    });
+    const conversation = await port.open(configuration());
+    const outputs = conversation.outputs()[Symbol.asyncIterator]();
+
+    const started = await outputs.next();
+    const audio = await outputs.next();
+    await conversation.send({
+      responseId: "local-response-1",
+      type: "cancel",
+    });
+    const cancelled = await outputs.next();
+    const nextResponse = await outputs.next();
+
+    expect(started.value).toMatchObject({ type: "response-started" });
+    expect(audio.value).toMatchObject({ type: "response-audio" });
+    expect(cancelled.value).toEqual({
+      responseId: "local-response-1",
+      type: "response-cancelled",
+    });
+    expect(nextResponse.value).toEqual({
+      responseId: "local-response-2",
+      turnId: "turn-1",
+      type: "response-started",
+    });
+    expect(transport.sent).toContainEqual({ type: "response.cancel" });
+  });
+
+  it("ignores a visual tool call that arrives after response cancellation", async () => {
+    const transport = new FakeTransport([
+      { type: "session.created" },
+      { type: "session.updated" },
+      {
+        response: { id: "resp-qwen-1", status: "in_progress" },
+        type: "response.created",
+      },
+      {
+        arguments: '{"question":"Stale view"}',
+        call_id: "late-call",
+        name: "inspect_current_view",
+        response_id: "resp-qwen-1",
+        type: "response.function_call_arguments.done",
+      },
+      {
+        response: { id: "resp-qwen-1", status: "cancelled" },
+        type: "response.done",
+      },
+    ]);
+    const port = new QwenAudioRealtimeConversationPort({
+      apiKey: "test-qwen-api-key",
+      createTransport: () => transport,
+      generateId: () => "local-response-1",
+      model: "qwen-audio-3.0-realtime-plus",
+      voice: "longanqian",
+      workspaceId: "ws-jvh4fvlcktrjvtbj",
+    });
+    const conversation = await port.open(configuration());
+    const outputs = conversation.outputs()[Symbol.asyncIterator]();
+
+    expect((await outputs.next()).value).toMatchObject({ type: "response-started" });
+    await conversation.send({ responseId: "local-response-1", type: "cancel" });
+    expect((await outputs.next()).value).toEqual({
+      responseId: "local-response-1",
+      type: "response-cancelled",
+    });
+    expect(transport.sent).toContainEqual({ type: "response.cancel" });
+  });
+
+  it("keeps unrelated provider errors visible after cancellation", async () => {
+    const transport = new FakeTransport([
+      { type: "session.created" },
+      { type: "session.updated" },
+      {
+        response: { id: "resp-qwen-1", status: "in_progress" },
+        type: "response.created",
+      },
+      {
+        error: {
+          code: "quota_exceeded",
+          message: "Realtime quota exceeded.",
+          type: "invalid_request_error",
+        },
+        type: "error",
+      },
+    ]);
+    const generatedIds = ["local-response-1", "turn-1"];
+    const port = new QwenAudioRealtimeConversationPort({
+      apiKey: "test-qwen-api-key",
+      createTransport: () => transport,
+      generateId: () => generatedIds.shift() ?? "unexpected-id",
+      model: "qwen-audio-3.0-realtime-plus",
+      voice: "longanqian",
+      workspaceId: "ws-jvh4fvlcktrjvtbj",
+    });
+    const conversation = await port.open(configuration());
+    const outputs = conversation.outputs()[Symbol.asyncIterator]();
+
+    await outputs.next();
+    await conversation.send({
+      responseId: "local-response-1",
+      type: "cancel",
+    });
+    const error = await outputs.next();
+
+    expect(error.value).toEqual({
+      code: "QWEN_QUOTA_EXCEEDED",
+      message: "Realtime quota exceeded.",
+      retryable: false,
+      type: "error",
+    });
   });
 
   it("rejects an output format that Qwen cannot produce", async () => {

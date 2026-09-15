@@ -4,18 +4,31 @@ import OpenAPIRuntime
 import OpenAPIURLSession
 
 public enum VioletProtocolClientFactory {
-  public static func make(serverURL: URL, deviceToken: String? = nil) -> Client {
+  public static func make(
+    serverURL: URL,
+    deviceToken: String? = nil,
+    testRunId: String? = nil,
+    testRunActiveUntil: String? = nil
+  ) -> Client {
     Client(
       serverURL: serverURL,
       configuration: .init(dateTranscoder: .iso8601WithFractionalSeconds),
       transport: URLSessionTransport(),
-      middlewares: deviceToken.map { [BearerTokenMiddleware(token: $0)] } ?? []
+      middlewares: [
+        RequestHeadersMiddleware(
+          token: deviceToken,
+          testRunId: testRunId,
+          testRunActiveUntil: testRunActiveUntil
+        )
+      ]
     )
   }
 }
 
-private struct BearerTokenMiddleware: ClientMiddleware {
-  let token: String
+private struct RequestHeadersMiddleware: ClientMiddleware {
+  let token: String?
+  let testRunId: String?
+  let testRunActiveUntil: String?
 
   func intercept(
     _ request: HTTPRequest,
@@ -25,7 +38,13 @@ private struct BearerTokenMiddleware: ClientMiddleware {
     next: @Sendable (HTTPRequest, HTTPBody?, URL) async throws -> (HTTPResponse, HTTPBody?)
   ) async throws -> (HTTPResponse, HTTPBody?) {
     var request = request
-    request.headerFields[.authorization] = "Bearer \(token)"
+    if let token {
+      request.headerFields[.authorization] = "Bearer \(token)"
+    }
+    if let testRunId, let testRunActiveUntil {
+      request.headerFields[HTTPField.Name("X-Violet-Test-Run")!] = testRunId
+      request.headerFields[HTTPField.Name("X-Violet-Test-Until")!] = testRunActiveUntil
+    }
     return try await next(request, body, baseURL)
   }
 }

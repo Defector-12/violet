@@ -106,6 +106,7 @@ services:
       VIOLET_MODEL_PROVIDER: deepseek
       VIOLET_PORT: 4310
       VIOLET_REALTIME_PROVIDER: ${VIOLET_REALTIME_PROVIDER:-qwen-audio}
+      VIOLET_TEST_TRACE_DIR: /var/lib/violet/test-traces
       VIOLET_VISION_PROVIDER: ${VIOLET_VISION_PROVIDER:-deepseek}
       VIOLET_VERSION: ${VIOLET_VERSION:-0.1.0-dev}
       TOS_ACCESS_KEY_ID_FILE: /run/violet-secrets/tos_access_key_id
@@ -137,6 +138,7 @@ services:
     ports:
       - 127.0.0.1:${VIOLET_CORE_PORT:-4310}:4310
     volumes:
+      - test-traces:/var/lib/violet/test-traces
       - ${VIOLET_DATA_DIR:-/data00/violet}/config:/run/violet-config:ro
       - ${VIOLET_RUNTIME_SECRETS_DIR:-/dev/shm/violet}/content_key:/run/violet-secrets/content_key:ro
       - ${VIOLET_RUNTIME_SECRETS_DIR:-/dev/shm/violet}/database_url:/run/violet-secrets/database_url:ro
@@ -206,6 +208,9 @@ services:
     volumes:
       - ${VIOLET_DATA_DIR:-/data00/violet}/lgtm:/data
       - ${VIOLET_RUNTIME_SECRETS_DIR:-/dev/shm/violet}/grafana_admin_password:/run/violet-secrets/grafana_admin_password:ro
+
+volumes:
+  test-traces:
 
 networks:
   core:

@@ -3,7 +3,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { mkdir, readFile, rename, rm, stat } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { stdin, stdout } from "node:process";
 import {
   AbortMultipartUploadCommand,
@@ -27,16 +27,62 @@ const [command, ...arguments_] = process.argv.slice(2);
 try {
   if (command === "encrypt-upload") {
     await encryptAndMaybeUpload(process.env);
+  } else if (command === "upload-existing") {
+    await uploadExisting(arguments_, process.env);
   } else if (command === "decrypt") {
     await decrypt(arguments_, process.env);
   } else if (command === "verify-access") {
     await verifyTosAccess(process.env);
   } else {
-    throw new Error("Usage: violet-backup <encrypt-upload|decrypt|verify-access> [input] [output]");
+    throw new Error(
+      "Usage: violet-backup <encrypt-upload|upload-existing|decrypt|verify-access> [input] [output]",
+    );
   }
 } catch (error) {
   process.stderr.write(`${error instanceof Error ? error.message : "Backup command failed"}\n`);
   process.exitCode = 1;
+}
+
+async function uploadExisting(
+  arguments_: readonly string[],
+  env: NodeJS.ProcessEnv,
+): Promise<void> {
+  const [metadataPath] = arguments_;
+  if (!metadataPath) {
+    throw new Error("Usage: violet-backup upload-existing <metadata.json>");
+  }
+  const outputDirectory = resolve(env["VIOLET_BACKUP_OUTPUT_DIR"] ?? "/var/lib/violet/backups");
+  const metadataFile = resolve(metadataPath);
+  if (!metadataFile.startsWith(`${outputDirectory}/`)) {
+    throw new Error("backup metadata must be inside the backup output directory");
+  }
+  const value = JSON.parse(await readFile(metadataFile, "utf8")) as Record<string, unknown>;
+  const path = typeof value["localPath"] === "string" ? resolve(value["localPath"]) : "";
+  if (
+    !path.startsWith(`${outputDirectory}/`) ||
+    typeof value["createdAt"] !== "string" ||
+    typeof value["encryptedSha256"] !== "string" ||
+    typeof value["plaintextSha256"] !== "string" ||
+    typeof value["plaintextBytes"] !== "number" ||
+    typeof value["publicKeyFingerprint"] !== "string" ||
+    value["schemaVersion"] !== 1
+  ) {
+    throw new Error("backup metadata is invalid");
+  }
+  const encryptedSha256 = await hashFile(path);
+  if (encryptedSha256 !== value["encryptedSha256"]) {
+    throw new Error("backup ciphertext hash does not match its metadata");
+  }
+  const metadata: BackupEncryptionResult = {
+    createdAt: value["createdAt"],
+    encryptedBytes: (await stat(path)).size,
+    plaintextBytes: value["plaintextBytes"],
+    plaintextSha256: value["plaintextSha256"],
+    publicKeyFingerprint: value["publicKeyFingerprint"],
+    schemaVersion: 1,
+  };
+  const objectKey = await uploadBackup({ encryptedSha256, env, metadata, path });
+  stdout.write(`${JSON.stringify({ ...value, objectKey, uploaded: true })}\n`);
 }
 
 async function encryptAndMaybeUpload(env: NodeJS.ProcessEnv): Promise<void> {

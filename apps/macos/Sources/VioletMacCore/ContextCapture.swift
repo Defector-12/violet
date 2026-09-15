@@ -5,7 +5,8 @@ import ImageIO
 @preconcurrency import ScreenCaptureKit
 import Vision
 
-public enum ContextCaptureKind: Sendable {
+public enum ContextCaptureKind: Equatable, Sendable {
+  case naturalPointing
   case region
   case selectedText
   case window
@@ -35,21 +36,23 @@ public enum ContextCaptureError: Error, Equatable, LocalizedError {
 public protocol ContextCapturePort: AnyObject {
   func capture(_ kind: ContextCaptureKind) async throws -> CapturedContext
   func cancel()
+  func prepareNaturalPointingCapture() -> Bool
   func prepareSelectedTextCapture()
 }
 
 @MainActor
 public final class SilentContextCapture: ContextCapturePort {
-  public private(set) var captureCount = 0
-
   public init() {}
 
   public func capture(_ kind: ContextCaptureKind) async throws -> CapturedContext {
-    captureCount += 1
     return .text(appBundleId: "com.violet.test", text: "Synthetic selected context")
   }
 
   public func cancel() {}
+
+  public func prepareNaturalPointingCapture() -> Bool {
+    true
+  }
 
   public func prepareSelectedTextCapture() {}
 }
@@ -72,13 +75,23 @@ public final class SystemContextCapture: NSObject, ContextCapturePort {
   private let currentProcessIdentifier: pid_t
   private let excludedBundleIds: Set<String>
   private let focusedElementReader: (pid_t) -> AXUIElement?
+  private let mouseLocation: () -> CGPoint
+  private let screenCaptureAccess: () -> Bool
   private var pickerContinuation: CheckedContinuation<SelectedFilter, Error>?
   private var regionSelector: RegionSelectionController?
+  private var naturalPointingElement: AXUIElement?
+  private var naturalPointingLocation: CGPoint?
+  private var naturalPointingTarget: ContextApplicationTarget?
+  private let pointedElementIsSecure: (pid_t, CGPoint) -> Bool
   private var selectedTextElement: AXUIElement?
   private var selectedTextTarget: ContextApplicationTarget?
   private let selectionReader: (pid_t?, AXUIElement?) -> AccessibilitySelectionResult
+  private let testTrace: TestTraceRecorder?
 
-  public convenience init(excludedBundleIds: Set<String> = defaultExcludedBundleIds) {
+  public convenience init(
+    excludedBundleIds: Set<String> = defaultExcludedBundleIds,
+    testTrace: TestTraceRecorder? = nil
+  ) {
     self.init(
       excludedBundleIds: excludedBundleIds,
       currentProcessIdentifier: ProcessInfo.processInfo.processIdentifier,
@@ -93,7 +106,11 @@ public final class SystemContextCapture: NSObject, ContextCapturePort {
       },
       accessibilityAccess: requestAccessibilityAccess,
       focusedElementReader: focusedAccessibilityElement,
-      selectionReader: readAccessibilitySelection
+      selectionReader: readAccessibilitySelection,
+      pointedElementIsSecure: isAccessibilityElementSecure,
+      mouseLocation: { NSEvent.mouseLocation },
+      screenCaptureAccess: { CGPreflightScreenCaptureAccess() },
+      testTrace: testTrace
     )
   }
 
@@ -103,14 +120,22 @@ public final class SystemContextCapture: NSObject, ContextCapturePort {
     activeApplication: @escaping () -> ContextApplicationTarget?,
     accessibilityAccess: @escaping () -> Bool,
     focusedElementReader: @escaping (pid_t) -> AXUIElement?,
-    selectionReader: @escaping (pid_t?, AXUIElement?) -> AccessibilitySelectionResult
+    selectionReader: @escaping (pid_t?, AXUIElement?) -> AccessibilitySelectionResult,
+    pointedElementIsSecure: @escaping (pid_t, CGPoint) -> Bool = { _, _ in false },
+    mouseLocation: @escaping () -> CGPoint = { NSEvent.mouseLocation },
+    screenCaptureAccess: @escaping () -> Bool = { CGPreflightScreenCaptureAccess() },
+    testTrace: TestTraceRecorder? = nil
   ) {
     self.accessibilityAccess = accessibilityAccess
     self.activeApplication = activeApplication
     self.currentProcessIdentifier = currentProcessIdentifier
     self.excludedBundleIds = excludedBundleIds
     self.focusedElementReader = focusedElementReader
+    self.mouseLocation = mouseLocation
+    self.pointedElementIsSecure = pointedElementIsSecure
+    self.screenCaptureAccess = screenCaptureAccess
     self.selectionReader = selectionReader
+    self.testTrace = testTrace
     super.init()
   }
 
@@ -125,8 +150,36 @@ public final class SystemContextCapture: NSObject, ContextCapturePort {
     selectedTextElement = focusedElementReader(application.processIdentifier)
   }
 
+  public func prepareNaturalPointingCapture() -> Bool {
+    let currentTarget = activeApplication()
+    let usesPreparedTarget =
+      currentTarget?.processIdentifier == currentProcessIdentifier
+    let target =
+      usesPreparedTarget
+      ? selectedTextTarget
+      : currentTarget
+    guard
+      let target,
+      target.processIdentifier != currentProcessIdentifier
+    else {
+      clearNaturalPointingCapture()
+      return false
+    }
+    naturalPointingTarget = target
+    naturalPointingElement =
+      usesPreparedTarget
+      ? selectedTextElement
+      : focusedElementReader(target.processIdentifier)
+    naturalPointingLocation = mouseLocation()
+    return true
+  }
+
   public func capture(_ kind: ContextCaptureKind) async throws -> CapturedContext {
+    try testTrace?.record("capture.request", fields: ["kind": String(describing: kind)])
+    do {
     switch kind {
+    case .naturalPointing:
+      return try await captureNaturalPointing()
     case .selectedText:
       return try captureSelectedText()
     case .window:
@@ -138,6 +191,12 @@ public final class SystemContextCapture: NSObject, ContextCapturePort {
       let rect = try await selectRegion()
       return try await captureRegion(rect, appBundleId: nil)
     }
+    } catch {
+      try? testTrace?.record("capture.error", fields: [
+        "kind": String(describing: kind), "error": error.localizedDescription,
+      ])
+      throw error
+    }
   }
 
   public func cancel() {
@@ -145,6 +204,7 @@ public final class SystemContextCapture: NSObject, ContextCapturePort {
     pickerContinuation = nil
     regionSelector?.cancel()
     regionSelector = nil
+    clearNaturalPointingCapture()
     selectedTextElement = nil
     selectedTextTarget = nil
     SCContentSharingPicker.shared.isActive = false
@@ -179,6 +239,95 @@ public final class SystemContextCapture: NSObject, ContextCapturePort {
     }
   }
 
+  private func captureNaturalPointing() async throws -> CapturedContext {
+    guard
+      let target = naturalPointingTarget,
+      let naturalPointingLocation,
+      target.processIdentifier != currentProcessIdentifier
+    else {
+      clearNaturalPointingCapture()
+      throw ContextCaptureError.unavailable
+    }
+    let focusedElement = naturalPointingElement
+    clearNaturalPointingCapture()
+    if let bundleIdentifier = target.bundleIdentifier,
+      excludedBundleIds.contains(bundleIdentifier)
+    {
+      try testTrace?.record("capture.blocked", fields: ["reason": "excluded-application"])
+      throw LocalContextPrivacyError.blockedApplication
+    }
+    try testTrace?.record("capture.target", fields: [
+      "appBundleId": target.bundleIdentifier ?? "",
+      "appKitPointer": ["x": naturalPointingLocation.x, "y": naturalPointingLocation.y],
+      "hasAXFocus": focusedElement != nil,
+    ])
+
+    if accessibilityAccess() {
+      if let focusedElement {
+        switch selectionReader(target.processIdentifier, focusedElement) {
+        case .secureField:
+          throw LocalContextPrivacyError.blockedApplication
+        case .text, .unavailable:
+          break
+        }
+      }
+      if pointedElementIsSecure(target.processIdentifier, naturalPointingLocation) {
+        throw LocalContextPrivacyError.blockedApplication
+      }
+    }
+
+    try testTrace?.record("capture.path", fields: [
+      "path": "screen",
+      "showsCursor": false,
+    ])
+    guard screenCaptureAccess() else {
+      throw ContextCaptureError.screenRecordingPermissionDenied
+    }
+    let content = try await SCShareableContent.excludingDesktopWindows(
+      false,
+      onScreenWindowsOnly: true
+    )
+    guard let primaryScreenFrame = NSScreen.screens.first?.frame else {
+      throw ContextCaptureError.unavailable
+    }
+    let pointer = screenCapturePoint(
+      from: naturalPointingLocation,
+      primaryScreenFrame: primaryScreenFrame
+    )
+    guard
+      let displayIndex = displayIndex(
+        containing: pointer,
+        in: content.displays.map(\.frame)
+      )
+    else {
+      throw ContextCaptureError.unavailable
+    }
+    let display = content.displays[displayIndex]
+    guard let focusPoint = normalizedPoint(pointer, in: display.frame) else {
+      throw ContextCaptureError.unavailable
+    }
+    let excludedApplications = content.applications.filter {
+      $0.processID == currentProcessIdentifier
+        || excludedBundleIds.contains($0.bundleIdentifier)
+    }
+    return try await capture(
+      filter: SCContentFilter(
+        display: display,
+        excludingApplications: excludedApplications,
+        exceptingWindows: []
+      ),
+      appBundleId: target.bundleIdentifier,
+      focusPoint: focusPoint,
+      region: nil
+    )
+  }
+
+  private func clearNaturalPointingCapture() {
+    naturalPointingElement = nil
+    naturalPointingLocation = nil
+    naturalPointingTarget = nil
+  }
+
   private func capturePickedWindow() async throws -> CapturedContext {
     let picker = SCContentSharingPicker.shared
     guard pickerContinuation == nil else {
@@ -206,7 +355,12 @@ public final class SystemContextCapture: NSObject, ContextCapturePort {
         self?.cancel()
       }
     }
-    return try await capture(filter: filter.value, region: nil)
+    return try await capture(
+      filter: filter.value,
+      appBundleId: nil,
+      focusPoint: nil,
+      region: nil
+    )
   }
 
   private func selectRegion() async throws -> CGRect {
@@ -248,8 +402,12 @@ public final class SystemContextCapture: NSObject, ContextCapturePort {
         width: captureRect.width,
         height: captureRect.height
       )
-      configuration.width = min(Int(captureRect.width * 2), 2048)
-      configuration.height = min(Int(captureRect.height * 2), 2048)
+      let size = capturePixelSize(
+        contentRect: configuration.sourceRect,
+        pointPixelScale: CGFloat(filter.pointPixelScale)
+      )
+      configuration.width = Int(size.width)
+      configuration.height = Int(size.height)
       image = try await SCScreenshotManager.captureImage(
         contentFilter: filter,
         configuration: configuration
@@ -258,49 +416,60 @@ public final class SystemContextCapture: NSObject, ContextCapturePort {
     return try await makeCapturedImage(
       image,
       appBundleId: appBundleId,
+      focusPoint: nil,
       region: normalized(rect)
     )
   }
 
   private func capture(
     filter: SCContentFilter,
+    appBundleId: String?,
+    focusPoint: NormalizedContextPoint?,
     region: NormalizedContextRect?
   ) async throws -> CapturedContext {
     let configuration = SCStreamConfiguration()
-    configuration.width = min(Int(filter.contentRect.width * CGFloat(filter.pointPixelScale)), 2048)
-    configuration.height = min(
-      Int(filter.contentRect.height * CGFloat(filter.pointPixelScale)),
-      2048
+    configuration.showsCursor = false
+    let size = capturePixelSize(
+      contentRect: filter.contentRect,
+      pointPixelScale: CGFloat(filter.pointPixelScale)
     )
+    configuration.width = Int(size.width)
+    configuration.height = Int(size.height)
     let image = try await SCScreenshotManager.captureImage(
       contentFilter: filter,
       configuration: configuration
     )
-    return try await makeCapturedImage(image, appBundleId: nil, region: region)
+    return try await makeCapturedImage(
+      image,
+      appBundleId: appBundleId,
+      focusPoint: focusPoint,
+      region: region
+    )
   }
 
   private func makeCapturedImage(
     _ image: CGImage,
     appBundleId: String?,
+    focusPoint: NormalizedContextPoint?,
     region: NormalizedContextRect?
   ) async throws -> CapturedContext {
-    let preparedImage = contextSizedImage(image)
-    let sendableImage = SendableCGImage(value: preparedImage)
+    let sendableImage = SendableCGImage(value: image)
     async let data = Task.detached(priority: .userInitiated) {
       try encodeContextImage(sendableImage.value)
     }.value
     async let recognizedText = Task.detached(priority: .userInitiated) {
-      recognizeText(in: sendableImage.value)
+      recognizeContextText(in: sendableImage.value)
     }.value
     let encodedData = try await data
     let observations = await recognizedText
     return .image(
       appBundleId: appBundleId,
       data: encodedData,
-      height: preparedImage.height,
+      focusPoint: focusPoint,
+      height: image.height,
       recognizedText: observations,
       region: region,
-      width: preparedImage.width
+      width: image.width
     )
   }
 }
@@ -437,6 +606,45 @@ private func readAccessibilitySelection(
     : .text(selectedText)
 }
 
+private func isAccessibilityElementSecure(
+  processIdentifier: pid_t,
+  location: CGPoint
+) -> Bool {
+  guard let primaryScreenFrame = NSScreen.screens.first?.frame else {
+    return false
+  }
+  let point = screenCapturePoint(
+    from: location,
+    primaryScreenFrame: primaryScreenFrame
+  )
+  let application = AXUIElementCreateApplication(processIdentifier)
+  var element: AXUIElement?
+  guard
+    AXUIElementCopyElementAtPosition(
+      application,
+      Float(point.x),
+      Float(point.y),
+      &element
+    ) == .success,
+    let element
+  else {
+    return false
+  }
+
+  var roleValue: CFTypeRef?
+  guard
+    AXUIElementCopyAttributeValue(
+      element,
+      kAXRoleAttribute as CFString,
+      &roleValue
+    ) == .success,
+    let role = roleValue as? String
+  else {
+    return false
+  }
+  return role == "AXSecureTextField"
+}
+
 extension SystemContextCapture: SCContentSharingPickerObserver {
   nonisolated public func contentSharingPicker(
     _ picker: SCContentSharingPicker,
@@ -480,47 +688,19 @@ private struct SendableCGImage: @unchecked Sendable {
   let value: CGImage
 }
 
-private func contextSizedImage(_ image: CGImage) -> CGImage {
-  let maximumDimension = 2_048
-  let largestDimension = max(image.width, image.height)
-  guard largestDimension > maximumDimension else {
-    return image
-  }
-  let scale = Double(maximumDimension) / Double(largestDimension)
-  let width = max(1, Int((Double(image.width) * scale).rounded()))
-  let height = max(1, Int((Double(image.height) * scale).rounded()))
-  guard
-    let context = CGContext(
-      data: nil,
-      width: width,
-      height: height,
-      bitsPerComponent: 8,
-      bytesPerRow: 0,
-      space: CGColorSpaceCreateDeviceRGB(),
-      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-    )
-  else {
-    return image
-  }
-  context.interpolationQuality = .high
-  context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
-  return context.makeImage() ?? image
-}
-
 private func encodeContextImage(_ image: CGImage) throws -> Data {
   guard
     let data = NSBitmapImageRep(cgImage: image).representation(
       using: .jpeg,
-      properties: [.compressionFactor: 0.85]
-    ),
-    data.count <= 8 * 1024 * 1024
+      properties: [.compressionFactor: 0.9]
+    )
   else {
     throw LocalContextPrivacyError.imageEncodingFailed
   }
   return data
 }
 
-private func recognizeText(in image: CGImage) -> [RecognizedContextText] {
+func recognizeContextText(in image: CGImage) -> [RecognizedContextText] {
   let request = VNRecognizeTextRequest()
   request.recognitionLevel = .accurate
   request.automaticallyDetectsLanguage = true
@@ -562,6 +742,46 @@ private func normalized(_ rect: CGRect) -> NormalizedContextRect {
     y: (rect.minY - screen.frame.minY) / screen.frame.height,
     width: rect.width / screen.frame.width,
     height: rect.height / screen.frame.height
+  )
+}
+
+func normalizedPoint(
+  _ point: CGPoint,
+  in frame: CGRect
+) -> NormalizedContextPoint? {
+  guard frame.width > 0, frame.height > 0, frame.contains(point) else {
+    return nil
+  }
+  return .init(
+    x: (point.x - frame.minX) / frame.width,
+    y: (point.y - frame.minY) / frame.height
+  )
+}
+
+func capturePixelSize(
+  contentRect: CGRect,
+  pointPixelScale: CGFloat
+) -> CGSize {
+  CGSize(
+    width: max(1, (contentRect.width * pointPixelScale).rounded()),
+    height: max(1, (contentRect.height * pointPixelScale).rounded())
+  )
+}
+
+func displayIndex(
+  containing point: CGPoint,
+  in frames: [CGRect]
+) -> Int? {
+  frames.firstIndex { $0.contains(point) }
+}
+
+func screenCapturePoint(
+  from appKitPoint: CGPoint,
+  primaryScreenFrame: CGRect
+) -> CGPoint {
+  return CGPoint(
+    x: appKitPoint.x,
+    y: primaryScreenFrame.maxY - appKitPoint.y
   )
 }
 

@@ -9,9 +9,14 @@ export type ContextEnvelope = WithoutSchemaDefinitions<components["schemas"]["Co
 export type ContextReceipt = components["schemas"]["ContextReceipt"];
 export type CoreStatus = components["schemas"]["status.schema"];
 export type Health = components["schemas"]["health.schema"];
-export type RealtimeClientEvent = WithoutSchemaDefinitions<
+type RawRealtimeClientEvent = WithoutSchemaDefinitions<
   components["schemas"]["RealtimeClientEvent"]
 >;
+export type RealtimeClientEvent = RawRealtimeClientEvent extends infer Event
+  ? Event extends { readonly context: infer Context }
+    ? Omit<Event, "context"> & { readonly context: WithoutSchemaDefinitions<Context> }
+    : Event
+  : never;
 export type RealtimeServerEvent = WithoutSchemaDefinitions<
   components["schemas"]["RealtimeServerEvent"]
 >;

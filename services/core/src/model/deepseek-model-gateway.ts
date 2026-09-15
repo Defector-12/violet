@@ -4,6 +4,7 @@ import type {
   ChatCompletionCreateParamsStreaming,
   ChatCompletionMessageParam,
 } from "openai/resources/chat/completions";
+import { recordTestTrace } from "../realtime/test-trace.js";
 
 interface DeepSeekStreamingRequest extends ChatCompletionCreateParamsStreaming {
   readonly thinking?: {
@@ -50,21 +51,47 @@ export class DeepSeekModelGateway implements ModelGateway {
       ...(this.#thinking ? { thinking: { type: "enabled" as const } } : {}),
       user_id: this.#userId,
     };
-    const stream = await this.#client.chat.completions.create(parameters, {
-      ...(signal ? { signal } : {}),
+    recordTestTrace("model.send", {
+      requestId: request.requestId,
+      model: this.#model,
+      system: parameters.messages.filter((message) => message.role === "system"),
+      currentMessage: parameters.messages.at(-1),
+      preexistingMessages: Math.max(0, parameters.messages.length - 1),
+      thinking: this.#thinking,
     });
-
     let inputTokens = 0;
     let outputTokens = 0;
-    for await (const chunk of stream) {
-      const content = chunk.choices[0]?.delta.content;
-      if (content) {
-        yield { content, type: "delta" };
+    let answer = "";
+    try {
+      const stream = await this.#client.chat.completions.create(parameters, {
+        ...(signal ? { signal } : {}),
+      });
+      for await (const chunk of stream) {
+        const content = chunk.choices[0]?.delta.content;
+        if (content) {
+          answer += content;
+          yield { content, type: "delta" };
+        }
+        if (chunk.usage) {
+          inputTokens = chunk.usage.prompt_tokens;
+          outputTokens = chunk.usage.completion_tokens;
+        }
       }
-      if (chunk.usage) {
-        inputTokens = chunk.usage.prompt_tokens;
-        outputTokens = chunk.usage.completion_tokens;
-      }
+    } catch (error) {
+      recordTestTrace("model.failed", {
+        requestId: request.requestId,
+        error: error instanceof Error ? error.message : "unknown",
+      });
+      throw error;
+    } finally {
+      recordTestTrace("model.receive", {
+        requestId: request.requestId,
+        model: this.#model,
+        text: answer,
+        inputTokens,
+        outputTokens,
+        aborted: signal?.aborted ?? false,
+      });
     }
 
     yield {

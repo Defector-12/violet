@@ -45,6 +45,113 @@ struct LocalContextPrivacyTests {
   }
 
   @Test
+  func blocksSyntheticSecretsAfterLocalOCR() throws {
+    let samples = [
+      "password: VioletPass123",
+      "passwd = localOnly987",
+      "token: abcdefghijklmnop",
+      "secret = syntheticSecret42",
+      "sk-ABCDEFGHIJKLMNOPQRST",
+      "ak-abcdefghijklmnopqrst",
+      "eyJabcdefgh.ijklmnop.qrstuvwx",
+      "-----BEGIN PRIVATE KEY-----",
+    ]
+    let filter = LocalContextPrivacyFilter(excludedBundleIds: [])
+    var blocked = 0
+
+    for sample in samples {
+      let image = try syntheticOCRImage(sample)
+      let recognized = recognizeContextText(in: image)
+      let data = try #require(
+        NSBitmapImageRep(cgImage: image).representation(
+          using: .jpeg,
+          properties: [.compressionFactor: 0.9]
+        )
+      )
+      do {
+        _ = try filter.filter(
+          .image(
+            appBundleId: "com.example.Synthetic",
+            data: data,
+            focusPoint: nil,
+            height: image.height,
+            recognizedText: recognized,
+            region: nil,
+            width: image.width
+          )
+        )
+      } catch LocalContextPrivacyError.blockedSensitiveContent {
+        blocked += 1
+      }
+    }
+
+    #expect(blocked == samples.count)
+  }
+
+  @Test
+  func redactsAtLeastNineteenOfTwentySyntheticSensitiveValuesAfterLocalOCR() throws {
+    let samples = [
+      "ID 11010519491231002X",
+      "ID 110105198001010011",
+      "ID 310101199003070022",
+      "ID 440101200112120033",
+      "ID 510101197506230044",
+      "ID 120101196811300055",
+      "ID 320101200405160066",
+      "ID 330101199909090077",
+      "ID 420101198802280088",
+      "ID 610101197701150099",
+      "CARD 4111 1111 1111 1111",
+      "CARD 5555 5555 5555 4444",
+      "CARD 4000 0000 0000 0002",
+      "CARD 6011 1111 1111 1117",
+      "CARD 3530 1113 3330 0000",
+      "CARD 3782 822463 10005",
+      "CARD 3056 9309 0259 04",
+      "CARD 2223 0031 2200 3222",
+      "CARD 6759 6498 2643 8453",
+      "CARD 6200 0000 0000 0000 000",
+    ]
+    let filter = LocalContextPrivacyFilter(excludedBundleIds: [])
+    var misses: [String] = []
+    var redacted = 0
+
+    for sample in samples {
+      let image = try syntheticOCRImage(sample)
+      let recognized = recognizeContextText(in: image)
+      let data = try #require(
+        NSBitmapImageRep(cgImage: image).representation(
+          using: .jpeg,
+          properties: [.compressionFactor: 0.9]
+        )
+      )
+      let result = try filter.filter(
+        .image(
+          appBundleId: "com.example.Synthetic",
+          data: data,
+          focusPoint: nil,
+          height: image.height,
+          recognizedText: recognized,
+          region: nil,
+          width: image.width
+        )
+      )
+      if result.redactions.contains(where: { $0.category == .controlledSensitive }) {
+        guard case .image(let filteredData, _, _, _, _, _, _) = result.payload else {
+          Issue.record("Expected a filtered image")
+          continue
+        }
+        redacted += 1
+        #expect(filteredData != data)
+      } else {
+        misses.append("\(sample) -> \(recognized.map(\.text).joined(separator: " | "))")
+      }
+    }
+
+    #expect(redacted >= 19, "Missed samples: \(misses)")
+  }
+
+  @Test
   func rejectsExcludedApplicationsWithoutReturningTheirContent() {
     let filter = LocalContextPrivacyFilter(
       excludedBundleIds: ["com.example.confidential"]
@@ -92,6 +199,7 @@ struct LocalContextPrivacyTests {
       .image(
         appBundleId: "com.apple.Preview",
         data: source,
+        focusPoint: nil,
         height: 32,
         recognizedText: [],
         region: nil,
@@ -105,6 +213,154 @@ struct LocalContextPrivacyTests {
     }
     #expect(data == source)
     #expect(mediaType == "image/jpeg")
+    #expect(result.confidence == 1)
+  }
+
+  @Test(arguments: [
+    NormalizedContextPoint(x: 0.039123456789, y: 0.907987654321),
+    NormalizedContextPoint(x: 0, y: 0),
+    NormalizedContextPoint(x: 1, y: 1),
+  ])
+  func preservesBoundedJPEGAndCoordinatesWithFocusPoint(
+    focusPoint: NormalizedContextPoint
+  ) throws {
+    let image = try #require(noisyImage(width: 128, height: 96))
+    let source = try #require(
+      NSBitmapImageRep(cgImage: image).representation(
+        using: .jpeg, properties: [.compressionFactor: 0.85]
+      )
+    )
+    try #require(source.count < 8 * 1024 * 1024)
+    let region = NormalizedContextRect(x: 0.12, y: 0.23, width: 0.56, height: 0.45)
+    let filter = LocalContextPrivacyFilter(excludedBundleIds: [])
+
+    let result = try filter.filter(
+      .image(
+        appBundleId: "com.example.Terminal",
+        data: source,
+        focusPoint: focusPoint,
+        height: 96,
+        recognizedText: [],
+        region: region,
+        width: 128
+      )
+    )
+
+    guard
+      case .image(
+        let data, let returnedPoint, let height, let mediaType,
+        let returnedRegion, let sha256, let width
+      ) = result.payload
+    else {
+      Issue.record("Expected a filtered image")
+      return
+    }
+    #expect(
+      data.elementsEqual(source),
+      "A focus point is metadata, not a reason to redraw a bounded JPEG"
+    )
+    #expect(returnedPoint == focusPoint)
+    #expect(returnedRegion == region)
+    #expect(width == 128)
+    #expect(height == 96)
+    #expect(mediaType == "image/jpeg")
+    #expect(sha256 == contextImageHash(source))
+    #expect(result.redactions.isEmpty)
+    #expect(result.completeness == 1)
+    #expect(result.confidence == 1)
+  }
+
+  @Test(
+    arguments: [false, true],
+    [
+      nil,
+      NormalizedContextPoint(x: 0.75, y: 0.5),
+      NormalizedContextPoint(x: 0.25, y: 0.71),
+    ] as [NormalizedContextPoint?]
+  )
+  func preservesTextPixelsAndPrivacyMasksWhenEncodingWithFocusPoint(
+    hasSensitiveText: Bool,
+    focusPoint: NormalizedContextPoint?
+  ) throws {
+    let source = try imageWithSyntheticText()
+    let region = NormalizedContextRect(x: 0.12, y: 0.23, width: 0.56, height: 0.45)
+    let observations: [RecognizedContextText] =
+      hasSensitiveText
+      ? [
+        .init(
+          text: "ID 11010519491231002X",
+          confidence: 0.99,
+          normalizedBounds: .init(x: 0.125, y: 1.0 / 6, width: 0.25, height: 0.25)
+        )
+      ] : []
+    let filter = LocalContextPrivacyFilter(excludedBundleIds: [])
+    let unpointed = try filter.filter(
+      .image(
+        appBundleId: "com.example.Terminal", data: source, focusPoint: nil,
+        height: 96, recognizedText: observations, region: region, width: 128
+      )
+    )
+    let result = try filter.filter(
+      .image(
+        appBundleId: "com.example.Terminal", data: source, focusPoint: focusPoint,
+        height: 96, recognizedText: observations, region: region, width: 128
+      )
+    )
+
+    guard
+      case .image(let unpointedData, _, _, _, _, _, _) = unpointed.payload,
+      case .image(
+        let data, let returnedPoint, let height, let mediaType,
+        let returnedRegion, let sha256, let width
+      ) = result.payload
+    else {
+      Issue.record("Expected filtered images")
+      return
+    }
+    #expect(
+      data.elementsEqual(unpointedData),
+      "Adding coordinates must not paint over text or privacy masks"
+    )
+    #expect(data != source)
+    #expect(data.count <= 8 * 1024 * 1024)
+    #expect(returnedPoint == focusPoint)
+    #expect(returnedRegion == region)
+    #expect(width == 128)
+    #expect(height == 96)
+    #expect(mediaType == "image/jpeg")
+    #expect(sha256 == contextImageHash(data))
+    #expect(
+      result.redactions
+        == (hasSensitiveText ? [.init(category: .controlledSensitive, count: 1)] : [])
+    )
+    #expect(result.completeness == (hasSensitiveText ? 0.8 : 1))
+
+    let decoded = try #require(NSBitmapImageRep(data: data))
+    #expect(decoded.pixelsWide == width)
+    #expect(decoded.pixelsHigh == height)
+    let glyph = try #require(decoded.colorAt(x: 85, y: 48)?.usingColorSpace(.deviceRGB))
+    #expect(
+      glyph.redComponent < 0.1 && glyph.greenComponent < 0.1 && glyph.blueComponent < 0.1,
+      "The black letter stroke under the pointer must remain visible"
+    )
+    // Vision bounds are bottom-origin; bitmap samples are top-origin.
+    for x in [20, 32, 44] {
+      for y in [60, 68, 76] {
+        let pixel = try #require(decoded.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB))
+        let expected: CGFloat = hasSensitiveText ? 0 : 1
+        #expect(
+          abs(pixel.redComponent - expected) < 0.1
+            && abs(pixel.greenComponent - expected) < 0.1
+            && abs(pixel.blueComponent - expected) < 0.1,
+          "Sensitive pixels must be black only when redaction is required, at (\(x), \(y))"
+        )
+      }
+    }
+    let outside = try #require(decoded.colorAt(x: 32, y: 28)?.usingColorSpace(.deviceRGB))
+    #expect(
+      outside.redComponent > 0.9 && outside.greenComponent > 0.9 && outside.blueComponent > 0.9,
+      "Redaction must not mask the vertically mirrored non-sensitive region"
+    )
   }
 
   @Test
@@ -128,6 +384,7 @@ struct LocalContextPrivacyTests {
       .image(
         appBundleId: "com.apple.Preview",
         data: source,
+        focusPoint: .init(x: 0.25, y: 0.75),
         height: 32,
         recognizedText: [
           .init(
@@ -141,13 +398,125 @@ struct LocalContextPrivacyTests {
       )
     )
 
-    guard case .image(let data, _, let text, let mediaType, _, _, _) = result.payload else {
+    guard case .image(let data, let focusPoint, _, let mediaType, _, _, _) = result.payload else {
       Issue.record("Expected a filtered image")
       return
     }
     #expect(mediaType == "image/jpeg")
     #expect(data != source)
-    #expect(text == "ID [REDACTED]")
+    #expect(focusPoint == .init(x: 0.25, y: 0.75))
     #expect(result.redactions == [.init(category: .controlledSensitive, count: 1)])
   }
+
+  @Test
+  func keepsOriginalDimensionsWhenTheJPEGFits() throws {
+    let image = try #require(noisyImage(width: 64, height: 32))
+
+    let encoded = try encodeBoundedContextImage(image, maximumBytes: 8 * 1024 * 1024)
+
+    #expect(encoded.width == 64)
+    #expect(encoded.height == 32)
+    #expect(encoded.data.count <= 8 * 1024 * 1024)
+  }
+
+  @Test
+  func uniformlyScalesOnlyWhenTheJPEGExceedsTheLimit() throws {
+    let image = try #require(noisyImage(width: 512, height: 256))
+
+    let encoded = try encodeBoundedContextImage(image, maximumBytes: 20 * 1024)
+    let decoded = try #require(NSBitmapImageRep(data: encoded.data))
+
+    #expect(encoded.data.count <= 20 * 1024)
+    #expect(encoded.width < 512)
+    #expect(encoded.height < 256)
+    #expect(abs(Double(encoded.width) / Double(encoded.height) - 2) < 0.02)
+    #expect(decoded.pixelsWide == encoded.width)
+    #expect(decoded.pixelsHigh == encoded.height)
+  }
+
+  @Test
+  func preservesTopOriginPointerInTheEncodedOnDemandEnvelope() throws {
+    let filtered = try LocalContextPrivacyFilter(excludedBundleIds: []).filter(
+      .image(
+        appBundleId: nil, data: imageWithSyntheticText(),
+        focusPoint: .init(x: 0.039, y: 0.907), height: 96,
+        recognizedText: [], region: nil, width: 128
+      )
+    )
+    let envelope = makeContextEnvelope(filtered, deviceId: UUID(), sessionId: UUID())
+    let object = try #require(
+      JSONSerialization.jsonObject(with: JSONEncoder().encode(envelope)) as? [String: Any]
+    )
+    let payload = try #require(object["payload"] as? [String: Any])
+    let point = try #require(payload["focusPoint"] as? [String: Double])
+    #expect(point["x"] == 0.039)
+    #expect(point["y"] == 0.907)
+    #expect(payload["localText"] == nil)
+  }
+}
+
+private func imageWithSyntheticText() throws -> Data {
+  let context = try #require(
+    CGContext(
+      data: nil,
+      width: 128,
+      height: 96,
+      bitsPerComponent: 8,
+      bytesPerRow: 0,
+      space: CGColorSpaceCreateDeviceRGB(),
+      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+    )
+  )
+  context.setFillColor(CGColor(gray: 1, alpha: 1))
+  context.fill(CGRect(x: 0, y: 0, width: 128, height: 96))
+  // A deterministic H glyph around (96, 48), without fonts or screen access.
+  context.setFillColor(CGColor(gray: 0, alpha: 1))
+  context.fill(CGRect(x: 84, y: 36, width: 4, height: 24))
+  context.fill(CGRect(x: 104, y: 36, width: 4, height: 24))
+  context.fill(CGRect(x: 84, y: 46, width: 24, height: 4))
+  let image = try #require(context.makeImage())
+  return try #require(NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]))
+}
+
+private func syntheticOCRImage(_ text: String) throws -> CGImage {
+  let size = NSSize(width: 1_200, height: 160)
+  let image = NSImage(size: size)
+  image.lockFocus()
+  NSColor.white.setFill()
+  NSRect(origin: .zero, size: size).fill()
+  NSString(string: text).draw(
+    at: NSPoint(x: 30, y: 50),
+    withAttributes: [
+      .font: NSFont.monospacedSystemFont(ofSize: 44, weight: .semibold),
+      .foregroundColor: NSColor.black,
+    ]
+  )
+  image.unlockFocus()
+  let bitmap = try #require(image.tiffRepresentation.flatMap(NSBitmapImageRep.init(data:)))
+  return try #require(bitmap.cgImage)
+}
+
+private func noisyImage(width: Int, height: Int) -> CGImage? {
+  var bytes = [UInt8](repeating: 0, count: width * height * 4)
+  var state: UInt32 = 0x1234_5678
+  for index in bytes.indices {
+    state = 1_664_525 &* state &+ 1_013_904_223
+    bytes[index] = index % 4 == 3 ? 255 : UInt8(truncatingIfNeeded: state >> 24)
+  }
+  guard let provider = CGDataProvider(data: Data(bytes) as CFData) else {
+    return nil
+  }
+  return CGImage(
+    width: width,
+    height: height,
+    bitsPerComponent: 8,
+    bitsPerPixel: 32,
+    bytesPerRow: width * 4,
+    space: CGColorSpaceCreateDeviceRGB(),
+    bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.noneSkipLast.rawValue),
+    provider: provider,
+    decode: nil,
+    shouldInterpolate: false,
+    intent: .defaultIntent
+  )
 }

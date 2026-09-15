@@ -2,66 +2,110 @@ import { describe, expect, it } from "vitest";
 
 import { DeepSeekVisionUnderstandingPort } from "./deepseek-vision-understanding.js";
 
-describe("DeepSeekVisionUnderstandingPort", () => {
-  it("uses the OpenAI-compatible vision model without persisting image content", async () => {
-    let body: Record<string, unknown> | undefined;
-    const fetch = async (_input: string | URL | Request, init?: RequestInit) => {
-      body = JSON.parse(String(init?.body)) as Record<string, unknown>;
-      return Response.json({
-        choices: [
-          {
-            finish_reason: "stop",
-            index: 0,
-            message: {
-              content: "A diagram with two connected services.",
-              role: "assistant",
-            },
-          },
-        ],
-        created: 1,
-        id: "chatcmpl-test",
-        model: "deepseek-v4-flash-vision-exp",
-        object: "chat.completion",
-        usage: {
-          completion_tokens: 8,
-          prompt_tokens: 12,
-          total_tokens: 20,
-        },
-      });
-    };
-    const adapter = new DeepSeekVisionUnderstandingPort({
-      apiKey: "test-key",
-      baseUrl: "https://api.deepseek.com",
-      fetch: fetch as typeof globalThis.fetch,
-      model: "deepseek-v4-flash-vision-exp",
-    });
+const image = {
+  bytes: Uint8Array.from([1, 2, 3]),
+  height: 900,
+  mediaType: "image/png" as const,
+  sha256: "synthetic",
+  width: 1400,
+};
 
+function fixture(result: unknown) {
+  let body: Record<string, unknown> | undefined;
+  const port = new DeepSeekVisionUnderstandingPort({
+    apiKey: "test-key",
+    baseUrl: "https://example.invalid",
+    model: "test-vision",
+    fetch: async (_url, init) => {
+      body = JSON.parse(String(init?.body));
+      return Response.json({
+        choices: [{ message: { content: JSON.stringify(result) } }],
+      });
+    },
+  });
+  return { port, body: () => body };
+}
+
+describe("DeepSeekVisionUnderstandingPort", () => {
+  it("sends one full image with the question and pointer", async () => {
+    const f = fixture({ answer: "The label is EMBER.", confidence: 0.95 });
+    const result = await f.port.understand({
+      payload: {
+        focusPoint: { x: 0.22, y: 0.35 },
+        image,
+        type: "screen.snapshot",
+      },
+      question: "What is the pointed shape's label?",
+      requestId: "request",
+    });
+    const body = f.body();
+    if (!body) throw new Error("Expected a provider request");
+    const content = (
+      body["messages"] as Array<{
+        readonly content: Array<{ readonly image_url?: unknown; readonly text?: string }>;
+      }>
+    )[1]?.content;
+
+    expect(result).toEqual({
+      answer: "The label is EMBER.",
+      confidence: 0.95,
+      model: "test-vision",
+      provider: "deepseek",
+      summary: "The label is EMBER.",
+    });
+    expect(content?.filter((part) => part.image_url)).toHaveLength(1);
+    expect(content?.[0]?.text).toContain("x=0.220, y=0.350");
+    expect(content?.[0]?.text).toContain("pixel x=308, y=315");
+    expect(JSON.stringify(body)).toContain("do not substitute a nearby object");
+    expect(JSON.stringify(body)).not.toContain("target.bounds");
+    expect(JSON.stringify(body)).not.toContain("Image 2");
+  });
+
+  it("returns an ungrounded summary when no question is supplied", async () => {
+    const f = fixture({ answer: "A synthetic dashboard.", confidence: 0.8 });
     await expect(
-      adapter.understand({
-        localText: "Service A Service B",
-        payload: {
-          image: {
-            bytes: Buffer.from("image"),
-            height: 100,
-            mediaType: "image/png",
-            sha256: "0".repeat(64),
-            width: 200,
-          },
-          localText: "Service A Service B",
-          type: "screen.snapshot",
-        },
-        requestId: "00000000-0000-4000-8000-000000000001",
+      f.port.understand({
+        payload: { image, type: "screen.snapshot" },
+        requestId: "request",
       }),
     ).resolves.toEqual({
-      confidence: 0.85,
-      model: "deepseek-v4-flash-vision-exp",
+      confidence: 0.8,
+      model: "test-vision",
       provider: "deepseek",
-      summary: "A diagram with two connected services.",
+      summary: "A synthetic dashboard.",
     });
-    expect(body).toMatchObject({
-      model: "deepseek-v4-flash-vision-exp",
+  });
+
+  it.each([
+    "not json",
+    JSON.stringify({ answer: "", confidence: 0.9 }),
+    JSON.stringify({ answer: "visible", confidence: 2 }),
+  ])("rejects malformed provider output: %s", async (content) => {
+    const port = new DeepSeekVisionUnderstandingPort({
+      apiKey: "test-key",
+      baseUrl: "https://example.invalid",
+      model: "test-vision",
+      fetch: async () =>
+        Response.json({
+          choices: [{ message: { content } }],
+        }),
     });
-    expect(JSON.stringify(body)).toContain("locate its arrowhead");
-    expect(JSON.stringify(body)).toContain("data:image/png;base64,aW1hZ2U=");
+    await expect(
+      port.understand({
+        payload: { image, type: "screen.snapshot" },
+        question: "What is visible?",
+        requestId: "request",
+      }),
+    ).rejects.toThrow();
+  });
+
+  it("rejects a non-image payload", async () => {
+    const f = fixture({ answer: "unused", confidence: 1 });
+    await expect(
+      f.port.understand({
+        payload: { text: "not an image", type: "focus.text" },
+        requestId: "request",
+      }),
+    ).rejects.toThrow("requires an image");
   });
 });
