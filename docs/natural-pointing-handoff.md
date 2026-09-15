@@ -48,11 +48,12 @@ DeepSeek 输出：
 
 ## 运行与回滚
 
-- Core：`d2cccc9-clean-vision-v2-candidate`
-- Core image：`sha256:e22d11e17ab0f63c8443d08570ac825ab56166f7e2bdc4563ef18f0f4e507278`
+- Commit：`3b9ffc12728dd7634d0fca160d8a766be98db442`
+- Core：`3b9ffc1-release-1c`
+- Core image：`sha256:8083a796621c94a9c103208d757e13af3bfe88081783858ec129fa88c5ee4000`
 - Mac App SHA-256：
-  `ec26b6ab7de648bb17e2b4ee88c84f0155e975f03e7481f094ace6986cfd9853`
-- 回滚 Core：`violet-core:pre-clean-vision-v2-20260914`
+  `f19888af4dba2fe6fa0ca5f12717383439efa3c0c2bb2f0d978e8d7a69a890ad`
+- 回滚 Core：`violet-core:pre-release-1c-20260915`
 - 回滚 Mac：`.local-acceptance/rollback/Violet-freshness-v6-before-clean-vision.app`
 
 持续 Debug Trace 已由用户关闭；历史证据保留。测试记录规范见

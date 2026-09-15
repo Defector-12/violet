@@ -1,6 +1,6 @@
 # Release 1C / 1C.1 验收
 
-状态：功能和用户产品验收已完成，最终清理、自动化检查与 Git 交付正在收尾。
+状态：功能、用户产品验收、工程收尾、Git 交付与最终部署均已完成。
 本文件是当前状态与剩余工作的事实源；不能把历史测试数字当成当前版本的新测试。
 
 ## 交付范围
@@ -68,7 +68,11 @@
   `2afec476-4d48-43d2-9aa9-474eb40c2bc1`。
 - 全仓交叉审查发现的取消隔离、证据保留、隐私记录顺序、HTTP 报告、关闭握手、
   备份失败发布、恢复输出所有权和本地配置保留问题均已修复并增加回归。
-- 尚待：提交、推送及 exact commit 部署；完成后在下方记录最终运行版本。
+- 最终提交 `3b9ffc12728dd7634d0fca160d8a766be98db442` 已普通推送至
+  `origin` 与 `bits` 的 `feat/1c1-natural-pointing`，未合并 MR。
+- Core exact commit 产物部署验证：
+  `ec5a59bc-4c30-4159-a4a7-2facdd5d87d6`；Mac 最终运行与隧道验证：
+  `2132fb63-c60a-4a5b-ad97-eef966586bfb`。
 - 用户已授权提交并推送当前分支。未授权直接合并 MR !20 或开发 Release 1D。
 
 ## 历史失败与修复
@@ -113,12 +117,20 @@
 
 ## 部署与回滚
 
-清理前已验收版本：
+最终运行版本：
 
-- Core：`d2cccc9-clean-vision-v2-candidate`，镜像
-  `sha256:e22d11e17ab0f63c8443d08570ac825ab56166f7e2bdc4563ef18f0f4e507278`。
-- Mac：`ec26b6ab7de648bb17e2b4ee88c84f0155e975f03e7481f094ace6986cfd9853`。
-- Core 回滚标签 `violet-core:pre-clean-vision-v2-20260914`；Mac 回滚包
+- Core：`3b9ffc1-release-1c`，镜像
+  `sha256:8083a796621c94a9c103208d757e13af3bfe88081783858ec129fa88c5ee4000`，
+  健康且 restart count 为 0。关键模块 SHA-256 与本地 exact commit 构建逐一一致。
+- Core test-trace 目录为容器内 `1000:1000 / 0700`；运行环境不存在
+  `VIOLET_DEBUG_TRACE`。
+- Mac 二进制 SHA-256：
+  `f19888af4dba2fe6fa0ca5f12717383439efa3c0c2bb2f0d978e8d7a69a890ad`，
+  严格签名验证通过；普通启动未设置 Debug 或 test-run 环境。
+- 首次部署命令 `e9d9f291-6f13-4ab4-b6dd-af15fee1ac09` 已完成远端健康切换，
+  仅因沙箱拒绝 bytedcli 更新本机 `known_hosts` 临时文件而以非零退出；独立只读验证
+  `ec5a59bc-4c30-4159-a4a7-2facdd5d87d6` 为最终运行证据。
+- Core 回滚标签 `violet-core:pre-release-1c-20260915`；Mac 回滚包
   `.local-acceptance/rollback/Violet-freshness-v6-before-clean-vision.app`。
 - 关闭 Look 可停用按需视觉；显式 deterministic Vision 或 memory Context 配置可用于
   受控降级。供应商失败不自动切换，不使用旧 Context 猜答案。
