@@ -1,6 +1,8 @@
 # Violet 工程路线
 
 > 状态：执行路线基线。阶段按能力成熟度推进，不按产品类型限制 Violet。本文中的顺序是依赖顺序，不是未经评估的工期承诺。
+> 当前事实：1A/1B 已交付，1C/1C.1 已完成产品验收与源码工程收尾。部署与测试状态统一见
+> [Release 1C 验收](./release-1c-acceptance.md)。后续章节的建设内容是目标，不是现有能力。
 
 ## 1. 路线目标
 
@@ -141,29 +143,16 @@ Violet/
 
 在 Mac 上通过全局快捷键或点击唤出 Violet，立即得到“我在”“嗯哼”等本地短回执，并可以使用文字和语音与云端同一 Violet 对话。关闭浮层只结束在场，不结束已建立的后台任务。
 
-**当前实现证据**
+**已交付**
 
-截至 2026-08-22，首个纵向切片已完成实现并合并：`RealtimeSession v1` 协议、Core WebSocket 认证与 sealed 门禁、确定性实时 Adapter、最终用户/助手事件落账、Swift 原生菜单栏 App、Keychain 读取与 stdin 迁移工具、可选 SSH 隧道、文字流式 UI、全局快捷键、睡眠与锁屏停止、`AudioIOPort` 和隔离测试 Adapter。用户主动音频会话入口、Realtime 音频帧与 commit 流、麦克风能力门禁和生命周期停止状态机已实现。
-
-基础切片当时在 Devbox 部署提交 `639a6cf` 的 Core 候选。ready/sealed、正确与错误认证、Realtime 配置与关闭、未知事件拒绝、回环端口和遥测白名单验证通过；Release 1A 镜像保留为 `rollback-f707f27`，并生成一份未上传外部服务的部署前加密备份。
-
-正常模式真实验收已经通过自动 SSH 隧道、Keychain 鉴权、`Ready` 状态、DeepSeek 文字流、`Control + Option + Space` 全局快捷键、SSH 子进程自动重连、显示器睡眠、锁屏和整机 46 秒 Deep Idle 后恢复。唯一一条明确标记的测试对话得到预期回复，事件账本由 40 条增加为 42 条，新增顺序为 `user`、`assistant`。验收中发现 Swift OpenAPI 默认日期解码器不能解析 Core 的毫秒 ISO-8601 时间，已改用 fractional-seconds transcoder 并加入固定响应回归测试。
-
-首个端到端候选 `QwenAudioRealtimeAdapter` 已通过 MR !14 合并。它使用 Core 中继、北京地域 Workspace、16kHz PCM 输入、24kHz PCM 输出和系统音色 `longanqian`，不向供应商注册工具。无麦克风合成 canary 已返回完整文字与音频，首次音频约 775ms，输入/输出用量为 48/18 tokens。
-
-首次真实 Mac 音频闭环已经通过：48kHz 设备输入转换为协议要求的 16kHz PCM，最终转写和助手回复进入事件账本，24kHz PCM 通过系统扬声器清晰播放；停止采集到首个播放分片约 1.2 秒。验收发现并修复了 Swift 6 主执行器隔离导致 CoreAudio tap 回调 `SIGTRAP`，以及每个流式音频分片重复连接播放器导致后续声音失真的问题。
-
-持续会话候选已实现：Mac 一次启动后持续采集，Qwen `smart_turn` 自动判断语音起止并生成多轮回复；Core 为供应商输出建立独立输出泵，使取消和后续输入不再排在完整回复之后。Core 在新实时会话建立时注入最近 20 轮事件，同一连接的真实两轮 canary 已正确回忆测试上下文。
-
-真实设备调试发现，macOS Voice Processing 在已测耳机路由上会让输入 PCM 全部为零并明显压低系统输出音量，因此当前默认使用原始输入路径。播放器在采集启动前按协商的 24kHz 格式接入 `AVAudioEngine`，避免第一段回复到达时动态修改运行中的音频图；播放期间连续两个高能量输入帧会立即清空本地播放并取消旧响应，不等待服务端 VAD。用户已确认转写、语音播放、连续多轮、短期上下文、收起即停、重新打开后续接以及语音和点击打断正常。
-
-批量验收基础设施已建立：Mac 仅在启动脚本显式启用验收记录时写入本地 NDJSON，字段只包含单调时间、事件类型、停止原因和随机关联 ID；不记录音频、转写或回复内容。汇总器按路线门禁计算触发、首段音频、打断和停止的样本数与 p95，并检测旧响应停播后再次排队。详细矩阵见 [Release 1B 实时语音验收](./release-1b-acceptance.md)。
-
-2026-08-23 的 Qwen 候选批量验收已通过定量门禁：174 次浮层触发 p95 为 18ms，88 次服务端断句到首个音频分片 p95 为 501ms，31 次打断 p95 为 4ms，54 次麦克风停止 p95 为 15ms；四项配对成功率均为 100%，迟到播放和正常会话失败均为 0。触发样本包含 50 次菜单栏点击，前 30 个打断样本包含 20 次直接语音和 10 次点击。SSH 监听态与播放态断线恢复、单向 250ms 延迟链路，以及外置、Bluetooth 和 MacBook 内置音频路由也已验证。
-
-`Paraformer → DeepSeek → CosyVoice` Pipeline 已通过同一 `RealtimeConversationPort` 建立最小基线。三次不播放、不落盘的真实静默 canary 均准确识别中文测试句，断句到首音频为 1.34–1.94 秒；真实取消后 1 秒内迟到音频为 0。Pipeline 实时路径关闭 DeepSeek thinking，文字聊天保持原配置。当前功能分支的 TypeScript/JavaScript 53 个测试和 Swift 20 个测试通过。
-
-运行时决策已收敛：Release 1B 默认使用 Qwen，Pipeline 保留为显式配置的降级与供应商替换基线，禁止静默自动切换。Qwen 已有 88 次语音样本且 p95 为 501ms，Pipeline 三次初始样本为 1.34–1.94 秒；扩大到完整同集比较的成本当前不会改变默认决策，因此只在准备更换默认运行时或 Qwen 的质量、费用、地域和稳定性证据恶化时恢复。此前真实锁屏、显示器睡眠和 Deep Idle 证据沿用，不在用户办公期间重复执行。
+- 原生菜单栏 App、快捷键、Keychain、SSH 隧道、持续 Realtime 会话、音频输入输出、
+  打断、重连和系统生命周期控制。
+- Qwen Audio 是默认实时运行时；Pipeline 只作为显式降级与供应商替换基线，不在会话
+  内静默切换。
+- 供应商支持插话时使用服务端 `speech.started`；仅在不支持时保留连续 4 帧本地能量
+  兜底。
+- 验收数据、历史故障和性能结果见
+  [Release 1B 实时语音验收](./release-1b-acceptance.md)。
 
 **建设内容**
 
@@ -227,12 +216,9 @@ Release 1B 必须保留全局快捷键作为可靠入口。语音唤醒候选必
 
 #### Release 1C：Violet Sight
 
-> 实现状态（2026-08-27）：代码候选已集成到主线；真实 DeepSeek Vision canary、系统权限冒烟和
-> 视觉矩阵 20/50 已完成；已测浏览器与桌面组均为 10/10。当前候选使用 DeepSeek
-> `deepseek-v4-flash-vision-exp`、Mac 本地 Apple Vision OCR 和
-> `sherpa-onnx v1.13.6` 唤醒 Adapter。唤醒短门禁为 15/20，未达到 19/20。
-> 用户当前未遇到其他 Bug，已主动暂停剩余真实验收；后续主功能开发完成后统一恢复，
-> 也可由用户随时发起。暂停不等于通过，Release 1C 仍是实现候选。
+> 当前状态：Release 1C/1C.1 已完成用户产品验收，工程收尾见
+> [Release 1C 验收](./release-1c-acceptance.md)。历史 15/20 唤醒短门禁保留，
+> 用户已接受当前唤醒体验；扩大样本属于后续优化。
 
 **用户可获得**
 
@@ -244,8 +230,6 @@ Release 1B 必须保留全局快捷键作为可靠入口。语音唤醒候选必
   - `screen.snapshot`
   - `focus.region`
   - `focus.text`
-  - `audio.utterance`
-  - `app.state`
 - Mac 端接入 ScreenCaptureKit、Accessibility 和区域框选。
 - 建立当前应用、窗口、屏幕和用户焦点识别。
 - 建立 OCR / 视觉模型 Port 与一个可用适配器。
@@ -274,21 +258,60 @@ Release 1B 必须保留全局快捷键作为可靠入口。语音唤醒候选必
 - 100 次主动说出 `Violet` 的成功率不低于 95%；1000 条负样本误触发不超过 1 次，办公环境连续 8 小时误触发为 0。
 - 唤醒前音频写盘、上传和日志记录数量均为 0；唤醒后先停止 KWS，再启动 Realtime 音频采集。
 
-**验收暂停决定（2026-08-27）**
-
-- 当前用户实际使用未发现其他 Bug，暂停继续扩大样本，不为完成数字而重复测试。
-- 已完成视觉矩阵 20/50；图片预览、PDF 和 IDE 共 30 次保留待测。
-- 保密应用、绝对秘密、受控敏感信息遮挡和 Context 生命周期 50 次真实矩阵保留待测。
-- 当前唤醒候选 15/20 未通过；`wake.detected`、定制 KWS、扩大正负样本和 8 小时办公
-  环境门禁保留待测。
-- 上述事项不是当前已知功能缺失，但仍是正式交付证据缺口。恢复条件是后续主功能开发
-  完成、用户随时主动发起，或真实使用出现相关问题。
-- 暂停期间允许合并代码并继续后续主功能开发，但不得将 Release 1C 标记为通过或正式交付。
-
 **回滚**
 
 - 任一感知适配器失败时退化为用户主动框选，不扩大自动读取范围。
 - 策略引擎不可用时默认停止数据出境。
+
+#### Release 1C.1：Violet Natural Pointing
+
+> 当前实现已完成产品验收。Natural Pointing 已收敛为完整单屏截图、冻结鼠标坐标、用户原问题和
+> 一次 DeepSeek 调用；只读问答不再使用 OCR、目标框、颜色或位置规则二次判定。
+> 最新代码、部署和验证结果以 [验收状态](./release-1c-acceptance.md) 为准。
+
+**用户可获得**
+
+用户显式开启 `Look` 后，可以直接询问“这个词是什么意思”“鼠标位置的数字是什么”
+或“右下角绿色按钮有什么作用”。Violet 只在问题确实依赖视觉时读取当前画面，并根据
+该问题返回通过置信度和生命周期门禁的答案。
+
+**当前实现**
+
+1. Qwen 每轮按需请求；Mac 使用同一 `turnId` 的完整单屏和冻结坐标。
+2. OCR 只执行本机秘密阻断与敏感遮挡；DeepSeek 一次返回答案和置信度。
+3. Core 只执行授权、关联、新鲜度、取消、生命周期和置信度门禁。
+4. 详细实现合同、历史失败和运行证据分别见
+   [Natural Pointing](./natural-pointing-handoff.md)与
+   [Release 1C 验收](./release-1c-acceptance.md)。
+
+**验收**
+
+- `Look` 关闭时，20 次唤醒产生的屏幕 Context 数量为 0。
+- `Look` 开启但问题不依赖视觉时不截图、不上传，Qwen 直接回答。
+- Natural Pointing 每次使用完整单屏截图；手动 `Selected Text` 单独验证。
+- 连续三轮分别移动鼠标或改变窗口内容，每轮只能使用与当前 `turnId` 匹配的新证据。
+- DeepSeek 收到完整单屏图、冻结坐标和用户原问题；Qwen 收到可靠答案，不再根据通用
+  摘要猜测。
+- 终端跨行命令、Source Control 数量徽标和右下角发送按钮必须分别正确识别。
+- 低于 `0.7` 的视觉结果必须明确表达不确定；严格空间点框只在未来执行动作中验证。
+- 选中文字、鼠标附近文字、文章、图片和图表各 10 次，正确率至少 90%，错误窗口、
+  旧 Context 或跨轮 Context 命中为 0。
+- 保密应用和绝对秘密内容出境为 0；受控敏感信息继续本地遮挡。
+- 关闭、锁屏、睡眠、撤权、超时或会话结束后，临时截图与 Context 不可继续使用。
+
+**未来非阻塞验收 TODO（2026-09-14 用户决定延期）**
+
+- 真实整机睡眠、系统权限撤销，以及视觉理解仍在处理时锁屏/睡眠的设备验收，留到
+  后续集中执行。当前已有自动化取消覆盖和一次真实空闲会话锁屏/解锁证据；延期不等于
+  通过，也不影响当前主要功能收尾。
+- 恢复时统一完成生命周期 50 次矩阵，保留每次固定 trace，并要求晚到或过期 Context
+  接受数量为 0；不要为补数字重复已经有完整证据的样本。
+
+**回滚**
+
+- 关闭 `Look` 后立即恢复现有手动 Context 和普通语音路径。
+- 按需截图超时、Qwen 未路由或 Vision 失败时，不使用旧 Context 代替；明确失败并允许
+  用户改用 `Region`。
 
 #### Release 1D：Violet Continuity
 
@@ -448,25 +471,25 @@ Sprinkle 作为浏览器结构化感官接入 Mac 网关。浏览器中获得 DO
 
 ### 4.4 第一阶段持续验证命令
 
-仓库建立后统一提供：
+当前仓库可执行的命令：
 
 ```bash
-pnpm check
-pnpm test:integration
-pnpm test:e2e
-swift test
-docker compose config
-docker compose up -d
-./scripts/health-check.sh
-./scripts/backup.sh
-./scripts/restore-drill.sh
+pnpm check:ci
+pnpm macos:test
+pnpm macos:app
+docker compose -f infra/compose/compose.yaml config
 ```
 
-CI 必须验证协议兼容、TypeScript、Swift、数据库迁移、容器构建、安全扫描和关键端到端路径。
+现有测试包含在 Vitest/Swift Testing 中，没有单独的 `test:integration` 或 `test:e2e`
+脚本。启动、备份和恢复使用 `scripts/start-devbox-core.sh`、`backup-devbox.sh`、
+`restore-backup.sh`，需要相应环境配置，不能将它们当作无副作用的本地测试。
+CI 的目标门禁覆盖协议、类型、测试、构建、安全与关键路径；未实现的门禁必须显式标注，
+不能仅因路线列出就视为已有。
 
 ### 4.5 第一阶段依赖与授权
 
-- 内部集成远端、GitHub 可迁移镜像和 DeepSeek `deepseek-v4-flash` 文字模型 API 已经就绪；1C 开始前再提供多模态模型。
+- 内部集成远端、GitHub 可迁移镜像、DeepSeek 文字与视觉 API 已接入；模型可用不代表
+  精细目标识别质量已经达到验收门槛。
 - Release 1B 已完成：Qwen-Audio 3.0 Realtime Plus 是默认运行时，`Paraformer → DeepSeek → CosyVoice` 是显式配置的手动降级与供应商替换基线。两者均已完成真实 canary，Qwen 已通过批量设备验收；完整同集比较只在准备更换默认运行时或现有证据恶化时恢复。
 - Devbox SSH、Docker 和必要网络能力。
 - PostgreSQL。

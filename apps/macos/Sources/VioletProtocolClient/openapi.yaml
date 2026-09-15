@@ -253,6 +253,8 @@ paths:
                         type: string
                         minLength: 2
                         maxLength: 35
+                      onDemandContext:
+                        type: boolean
                       outputAudio:
                         $ref: '#/components/schemas/audioFormat'
                       outputModalities:
@@ -364,6 +366,61 @@ paths:
                     $ref: '#/components/schemas/uuid'
                   type:
                     const: response.cancel
+              - type: object
+                additionalProperties: false
+                required:
+                  - context
+                  - eventId
+                  - requestId
+                  - sequence
+                  - sessionId
+                  - turnId
+                  - type
+                properties:
+                  context:
+                    $ref: '#/components/schemas/context-envelope.schema'
+                  eventId:
+                    $ref: '#/components/schemas/uuid'
+                  requestId:
+                    $ref: '#/components/schemas/uuid'
+                  sequence:
+                    $ref: '#/components/schemas/sequence'
+                  sessionId:
+                    $ref: '#/components/schemas/uuid'
+                  turnId:
+                    $ref: '#/components/schemas/uuid'
+                  type:
+                    const: context.capture.succeeded
+              - type: object
+                additionalProperties: false
+                required:
+                  - eventId
+                  - reason
+                  - requestId
+                  - sequence
+                  - sessionId
+                  - turnId
+                  - type
+                properties:
+                  eventId:
+                    $ref: '#/components/schemas/uuid'
+                  reason:
+                    type: string
+                    enum:
+                      - blocked
+                      - cancelled
+                      - permission_denied
+                      - unavailable
+                  requestId:
+                    $ref: '#/components/schemas/uuid'
+                  sequence:
+                    $ref: '#/components/schemas/sequence'
+                  sessionId:
+                    $ref: '#/components/schemas/uuid'
+                  turnId:
+                    $ref: '#/components/schemas/uuid'
+                  type:
+                    const: context.capture.failed
               - type: object
                 additionalProperties: false
                 required:
@@ -667,6 +724,54 @@ paths:
               - type: object
                 additionalProperties: false
                 required:
+                  - eventId
+                  - reason
+                  - sequence
+                  - sessionId
+                  - turnId
+                  - type
+                properties:
+                  eventId:
+                    $ref: '#/components/schemas/uuid'
+                  reason:
+                    const: user_intent
+                  sequence:
+                    $ref: '#/components/schemas/sequence'
+                  sessionId:
+                    $ref: '#/components/schemas/uuid'
+                  turnId:
+                    $ref: '#/components/schemas/uuid'
+                  type:
+                    const: session.end_requested
+              - type: object
+                additionalProperties: false
+                required:
+                  - eventId
+                  - expiresAt
+                  - requestId
+                  - sequence
+                  - sessionId
+                  - turnId
+                  - type
+                properties:
+                  eventId:
+                    $ref: '#/components/schemas/uuid'
+                  expiresAt:
+                    type: string
+                    format: date-time
+                  requestId:
+                    $ref: '#/components/schemas/uuid'
+                  sequence:
+                    $ref: '#/components/schemas/sequence'
+                  sessionId:
+                    $ref: '#/components/schemas/uuid'
+                  turnId:
+                    $ref: '#/components/schemas/uuid'
+                  type:
+                    const: context.capture.requested
+              - type: object
+                additionalProperties: false
+                required:
                   - code
                   - eventId
                   - message
@@ -839,11 +944,17 @@ components:
     uuid:
       type: string
       format: uuid
-    bundleId:
-      type: string
-      minLength: 3
-      maxLength: 255
-      pattern: ^[A-Za-z0-9][A-Za-z0-9.-]+$
+    normalizedPoint:
+      type: object
+      additionalProperties: false
+      required:
+        - x
+        - 'y'
+      properties:
+        x:
+          $ref: '#/components/schemas/probability'
+        'y':
+          $ref: '#/components/schemas/probability'
     image:
       type: object
       additionalProperties: false
@@ -892,6 +1003,11 @@ components:
           $ref: '#/components/schemas/probability'
         'y':
           $ref: '#/components/schemas/probability'
+    bundleId:
+      type: string
+      minLength: 3
+      maxLength: 255
+      pattern: ^[A-Za-z0-9][A-Za-z0-9.-]+$
     context-envelope.schema:
       $schema: https://json-schema.org/draft/2020-12/schema
       $id: https://violet.local/schemas/v1/context-envelope.schema.json
@@ -962,28 +1078,13 @@ components:
             - type: object
               additionalProperties: false
               required:
-                - appBundleId
-                - type
-              properties:
-                appBundleId:
-                  $ref: '#/components/schemas/bundleId'
-                appName:
-                  type: string
-                  minLength: 1
-                  maxLength: 256
-                type:
-                  const: app.state
-            - type: object
-              additionalProperties: false
-              required:
                 - image
                 - type
               properties:
+                focusPoint:
+                  $ref: '#/components/schemas/normalizedPoint'
                 image:
                   $ref: '#/components/schemas/image'
-                localText:
-                  type: string
-                  maxLength: 65536
                 type:
                   const: screen.snapshot
             - type: object
@@ -993,27 +1094,14 @@ components:
                 - region
                 - type
               properties:
+                focusPoint:
+                  $ref: '#/components/schemas/normalizedPoint'
                 image:
                   $ref: '#/components/schemas/image'
-                localText:
-                  type: string
-                  maxLength: 65536
                 region:
                   $ref: '#/components/schemas/normalizedRect'
                 type:
                   const: focus.region
-            - type: object
-              additionalProperties: false
-              required:
-                - transcript
-                - type
-              properties:
-                transcript:
-                  type: string
-                  minLength: 1
-                  maxLength: 65536
-                type:
-                  const: audio.utterance
         previousEventId:
           $ref: '#/components/schemas/uuid'
         protocolVersion:
@@ -1115,6 +1203,17 @@ components:
               $ref: '#/components/schemas/probability'
             width:
               $ref: '#/components/schemas/probability'
+            x:
+              $ref: '#/components/schemas/probability'
+            'y':
+              $ref: '#/components/schemas/probability'
+        normalizedPoint:
+          type: object
+          additionalProperties: false
+          required:
+            - x
+            - 'y'
+          properties:
             x:
               $ref: '#/components/schemas/probability'
             'y':
@@ -1326,6 +1425,8 @@ components:
                   type: string
                   minLength: 2
                   maxLength: 35
+                onDemandContext:
+                  type: boolean
                 outputAudio:
                   $ref: '#/components/schemas/audioFormat'
                 outputModalities:
@@ -1437,6 +1538,61 @@ components:
               $ref: '#/components/schemas/uuid'
             type:
               const: response.cancel
+        - type: object
+          additionalProperties: false
+          required:
+            - context
+            - eventId
+            - requestId
+            - sequence
+            - sessionId
+            - turnId
+            - type
+          properties:
+            context:
+              $ref: '#/components/schemas/context-envelope.schema'
+            eventId:
+              $ref: '#/components/schemas/uuid'
+            requestId:
+              $ref: '#/components/schemas/uuid'
+            sequence:
+              $ref: '#/components/schemas/sequence'
+            sessionId:
+              $ref: '#/components/schemas/uuid'
+            turnId:
+              $ref: '#/components/schemas/uuid'
+            type:
+              const: context.capture.succeeded
+        - type: object
+          additionalProperties: false
+          required:
+            - eventId
+            - reason
+            - requestId
+            - sequence
+            - sessionId
+            - turnId
+            - type
+          properties:
+            eventId:
+              $ref: '#/components/schemas/uuid'
+            reason:
+              type: string
+              enum:
+                - blocked
+                - cancelled
+                - permission_denied
+                - unavailable
+            requestId:
+              $ref: '#/components/schemas/uuid'
+            sequence:
+              $ref: '#/components/schemas/sequence'
+            sessionId:
+              $ref: '#/components/schemas/uuid'
+            turnId:
+              $ref: '#/components/schemas/uuid'
+            type:
+              const: context.capture.failed
         - type: object
           additionalProperties: false
           required:
@@ -1750,6 +1906,54 @@ components:
               $ref: '#/components/schemas/uuid'
             type:
               const: response.cancelled
+        - type: object
+          additionalProperties: false
+          required:
+            - eventId
+            - reason
+            - sequence
+            - sessionId
+            - turnId
+            - type
+          properties:
+            eventId:
+              $ref: '#/components/schemas/uuid'
+            reason:
+              const: user_intent
+            sequence:
+              $ref: '#/components/schemas/sequence'
+            sessionId:
+              $ref: '#/components/schemas/uuid'
+            turnId:
+              $ref: '#/components/schemas/uuid'
+            type:
+              const: session.end_requested
+        - type: object
+          additionalProperties: false
+          required:
+            - eventId
+            - expiresAt
+            - requestId
+            - sequence
+            - sessionId
+            - turnId
+            - type
+          properties:
+            eventId:
+              $ref: '#/components/schemas/uuid'
+            expiresAt:
+              type: string
+              format: date-time
+            requestId:
+              $ref: '#/components/schemas/uuid'
+            sequence:
+              $ref: '#/components/schemas/sequence'
+            sessionId:
+              $ref: '#/components/schemas/uuid'
+            turnId:
+              $ref: '#/components/schemas/uuid'
+            type:
+              const: context.capture.requested
         - type: object
           additionalProperties: false
           required:

@@ -17,6 +17,8 @@ WORKDIR /opt/violet-core
 COPY --from=build --chown=node:node /opt/violet-core ./
 COPY --from=build --chown=node:node /workspace/infra/migrations ./migrations
 
+RUN mkdir -p /var/lib/violet/test-traces && chown node:node /var/lib/violet/test-traces && chmod 700 /var/lib/violet/test-traces
+
 USER node
 EXPOSE 4310
 CMD ["node", "dist/bootstrap.js"]

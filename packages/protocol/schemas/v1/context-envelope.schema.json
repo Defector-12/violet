@@ -79,32 +79,13 @@
         {
           "type": "object",
           "additionalProperties": false,
-          "required": ["appBundleId", "type"],
-          "properties": {
-            "appBundleId": {
-              "$ref": "#/$defs/bundleId"
-            },
-            "appName": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 256
-            },
-            "type": {
-              "const": "app.state"
-            }
-          }
-        },
-        {
-          "type": "object",
-          "additionalProperties": false,
           "required": ["image", "type"],
           "properties": {
+            "focusPoint": {
+              "$ref": "#/$defs/normalizedPoint"
+            },
             "image": {
               "$ref": "#/$defs/image"
-            },
-            "localText": {
-              "type": "string",
-              "maxLength": 65536
             },
             "type": {
               "const": "screen.snapshot"
@@ -116,33 +97,17 @@
           "additionalProperties": false,
           "required": ["image", "region", "type"],
           "properties": {
+            "focusPoint": {
+              "$ref": "#/$defs/normalizedPoint"
+            },
             "image": {
               "$ref": "#/$defs/image"
-            },
-            "localText": {
-              "type": "string",
-              "maxLength": 65536
             },
             "region": {
               "$ref": "#/$defs/normalizedRect"
             },
             "type": {
               "const": "focus.region"
-            }
-          }
-        },
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["transcript", "type"],
-          "properties": {
-            "transcript": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 65536
-            },
-            "type": {
-              "const": "audio.utterance"
             }
           }
         }
@@ -251,6 +216,19 @@
         "width": {
           "$ref": "#/$defs/probability"
         },
+        "x": {
+          "$ref": "#/$defs/probability"
+        },
+        "y": {
+          "$ref": "#/$defs/probability"
+        }
+      }
+    },
+    "normalizedPoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["x", "y"],
+      "properties": {
         "x": {
           "$ref": "#/$defs/probability"
         },

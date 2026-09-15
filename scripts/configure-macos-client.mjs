@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -13,13 +13,24 @@ if (!host || !/^[A-Za-z0-9._-]+$/.test(host)) {
 }
 
 const path = process.env["VIOLET_CLIENT_CONFIG"] ?? join(homedir(), ".config/violet/client.json");
+let excludedContextBundleIds = [];
+if (existsSync(path)) {
+  const existing = JSON.parse(readFileSync(path, "utf8"));
+  if (
+    !Array.isArray(existing.excludedContextBundleIds) ||
+    existing.excludedContextBundleIds.some((value) => typeof value !== "string")
+  ) {
+    throw new Error("Existing Violet client configuration is invalid");
+  }
+  excludedContextBundleIds = existing.excludedContextBundleIds;
+}
 mkdirSync(dirname(path), { mode: 0o700, recursive: true });
 writeFileSync(
   path,
   `${JSON.stringify(
     {
       coreURL: "http://127.0.0.1:14310",
-      excludedContextBundleIds: [],
+      excludedContextBundleIds,
       sshTunnel: {
         host,
         localPort: 14310,

@@ -20,7 +20,12 @@ struct RealtimeAcceptanceTests {
       )
 
     recorder?.record(
-      .init(type: .speechStopped, sessionId: sessionId, turnId: turnId)
+      .init(
+        type: .systemSuspended,
+        reason: .sessionInactive,
+        sessionId: sessionId,
+        turnId: turnId
+      )
     )
     recorder?.flush()
     #expect(recorder is JSONLinesRealtimeAcceptanceRecorder)
@@ -36,7 +41,8 @@ struct RealtimeAcceptanceTests {
     )
 
     #expect(object["schemaVersion"] as? Int == 1)
-    #expect(object["type"] as? String == "speech.stopped")
+    #expect(object["type"] as? String == "system.suspended")
+    #expect(object["reason"] as? String == "session_inactive")
     #expect(object["sessionId"] as? String == sessionId.uuidString)
     #expect(object["turnId"] as? String == turnId.uuidString)
     #expect(object["runId"] is String)

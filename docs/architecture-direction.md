@@ -1,16 +1,19 @@
 # Violet 总体架构方向
 
-> 状态：架构方向基线。本文定义系统边界和候选技术，不代表具体框架与供应商已经完成最终选型。
+> 状态：架构方向基线。本文只定义稳定的系统边界和技术方向，不维护发布进度、
+> 部署版本、测试数量或临时故障结论。
 
-## 1. 当前状态
+## 1. 文档边界
 
-- Release 1A 已完成交付。当前 `main` 已包含 pnpm workspace、JSON Schema/OpenAPI 协议、TypeScript SDK、Swift 生成客户端边界、模块化 Core、`dev-cli`、PostgreSQL 迁移、应用层信封加密、DeepSeek Adapter、Docker Compose、可观测配置和加密备份恢复。
-- Release 1B 已完成实现、验收和合并。`RealtimeSession v1`、WebSocket、`RealtimeConversationPort`、确定性实时 Adapter 和最终事件落账可用；原生菜单栏 App、Keychain、可选 SSH 隧道、全局快捷键、系统生命周期和 `AudioIOPort` 边界已经构建。Qwen Adapter 已通过 MR !14 合并，持续会话、`smart_turn`、最近 20 轮上下文、点击与语音打断均已通过真实验收。2026-08-23 的批量设备验收通过 174 次触发、88 次语音、31 次打断和 54 次停止门禁，并覆盖 SSH 断线恢复、250ms 单向延迟和三类音频路由。`Paraformer → DeepSeek → CosyVoice` Pipeline 基线已通过 MR !15 合并，三次静默真实 canary 的断句到首音频为 1.34–1.94 秒且中文转写准确。Qwen 是默认运行时，Pipeline 只通过显式配置启用。
-- Release 1C 已形成实现候选并集成到代码主线：Context Envelope v1、短时 Context Session、DeepSeek `deepseek-v4-flash-vision-exp` Adapter、加密 TOS 临时对象、Mac 窗口/显示器选择、区域框选、Accessibility、Apple Vision OCR、本地敏感遮挡和文字/Realtime Context 注入已实现。本地 `sherpa-onnx v1.13.6` 唤醒 Adapter、`Violet` 开放词汇模型、显式启用开关和锁屏/睡眠停采也已实现。DeepSeek Vision 真实 canary、Screen Recording/Accessibility 冒烟和视觉矩阵 20/50 已通过；当前唤醒候选真实短门禁为 15/20，未达到 19/20。用户当前未遇到其他 Bug，已于 2026-08-27 暂停剩余视觉、隐私生命周期和唤醒验收，待后续主功能开发完成后统一恢复，或由用户随时发起。代码集成不等于 Release 正式验收。
-- 已完成现有阅读工具 Sprinkle 的只读评估。Sprinkle 是 WXT、React、TypeScript 构建的浏览器扩展，可复用其页面提取、文字与图片选择、区域框选和浏览器内交互能力，但不能作为 Violet 本体。
-- 当前可使用一台公司 Devbox 作为临时云环境：32 核 CPU、128G 内存、120G 系统盘、500G 数据盘、veLinux 1.0。它足以支撑第一阶段的后端、数据库、Worker、沙箱和测试。
 - Violet 是单用户、云端智能优先、Mac 先行的绿地项目。
-- 当前 1C 候选的格式、生成物、类型和构建门禁通过，TypeScript/JavaScript 75 个测试和 Swift 33 个测试通过；Mac App 已打包并通过深度签名校验。本地唤醒模型使用合成 `Violet` 音频完成 100 次正样本和 100 次静音负样本验证，结果为 100/100 触发、0/100 误触发，CPU 处理 p95 为 22.2ms；该结果不能替代真实办公环境验收。Release 1A 的真实模型 20 轮纵向验证、两次物理重启、加密备份、TOS 上传下载和空库恢复已经通过，Release 1B Core 的 ready/sealed、认证、Realtime 握手和遥测白名单验证通过。2026-08-27 收口前 Devbox 数据库包含 567 条连续加密事件。
+- 产品原则与不可突破的用户边界见
+  [产品设计理念与宪法](./product-philosophy-and-constitution.md)。
+- 当前实现、部署、测试证据和剩余门禁以对应 Release 验收文档为准；Release 1C/1C.1
+  统一见 [Release 1C 验收](./release-1c-acceptance.md)。
+- 已发生的实现过程、失败案例和历史决策见 [历史记录](./历史记录.md)，不得用历史状态
+  覆盖更新的验收事实。
+- 本文中的框架、供应商和组件名称表示当前架构选择或候选边界，不代表永久绑定，也不
+  单独证明相关能力已经交付。
 
 ## 2. 架构目标
 
@@ -89,7 +92,15 @@ Mac 客户端是 Violet 的第一具身体，不承载完整身份。
 
 客户端不要求运行本地大模型，但唤醒检测、权限校验、敏感过滤和加密必须在设备端完成。
 
-Release 1C 的语音唤醒使用 `WakeWordDetectorPort` 隔离具体引擎。当前 Mac Adapter 使用 `sherpa-onnx v1.13.6` 和带 Apache-2.0 模型卡的 GigaSpeech 英文 KWS 权重；模型与动态库通过固定 SHA-256 下载到本地构建缓存，不进入 Git。唤醒功能默认关闭，用户开启开关后才构成持续本地监听授权；唤醒前 PCM 仅进入本地 KWS，不写盘、不上传、不记录。检测成功后先停止唤醒引擎，再显示浮层、播放本地打包的 Qwen `longanqian` 短回执，并在播放完成后启动现有 Realtime 会话；实时会话结束后才恢复唤醒。
+Release 1C 的语音唤醒使用 `WakeWordDetectorPort` 隔离具体引擎。当前 Mac Adapter 使用 `sherpa-onnx v1.13.6` 和带 Apache-2.0 模型卡的 GigaSpeech 英文 KWS 权重；模型与动态库通过固定 SHA-256 下载到本地构建缓存，不进入 Git。唤醒功能默认关闭，用户开启开关后才构成持续本地监听授权；唤醒前 PCM 仅进入本地 KWS，不写盘、不上传、不记录。检测成功后先停止唤醒引擎，在不自动显示浮层的状态下播放本地打包的 Qwen `longanqian` 短回执，并在播放完成后启动现有 Realtime 会话；用户稍后打开浮层时续接该会话，实时会话结束后才恢复唤醒。
+
+Release 1C.1 增加独立且默认关闭的 `Look` 授权。Qwen 是唯一视觉意图路由器；Mac
+按当前 `turnId` 冻结目标和坐标，仅在收到同轮请求后采集完整单屏。图片先在本机执行
+保密应用阻断、绝对秘密阻断和受控敏感遮挡，再由 DeepSeek 一次返回答案与置信度。
+Core 只执行授权、关联、新鲜度、取消、生命周期和置信度门禁，不用 OCR、颜色、位置词
+或目标框二次裁决只读答案。该流程不持续采帧，不在 `Look` 关闭时采集，也不进入长期
+记忆。完整合同见 [Natural Pointing](./natural-pointing-handoff.md)，记录边界见
+[Test Evidence](./testing/README.md)。
 
 感知证据的默认优先级为：
 
@@ -117,6 +128,10 @@ Violet 使用版本化 `RealtimeSession` 协议连接设备与 Core。协议至�
 
 Mac 只通过 `AudioIOPort` 处理设备音频，通过 `RealtimeSession` 传递与供应商无关的事件。Core 提供 `RealtimeConversationPort`，允许接入两类适配器：
 
+供应商声明支持中断时，Mac 只以其 `speech.started` 事件停止播放，不再用麦克风峰值
+重复判定；供应商不支持中断时，才使用连续 4 帧高能量输入作为本地兜底。这样保留
+有线耳机下的语音插话，同时避免无转写、无服务端语音事件的噪声误停。
+
 ```text
 Pipeline Adapter
 音频 → ASR → 文字认知模型 → TTS → 音频
@@ -143,7 +158,8 @@ Integrated Realtime Adapter
 - 完整度、置信度、敏感等级和已执行的遮挡。
 - 内容类型、完整性校验和前后事件关联。
 
-内容负载按感官独立建模，例如 `browser.document`、`screen.snapshot`、`focus.region`、`audio.utterance`、`file.document` 和 `app.state`。Context 表示当前证据，不等同于长期记忆、任务状态或工具执行结果。
+当前内容负载为 `screen.snapshot`、`focus.region` 和 `focus.text`。Context 表示当前
+证据，不等同于长期记忆、任务状态或工具执行结果；新增感官类型应由真实生产者驱动。
 
 Mac 数据出境网关是 Mac 设备数据的唯一出口。应用适配器先把结构化内容交给 Mac，Mac 完成本地授权与敏感过滤后再发送云端。保密工作区只发送“本地策略已阻止感知”的状态，不发送实际内容。云端调用模型、MCP、TOS 和其他外部服务时，必须再经过独立的云端出境策略，不能复用或绕过 Mac 的感知授权。
 
@@ -175,7 +191,7 @@ Mac / 浏览器 / 未来设备
 
 ## 7. Violet 云端核心
 
-第一阶段采用模块化单体，而不是微服务集群。内部至少包含：
+第一阶段采用模块化单体，而不是微服务集群。以下是目标模块划分，不是当前实现清单：
 
 - **身份与关系模块**：维护 Violet 的人格、价值宪法、用户关系和连续身份。
 - **模型网关**：按任务质量、成本、延迟和多模态需求选择模型，避免绑定单一供应商。
@@ -351,11 +367,11 @@ Violet 只能通过只读诊断 Port 查询与当前目标相关的脱敏证据�
 
 第一阶段使用现有公司 Devbox 作为临时云环境，同时保持最少基础设施：
 
-- Mac 上一个 TypeScript 开发客户端，后续由原生 Mac 客户端接替日常入口。
+- Mac 原生菜单栏 App 是日常入口；TypeScript `dev-cli` 保留为文字调试与运维入口。
 - Devbox 上一个模块化后端核心。
 - Devbox 上一个 PostgreSQL + `pgvector` 开发数据库。
 - 火山引擎 TOS 私有普通桶，通过 S3 兼容 Port 接入；1A 用于加密备份，1C 起用于经过授权和信封加密的截图与附件。
-- Devbox 上一个或少量隔离执行 Worker 与任务沙箱。
+- 隔离执行 Worker 与任务沙箱属于后续 Release 1E，目前未实现。
 - Devbox 上 OpenTelemetry Collector 和 Grafana LGTM。
 - Release 1A 文字模型使用 DeepSeek OpenAI 兼容 API，模型为 `deepseek-v4-flash`；MCP 和开发 Agent 后续按需接入。
 - Release 1C 视觉理解使用独立的 `ContextUnderstandingPort`，首个 Adapter 为 DeepSeek OpenAI 兼容模型 `deepseek-v4-flash-vision-exp`。它只解析经过 Mac 本地门禁的图片证据，不替代文字模型或 Qwen 实时语音，并可由其他视觉 Adapter 显式替换。
@@ -464,20 +480,25 @@ Sprinkle 不扩建为 Violet 本体，而演化为浏览器结构化感官：
 
 ## 18. 关键风险与待决事项
 
-- Mac 全局快捷键、持续麦克风会话、能力门禁、自动断句、短期上下文和停止状态机已通过批量门禁；锁屏、显示器睡眠和 Deep Idle 已完成一次真实验收，重复锁屏与整机睡眠只保留为用户在场的发布前抽样。
-- Qwen-Audio 3.0 Realtime Plus 是 Release 1B 默认运行时，Pipeline 是手动降级与替换基线。系统 Voice Processing 在已测耳机路由上会让采集 PCM 全部为零并压低系统输出音量，因此当前使用原始输入和保守的本地能量门保证及时停播；外置、Bluetooth、MacBook 内置路由和弱网恢复已验证。只有准备更换默认运行时，或 Qwen 的质量、费用、地域和稳定性证据恶化时，才恢复完整同集比较。
+本节保留架构风险。原发布状态、验证结果和具体执行待办已迁入
+[Release 1C 验收](./release-1c-acceptance.md)的“从架构文档迁入的历史背景”；
+当前工作以对应验收文档的最新基线和剩余门禁为准。
+
+- 音频路由和系统生命周期差异需要实际设备证据；完整供应商同集比较仅在更换默认
+  运行时，或质量、费用、地域和稳定性证据恶化时恢复。
 - 端到端实时模型的预设音色不等于可克隆或任意设计音色；目标音色能力和合法使用边界尚需单独验证。
 - 任意应用中的指向、选区和结构化语义能否稳定融合，需要专项评估。
+- AX 不可用时需要截图兜底；几何校验不等于文字正确性验证。保留失败证据，
+  先由开发者回放，再交最终人工验收。
 - 记忆的正确写入、相关检索、冲突处理与删除传播尚需专项设计和测试。
 - 开发 Agent、部署工具和外部平台是否提供稳定 API、CLI 或 MCP 尚需验证。
-- 用户已经接受真实个人记忆进入当前 DeepSeek API 的数据处理风险；供应商条款变化仍需持续复核。
+- 供应商条款变化需要复核数据流向与授权范围，不得沿用过期授权。
 - 隔离执行采用本机容器、远程沙箱或混合方式尚未决定。
 - 模型自评与真实能力之间的偏差，需要通过独立测试和证据门禁控制。
 - 第一版成本、延迟、离线降级和服务故障恢复策略尚需设计。
-- Mac 到 Devbox 的第一阶段连接锁定为 SSH 隧道；非公司网络下是否可达仍需验证。
-- Devbox 的 systemd-logind 默认 `RemoveIPC=yes`；若目标用户没有 linger，最后一个登录会话结束时会删除该用户在 `/dev/shm` 中的运行秘密，导致后续重建只能 sealed。注入脚本必须先启用并验证目标用户 linger，再写入 `/dev/shm/violet`。
-- 内部集成远端、GitHub 可迁移镜像、DeepSeek 模型配置和个人火山引擎 TOS 桶已经就绪。两次暴露的 TOS Secret 均未使用；第二次轮换后的凭证已完成真实最小权限、版本清理、加密上传下载和恢复验证。
+- 部署连接、运行秘密的生命周期及重建恢复应在目标环境验证，不以健康探测代替功能验收。
 
-## 19. 下一步
+## 19. 执行入口
 
-按《工程路线》执行第一阶段。Release 1A 基座与 Release 1B Presence 已完成；Qwen 是默认实时运行时，Pipeline 是显式配置的降级与替换基线，禁止静默自动切换。Release 1C Violet Sight 的代码已集成到主线，剩余视觉、隐私生命周期和唤醒验收按用户决定暂停并保持可追踪，Release 状态仍是实现候选。下一主功能按路线进入 Release 1D Violet Continuity；1C 验收在后续主功能完成后统一恢复，也可由用户随时发起。
+当前发布工作读取对应验收文档的最新基线与剩余门禁；历史记录不构成新任务授权。
+只执行用户当前请求涉及的工作，不因阅读架构文档自动展开部署或完整发布流程。

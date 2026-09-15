@@ -5,6 +5,7 @@ import type {
   RealtimeConversationPort,
   RealtimeSessionConfiguration,
 } from "@violet/domain";
+import { AsyncQueue } from "./async-queue.js";
 
 export interface DeterministicRealtimeConversationPortOptions {
   readonly generateId: () => string;
@@ -36,7 +37,7 @@ class DeterministicRealtimeConversation implements RealtimeConversation {
     voiceKind: "none" as const,
   };
   readonly #generateId: () => string;
-  readonly #outputQueue = new AsyncOutputQueue();
+  readonly #outputQueue = new AsyncQueue<RealtimeConversationOutput>();
 
   constructor(generateId: () => string) {
     this.#generateId = generateId;
@@ -98,58 +99,5 @@ class DeterministicRealtimeConversation implements RealtimeConversation {
       turnId: input.turnId,
       type: "response-completed",
     });
-  }
-}
-
-class AsyncOutputQueue {
-  readonly #values: RealtimeConversationOutput[] = [];
-  readonly #waiters: Array<(value: RealtimeConversationOutput | undefined) => void> = [];
-  #closed = false;
-
-  close(): void {
-    if (this.#closed) {
-      return;
-    }
-    this.#closed = true;
-    for (const waiter of this.#waiters.splice(0)) {
-      waiter(undefined);
-    }
-  }
-
-  next(signal?: AbortSignal): Promise<RealtimeConversationOutput | undefined> {
-    const value = this.#values.shift();
-    if (value) {
-      return Promise.resolve(value);
-    }
-    if (this.#closed || signal?.aborted) {
-      return Promise.resolve(undefined);
-    }
-    return new Promise((resolve) => {
-      const waiter = (output: RealtimeConversationOutput | undefined) => {
-        signal?.removeEventListener("abort", onAbort);
-        resolve(output);
-      };
-      const onAbort = () => {
-        const index = this.#waiters.indexOf(waiter);
-        if (index >= 0) {
-          this.#waiters.splice(index, 1);
-        }
-        waiter(undefined);
-      };
-      this.#waiters.push(waiter);
-      signal?.addEventListener("abort", onAbort, { once: true });
-    });
-  }
-
-  push(output: RealtimeConversationOutput): void {
-    if (this.#closed) {
-      return;
-    }
-    const waiter = this.#waiters.shift();
-    if (waiter) {
-      waiter(output);
-    } else {
-      this.#values.push(output);
-    }
   }
 }

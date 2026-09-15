@@ -115,6 +115,7 @@ export async function encryptBackupToFile(
   }
 
   let output: FileHandle | undefined;
+  let ownsOutput = false;
   let position = 0;
   let plaintextBytes = 0;
   const plaintextHash = createHash("sha256");
@@ -123,6 +124,7 @@ export async function encryptBackupToFile(
 
   try {
     output = await open(options.outputPath, "wx", 0o600);
+    ownsOutput = true;
     position = await writeAll(output, magic, position);
     const encodedHeaderLength = Buffer.alloc(headerLengthSize);
     encodedHeaderLength.writeUInt32BE(headerBytes.length);
@@ -158,7 +160,7 @@ export async function encryptBackupToFile(
     };
   } catch (error) {
     await output?.close();
-    await rm(options.outputPath, { force: true });
+    if (ownsOutput) await rm(options.outputPath, { force: true });
     throw error;
   } finally {
     dataKey.fill(0);
@@ -179,6 +181,7 @@ export async function decryptBackupToFile(options: {
   const inputStats = await stat(options.inputPath);
   const input = await open(options.inputPath, "r");
   let output: FileHandle | undefined;
+  let ownsOutput = false;
   let dataKey: Buffer | undefined;
   let sharedSecret: Buffer | undefined;
   let wrappingKey: Buffer | undefined;
@@ -238,6 +241,7 @@ export async function decryptBackupToFile(options: {
     contentDecipher.setAuthTag(trailer.subarray(0, gcmTagLength));
 
     output = await open(options.outputPath, "wx", 0o600);
+    ownsOutput = true;
     let outputPosition = 0;
     let plaintextBytes = 0;
     const plaintextHash = createHash("sha256");
@@ -276,7 +280,7 @@ export async function decryptBackupToFile(options: {
     };
   } catch (error) {
     await output?.close();
-    await rm(options.outputPath, { force: true });
+    if (ownsOutput) await rm(options.outputPath, { force: true });
     throw error;
   } finally {
     await input.close();

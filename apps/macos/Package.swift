@@ -12,6 +12,7 @@ let package = Package(
     .library(name: "VioletMacCore", targets: ["VioletMacCore"]),
     .executable(name: "Violet", targets: ["VioletApp"]),
     .executable(name: "violet-credential", targets: ["VioletCredentialTool"]),
+    .executable(name: "violet-context-replay-capture", targets: ["VioletContextReplayCapture"]),
   ],
   dependencies: [
     .package(
@@ -65,6 +66,10 @@ let package = Package(
     ),
     .executableTarget(
       name: "VioletCredentialTool",
+      dependencies: ["VioletMacCore"]
+    ),
+    .executableTarget(
+      name: "VioletContextReplayCapture",
       dependencies: ["VioletMacCore"]
     ),
     .testTarget(

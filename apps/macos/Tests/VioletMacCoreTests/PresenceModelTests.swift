@@ -1,3 +1,5 @@
+import AppKit
+import CoreAudio
 import Foundation
 import Testing
 
@@ -5,6 +7,31 @@ import Testing
 
 @Suite("Presence model")
 struct PresenceModelTests {
+  @Test
+  func suppressesPlaybackCaptureOnlyForBuiltInOutput() {
+    #expect(
+      shouldSuppressCaptureDuringPlayback(
+        outputTransportType: kAudioDeviceTransportTypeBuiltIn
+      )
+    )
+    #expect(
+      !shouldSuppressCaptureDuringPlayback(
+        outputTransportType: kAudioDeviceTransportTypeBuiltIn,
+        outputDataSource: headphoneOutputDataSource
+      )
+    )
+    #expect(
+      !shouldSuppressCaptureDuringPlayback(
+        outputTransportType: kAudioDeviceTransportTypeBluetooth
+      )
+    )
+    #expect(
+      !shouldSuppressCaptureDuringPlayback(
+        outputTransportType: nil
+      )
+    )
+  }
+
   @Test
   @MainActor
   func refreshesReadyAndSealedStates() async {
@@ -161,6 +188,11 @@ struct PresenceModelTests {
     try await waitUntil { model.audioState == .listening }
     audio.emit(inputFrame)
     try await waitUntil { model.messages.count == 2 && !audio.playedFrames.isEmpty }
+    let deadline = ContinuousClock().now.advanced(by: .seconds(1))
+    while await realtime.receivedFrames() != [inputFrame] {
+      guard ContinuousClock().now < deadline else { throw TestError.timeout }
+      try await Task.sleep(for: .milliseconds(10))
+    }
 
     #expect(await realtime.receivedFrames() == [inputFrame])
     #expect(audio.captureAccessRequestCount == 1)
@@ -175,6 +207,149 @@ struct PresenceModelTests {
     model.toggleAudioSession()
     #expect(model.audioState == .idle)
     #expect(audio.stopCaptureCount >= 1)
+  }
+
+  @Test
+  @MainActor
+  func explicitVoiceExitStopsCaptureAndClearsContext() async throws {
+    let turnId = UUID()
+    let audio = FakeAudioIO()
+    let contextClient = FakeContextClient()
+    let realtime = FakeRealtimeSessionClient(
+      capabilities: audioCapabilities,
+      events: [
+        .speechStarted(turnId: turnId),
+        .transcript(text: "Violet，结束对话。", final: true, turnId: turnId),
+      ]
+    )
+    let model = PresenceModel(
+      client: FakeCoreClient(statusValue: .init(state: .ready, version: "test")),
+      audioIO: audio,
+      contextCapture: FakeContextCapture(
+        result: .text(appBundleId: "com.example.Reader", text: "Temporary context")
+      ),
+      contextClient: contextClient,
+      realtimeClient: realtime
+    )
+    await model.refresh()
+    model.captureContext(.selectedText)
+    await model.waitForContextPreparation()
+
+    model.startAudioSession()
+    try await waitUntil {
+      model.messages.map(\.text) == ["Violet，结束对话。"]
+        && model.audioState == .idle
+    }
+    try await Task.sleep(for: .milliseconds(20))
+
+    #expect(audio.stopCaptureCount >= 1)
+    #expect(model.contextState == .idle)
+    #expect(await contextClient.deletedSessionCount == 1)
+    #expect(await realtime.connectCount == 1)
+  }
+
+  @Test
+  @MainActor
+  func modelIntentExitStopsCaptureAndClearsContext() async throws {
+    let turnId = UUID()
+    let responseId = UUID()
+    let audio = FakeAudioIO()
+    let contextClient = FakeContextClient()
+    let recorder = FakeAcceptanceRecorder()
+    let realtime = FakeRealtimeSessionClient(
+      capabilities: audioCapabilities,
+      events: [
+        .speechStarted(turnId: turnId),
+        .transcript(text: "拜拜，就先这样吧", final: true, turnId: turnId),
+        .responseStarted(responseId: responseId, turnId: turnId),
+        .responseText(responseId: responseId, text: "拜拜，下次见。", turnId: turnId),
+        .responseAudio(responseId: responseId, audio: Data([0, 0]), turnId: turnId),
+        .responseCompleted(responseId: responseId, turnId: turnId),
+        .endRequested(turnId: turnId),
+      ],
+      eventInterval: .milliseconds(2)
+    )
+    let model = PresenceModel(
+      client: FakeCoreClient(statusValue: .init(state: .ready, version: "test")),
+      audioIO: audio,
+      contextCapture: FakeContextCapture(
+        result: .text(appBundleId: "com.example.Reader", text: "Temporary context")
+      ),
+      contextClient: contextClient,
+      realtimeClient: realtime,
+      acceptanceRecorder: recorder
+    )
+    await model.refresh()
+    model.captureContext(.selectedText)
+    await model.waitForContextPreparation()
+
+    model.startAudioSession()
+    try await waitUntil {
+      model.messages.map(\.text) == ["拜拜，就先这样吧", "拜拜，下次见。"]
+        && model.audioState == .listening
+        && audio.isPlaying
+    }
+    #expect(audio.isCapturing)
+    audio.finishPlayback()
+    try await waitUntil { model.audioState == .idle }
+    try await Task.sleep(for: .milliseconds(20))
+
+    #expect(!isConversationExitCommand("拜拜，就先这样吧"))
+    #expect(audio.stopCaptureCount >= 1)
+    #expect(model.contextState == .idle)
+    #expect(await contextClient.deletedSessionCount == 1)
+    #expect(
+      recorder.marks.contains {
+        $0.type == .sessionEnded && $0.reason == .modelIntent
+      }
+    )
+  }
+
+  @Test
+  @MainActor
+  func inactivityTimeoutStopsCaptureAndClearsContext() async throws {
+    let audio = FakeAudioIO()
+    let contextClient = FakeContextClient()
+    let recorder = FakeAcceptanceRecorder()
+    let realtime = FakeRealtimeSessionClient(capabilities: audioCapabilities)
+    let model = PresenceModel(
+      client: FakeCoreClient(statusValue: .init(state: .ready, version: "test")),
+      audioIO: audio,
+      audioInactivityTimeout: .milliseconds(30),
+      contextCapture: FakeContextCapture(
+        result: .text(appBundleId: "com.example.Reader", text: "Temporary context")
+      ),
+      contextClient: contextClient,
+      realtimeClient: realtime,
+      acceptanceRecorder: recorder
+    )
+    await model.refresh()
+    model.captureContext(.selectedText)
+    await model.waitForContextPreparation()
+
+    model.startAudioSession()
+    try await waitUntil { audio.startCaptureCount == 1 }
+    try await waitUntil { model.audioState == .idle }
+    try await Task.sleep(for: .milliseconds(20))
+
+    #expect(audio.stopCaptureCount >= 1)
+    #expect(model.contextState == .idle)
+    #expect(await contextClient.deletedSessionCount == 1)
+    #expect(
+      recorder.marks.contains {
+        $0.type == .sessionEnded && $0.reason == .inactivityTimeout
+      }
+    )
+  }
+
+  @Test
+  func matchesOnlyExplicitConversationExitCommands() {
+    #expect(isConversationExitCommand("结束对话"))
+    #expect(!isConversationExitCommand("Violet，先这样吧。"))
+    #expect(!isConversationExitCommand("再见"))
+    #expect(isConversationExitCommand("Stop listening"))
+    #expect(!isConversationExitCommand("请解释如何实现结束对话功能"))
+    #expect(!isConversationExitCommand("停止播放当前回复"))
   }
 
   @Test
@@ -224,6 +399,31 @@ struct PresenceModelTests {
       ])
     #expect(model.audioState == .listening)
 
+    model.cancelAudioSession()
+  }
+
+  @Test
+  @MainActor
+  func removesCancelledEmptyToolReplyBeforeTheAnswer() async throws {
+    let turnId = UUID()
+    let cancelled = UUID()
+    let answer = UUID()
+    let realtime = FakeRealtimeSessionClient(
+      capabilities: audioCapabilities,
+      events: [
+        .responseStarted(responseId: cancelled, turnId: turnId),
+        .responseCancelled(responseId: cancelled),
+        .responseStarted(responseId: answer, turnId: turnId),
+        .responseText(responseId: answer, text: "North: 12 C, 8 m/s", turnId: turnId),
+        .responseCompleted(responseId: answer, turnId: turnId),
+      ]
+    )
+    let model = PresenceModel(client: FakeCoreClient(statusValue: .init(state: .ready, version: "test")),
+      audioIO: FakeAudioIO(), realtimeClient: realtime)
+    await model.refresh()
+    model.startAudioSession()
+    try await waitUntil { model.messages.last?.text == "North: 12 C, 8 m/s" }
+    #expect(model.messages.count == 1)
     model.cancelAudioSession()
   }
 
@@ -339,6 +539,14 @@ struct PresenceModelTests {
 
     audio.emit(voicedFrame)
     audio.emit(voicedFrame)
+    audio.emit(voicedFrame)
+    try await Task.sleep(for: .milliseconds(30))
+
+    #expect(model.audioState == .processing)
+    #expect(audio.isPlaying)
+    #expect(await realtime.cancelResponseCount == 0)
+
+    audio.emit(voicedFrame)
     try await Task.sleep(for: .milliseconds(30))
 
     #expect(model.audioState == .listening)
@@ -347,6 +555,66 @@ struct PresenceModelTests {
     #expect(
       acceptance.marks
         .filter { $0.reason == .localSpeech }
+        .map(\.type)
+        == [.interruptionDetected, .playbackStopped]
+    )
+    model.cancelAudioSession()
+  }
+
+  @Test
+  @MainActor
+  func providerInterruptionIgnoresLocalPeaksAndStopsOnServerSpeech() async throws {
+    let responseTurnId = UUID()
+    let responseId = UUID()
+    let spokenTurnId = UUID()
+    let audio = FakeAudioIO()
+    let acceptance = FakeAcceptanceRecorder()
+    let realtime = FakeRealtimeSessionClient(
+      capabilities: RealtimeCapabilities(
+        inputAudio: .init(sampleRate: 16_000),
+        inputModalities: ["audio", "text"],
+        interruption: true,
+        outputAudio: .init(sampleRate: 24_000),
+        outputModalities: ["audio", "text"],
+        runtimeKind: "integrated",
+        transcription: true,
+        turnDetection: "smart_turn",
+        voiceKind: "preset"
+      ),
+      events: [
+        .responseStarted(responseId: responseId, turnId: responseTurnId),
+        .responseAudio(responseId: responseId, audio: Data([0, 0]), turnId: responseTurnId),
+        .speechStarted(turnId: spokenTurnId),
+      ],
+      eventInterval: .milliseconds(100)
+    )
+    let model = PresenceModel(
+      client: FakeCoreClient(statusValue: .init(state: .ready, version: "test")),
+      audioIO: audio,
+      realtimeClient: realtime,
+      acceptanceRecorder: acceptance
+    )
+    let peakFrame = VioletAudioFrame(
+      data: Data([0xD0, 0x07, 0xD0, 0x07]),
+      format: VioletAudioFormat(sampleRate: 16_000)
+    )
+    await model.refresh()
+    model.startAudioSession()
+    try await waitUntil { audio.isPlaying }
+
+    for _ in 0..<8 {
+      audio.emit(peakFrame)
+    }
+    try await Task.sleep(for: .milliseconds(30))
+
+    #expect(audio.isPlaying)
+    #expect(await realtime.cancelResponseCount == 0)
+    #expect(!acceptance.marks.contains { $0.reason == .localSpeech })
+
+    try await waitUntil { !audio.isPlaying }
+    #expect(
+      acceptance.marks
+        .filter { $0.reason == .serverSpeech }
         .map(\.type)
         == [.interruptionDetected, .playbackStopped]
     )
@@ -471,6 +739,45 @@ struct PresenceModelTests {
   }
 
   @Test
+  @MainActor
+  func realtimeStreamFailureCancelsAnActiveContextCapture() async throws {
+    let defaults = isolatedPresenceDefaults()
+    let capture = FakeContextCapture(
+      captureDelays: [.milliseconds(50)],
+      result: .text(appBundleId: "com.apple.Safari", text: "Late result")
+    )
+    let turnId = UUID()
+    let realtime = FakeRealtimeSessionClient(
+      capabilities: audioCapabilities,
+      events: [
+        .speechStopped(turnId: turnId),
+        .contextCaptureRequested(
+          requestId: UUID(),
+          turnId: turnId,
+          expiresAt: Date().addingTimeInterval(10)
+        ),
+      ],
+      streamFailureCount: 1
+    )
+    let model = PresenceModel(
+      client: FakeCoreClient(statusValue: .init(state: .ready, version: "test")),
+      audioIO: FakeAudioIO(),
+      contextCapture: capture,
+      contextClient: FakeContextClient(),
+      defaults: defaults,
+      realtimeClient: realtime
+    )
+    await model.refresh()
+    model.setNaturalPointingEnabled(true)
+
+    model.startAudioSession()
+    try await waitUntilAsync { await realtime.captureFailureReasons == [.cancelled] }
+
+    #expect(await realtime.captureSuccessCount == 0)
+    #expect(!model.isAudioSessionActive)
+  }
+
+  @Test
   func decodesProviderNeutralRealtimeEvents() throws {
     let sessionId = UUID()
     let turnId = UUID()
@@ -518,6 +825,32 @@ struct PresenceModelTests {
       }
       """.utf8
     )
+    let endRequested = Data(
+      """
+      {
+        "eventId": "\(UUID())",
+        "reason": "user_intent",
+        "sequence": 4,
+        "sessionId": "\(sessionId)",
+        "turnId": "\(turnId)",
+        "type": "session.end_requested"
+      }
+      """.utf8
+    )
+    let captureRequestId = UUID()
+    let captureRequested = Data(
+      """
+      {
+        "eventId": "\(UUID())",
+        "expiresAt": "2026-08-31T12:00:00.000Z",
+        "requestId": "\(captureRequestId)",
+        "sequence": 5,
+        "sessionId": "\(sessionId)",
+        "turnId": "\(turnId)",
+        "type": "context.capture.requested"
+      }
+      """.utf8
+    )
 
     #expect(
       try decodeRealtimeServerEvent(ready)
@@ -544,6 +877,18 @@ struct PresenceModelTests {
     #expect(
       try decodeRealtimeServerEvent(speechStarted)
         == .speechStarted(turnId: turnId)
+    )
+    #expect(
+      try decodeRealtimeServerEvent(endRequested)
+        == .endRequested(turnId: turnId)
+    )
+    #expect(
+      try decodeRealtimeServerEvent(captureRequested)
+        == .contextCaptureRequested(
+          requestId: captureRequestId,
+          turnId: turnId,
+          expiresAt: Date(timeIntervalSince1970: 1_788_177_600)
+        )
     )
   }
 
@@ -672,6 +1017,621 @@ struct PresenceModelTests {
     #expect(await contextClient.deletedSessionCount == 1)
     #expect(model.contextState == .idle)
   }
+
+  @Test
+  @MainActor
+  func deletesAContextAcceptedAfterItsSubmissionWasCancelled() async throws {
+    let capture = FakeContextCapture(
+      result: .text(appBundleId: "com.apple.Preview", text: "Transient")
+    )
+    let contextClient = FakeContextClient(submitDelay: .milliseconds(50))
+    let model = PresenceModel(
+      client: FakeCoreClient(statusValue: .init(state: .ready, version: "test")),
+      contextCapture: capture,
+      contextClient: contextClient
+    )
+    await model.refresh()
+
+    model.captureContext(.selectedText)
+    try await waitUntilAsync { await contextClient.submitStartedCount == 1 }
+    model.clearContext()
+    try await waitUntilAsync { await contextClient.deletedSessionCount == 1 }
+
+    #expect(model.contextState == .idle)
+    #expect(await contextClient.submittedContexts.count == 1)
+  }
+
+  @Test
+  @MainActor
+  func capturesNaturalPointingOnlyAfterRealtimeRequestsIt() async throws {
+    let defaults = isolatedPresenceDefaults()
+    let capture = FakeContextCapture(
+      result: .text(appBundleId: "com.apple.Safari", text: "Pointed article")
+    )
+    let requestId = UUID()
+    let turnId = UUID()
+    let realtime = FakeRealtimeSessionClient(
+      capabilities: audioCapabilities,
+      events: [
+        .speechStarted(turnId: turnId),
+        .speechStopped(turnId: turnId),
+        .contextCaptureRequested(
+          requestId: requestId,
+          turnId: turnId,
+          expiresAt: Date().addingTimeInterval(10)
+        )
+      ]
+    )
+    let model = PresenceModel(
+      client: FakeCoreClient(statusValue: .init(state: .ready, version: "test")),
+      audioIO: FakeAudioIO(),
+      contextCapture: capture,
+      contextClient: FakeContextClient(),
+      defaults: defaults,
+      realtimeClient: realtime
+    )
+    await model.refresh()
+    #expect(!model.isNaturalPointingEnabled)
+    #expect(capture.captureCount == 0)
+    model.setNaturalPointingEnabled(true)
+    #expect(defaults.bool(forKey: "violet.natural-pointing-enabled"))
+
+    model.startAudioSession()
+    defer { model.cancelAudioSession() }
+    try await waitUntilAsync { await realtime.captureSuccessCount == 1 }
+
+    #expect(capture.capturedKinds == [.naturalPointing])
+    #expect(capture.prepareNaturalPointingCaptureCount == 1)
+    #expect(await realtime.captureSuccessCount == 1)
+    #expect(await realtime.connectedOnDemandContextValues() == [true])
+    #expect(await realtime.connectedContextSessionIds() == [nil])
+  }
+
+  @Test
+  @MainActor
+  func refusesRealtimeContextCaptureWithoutMatchingTurnAnchor() async throws {
+    let defaults = isolatedPresenceDefaults()
+    let capture = FakeContextCapture(
+      result: .text(appBundleId: "com.apple.Safari", text: "Wrong turn")
+    )
+    let anchoredTurnId = UUID()
+    let requestedTurnId = UUID()
+    let realtime = FakeRealtimeSessionClient(
+      capabilities: audioCapabilities,
+      events: [
+        .speechStopped(turnId: anchoredTurnId),
+        .contextCaptureRequested(
+          requestId: UUID(),
+          turnId: requestedTurnId,
+          expiresAt: Date().addingTimeInterval(10)
+        ),
+      ]
+    )
+    let model = PresenceModel(
+      client: FakeCoreClient(statusValue: .init(state: .ready, version: "test")),
+      audioIO: FakeAudioIO(),
+      contextCapture: capture,
+      contextClient: FakeContextClient(),
+      defaults: defaults,
+      realtimeClient: realtime
+    )
+    await model.refresh()
+    model.setNaturalPointingEnabled(true)
+
+    model.startAudioSession()
+    try await waitUntilAsync { await realtime.captureFailureReasons == [.unavailable] }
+
+    #expect(capture.prepareNaturalPointingCaptureCount == 1)
+    #expect(capture.captureCount == 0)
+    #expect(await realtime.captureSuccessCount == 0)
+    model.cancelAudioSession()
+  }
+
+  @Test
+  @MainActor
+  func consumesANaturalPointingTurnAnchorOnlyOnce() async throws {
+    let defaults = isolatedPresenceDefaults()
+    let capture = FakeContextCapture(
+      result: .text(appBundleId: "com.apple.Safari", text: "Pointed article")
+    )
+    let turnId = UUID()
+    let realtime = FakeRealtimeSessionClient(
+      capabilities: audioCapabilities,
+      events: [
+        .speechStopped(turnId: turnId),
+        .contextCaptureRequested(
+          requestId: UUID(),
+          turnId: turnId,
+          expiresAt: Date().addingTimeInterval(10)
+        ),
+        .contextCaptureRequested(
+          requestId: UUID(),
+          turnId: turnId,
+          expiresAt: Date().addingTimeInterval(10)
+        ),
+      ]
+    )
+    let model = PresenceModel(
+      client: FakeCoreClient(statusValue: .init(state: .ready, version: "test")),
+      audioIO: FakeAudioIO(),
+      contextCapture: capture,
+      contextClient: FakeContextClient(),
+      defaults: defaults,
+      realtimeClient: realtime
+    )
+    await model.refresh()
+    model.setNaturalPointingEnabled(true)
+
+    model.startAudioSession()
+    try await waitUntilAsync {
+      let successCount = await realtime.captureSuccessCount
+      let failureReasons = await realtime.captureFailureReasons
+      return successCount == 1 && failureReasons == [.unavailable]
+    }
+
+    #expect(capture.prepareNaturalPointingCaptureCount == 1)
+    #expect(capture.captureCount == 1)
+    #expect(await realtime.captureSuccessCount == 1)
+    #expect(await realtime.captureFailureReasons == [.unavailable])
+    model.cancelAudioSession()
+  }
+
+  @Test
+  @MainActor
+  func refusesRealtimeContextCaptureWhenTheTurnTargetCannotBePrepared() async throws {
+    let defaults = isolatedPresenceDefaults()
+    let capture = FakeContextCapture(
+      canPrepareNaturalPointingCapture: false,
+      result: .text(appBundleId: "com.apple.Safari", text: "Unanchored")
+    )
+    let turnId = UUID()
+    let realtime = FakeRealtimeSessionClient(
+      capabilities: audioCapabilities,
+      events: [
+        .speechStopped(turnId: turnId),
+        .contextCaptureRequested(
+          requestId: UUID(),
+          turnId: turnId,
+          expiresAt: Date().addingTimeInterval(10)
+        ),
+      ]
+    )
+    let model = PresenceModel(
+      client: FakeCoreClient(statusValue: .init(state: .ready, version: "test")),
+      audioIO: FakeAudioIO(),
+      contextCapture: capture,
+      contextClient: FakeContextClient(),
+      defaults: defaults,
+      realtimeClient: realtime
+    )
+    await model.refresh()
+    model.setNaturalPointingEnabled(true)
+
+    model.startAudioSession()
+    try await waitUntilAsync { await realtime.captureFailureReasons == [.unavailable] }
+
+    #expect(capture.captureCount == 0)
+    model.cancelAudioSession()
+  }
+
+  @Test
+  @MainActor
+  func refusesRealtimeContextCaptureAfterTheTurnAnchorExpires() async throws {
+    let defaults = isolatedPresenceDefaults()
+    let capture = FakeContextCapture(
+      result: .text(appBundleId: "com.apple.Safari", text: "Stale")
+    )
+    let turnId = UUID()
+    let realtime = FakeRealtimeSessionClient(
+      capabilities: audioCapabilities,
+      events: [
+        .speechStopped(turnId: turnId),
+        .contextCaptureRequested(
+          requestId: UUID(),
+          turnId: turnId,
+          expiresAt: Date().addingTimeInterval(10)
+        ),
+      ]
+    )
+    let model = PresenceModel(
+      client: FakeCoreClient(statusValue: .init(state: .ready, version: "test")),
+      audioIO: FakeAudioIO(),
+      contextCapture: capture,
+      contextClient: FakeContextClient(),
+      defaults: defaults,
+      naturalPointingAnchorLifetime: .zero,
+      realtimeClient: realtime
+    )
+    await model.refresh()
+    model.setNaturalPointingEnabled(true)
+
+    model.startAudioSession()
+    try await waitUntilAsync { await realtime.captureFailureReasons == [.unavailable] }
+
+    #expect(capture.captureCount == 0)
+    model.cancelAudioSession()
+  }
+
+  @Test
+  @MainActor
+  func refusesRealtimeContextCaptureWhenTheAnchorExpiresDuringCapture() async throws {
+    let defaults = isolatedPresenceDefaults()
+    let capture = FakeContextCapture(
+      captureDelays: [.milliseconds(30)],
+      result: .text(appBundleId: "com.apple.Safari", text: "Expired during capture")
+    )
+    let turnId = UUID()
+    let realtime = FakeRealtimeSessionClient(
+      capabilities: audioCapabilities,
+      events: [
+        .speechStopped(turnId: turnId),
+        .contextCaptureRequested(
+          requestId: UUID(),
+          turnId: turnId,
+          expiresAt: Date().addingTimeInterval(10)
+        ),
+      ]
+    )
+    let model = PresenceModel(
+      client: FakeCoreClient(statusValue: .init(state: .ready, version: "test")),
+      audioIO: FakeAudioIO(),
+      contextCapture: capture,
+      contextClient: FakeContextClient(),
+      defaults: defaults,
+      naturalPointingAnchorLifetime: .milliseconds(10),
+      realtimeClient: realtime
+    )
+    await model.refresh()
+    model.setNaturalPointingEnabled(true)
+
+    model.startAudioSession()
+    try await waitUntilAsync { await realtime.captureFailureReasons == [.cancelled] }
+
+    #expect(capture.captureCount == 1)
+    #expect(await realtime.captureSuccessCount == 0)
+    model.cancelAudioSession()
+  }
+
+  @Test
+  @MainActor
+  func lateCancelledCaptureCannotDetachTheCurrentCaptureTask() async throws {
+    let defaults = isolatedPresenceDefaults()
+    let firstTurnId = UUID()
+    let secondTurnId = UUID()
+    let thirdTurnId = UUID()
+    let capture = FakeContextCapture(
+      captureDelays: [.milliseconds(55), .milliseconds(100)],
+      result: .text(appBundleId: "com.apple.Safari", text: "Delayed")
+    )
+    let realtime = FakeRealtimeSessionClient(
+      capabilities: audioCapabilities,
+      events: [
+        .speechStopped(turnId: firstTurnId),
+        .contextCaptureRequested(
+          requestId: UUID(),
+          turnId: firstTurnId,
+          expiresAt: Date().addingTimeInterval(10)
+        ),
+        .speechStarted(turnId: secondTurnId),
+        .speechStopped(turnId: secondTurnId),
+        .contextCaptureRequested(
+          requestId: UUID(),
+          turnId: secondTurnId,
+          expiresAt: Date().addingTimeInterval(10)
+        ),
+        .transcript(text: "wait", final: false, turnId: secondTurnId),
+        .transcript(text: "wait", final: false, turnId: secondTurnId),
+        .transcript(text: "wait", final: false, turnId: secondTurnId),
+        .speechStarted(turnId: thirdTurnId),
+      ],
+      eventInterval: .milliseconds(10)
+    )
+    let model = PresenceModel(
+      client: FakeCoreClient(statusValue: .init(state: .ready, version: "test")),
+      audioIO: FakeAudioIO(),
+      contextCapture: capture,
+      contextClient: FakeContextClient(),
+      defaults: defaults,
+      realtimeClient: realtime
+    )
+    await model.refresh()
+    model.setNaturalPointingEnabled(true)
+
+    model.startAudioSession()
+    try await waitUntilAsync { await realtime.captureFailureReasons.count == 2 }
+
+    #expect(capture.captureCount == 2)
+    #expect(await realtime.captureSuccessCount == 0)
+    #expect(await realtime.captureFailureReasons == [.cancelled, .cancelled])
+    model.cancelAudioSession()
+  }
+
+  @Test
+  @MainActor
+  func refusesRealtimeContextCaptureWhenLookIsDisabled() async throws {
+    let capture = FakeContextCapture(
+      result: .text(appBundleId: "com.apple.Safari", text: "Must not leave the device")
+    )
+    let realtime = FakeRealtimeSessionClient(
+      capabilities: audioCapabilities,
+      events: [
+        .contextCaptureRequested(
+          requestId: UUID(),
+          turnId: UUID(),
+          expiresAt: Date().addingTimeInterval(10)
+        )
+      ]
+    )
+    let model = PresenceModel(
+      client: FakeCoreClient(statusValue: .init(state: .ready, version: "test")),
+      audioIO: FakeAudioIO(),
+      contextCapture: capture,
+      contextClient: FakeContextClient(),
+      defaults: isolatedPresenceDefaults(),
+      realtimeClient: realtime
+    )
+    await model.refresh()
+
+    model.startAudioSession()
+    try await waitUntilAsync { await realtime.captureFailureReasons == [.unavailable] }
+
+    #expect(capture.captureCount == 0)
+    #expect(await realtime.connectedOnDemandContextValues() == [false])
+    #expect(await realtime.captureFailureReasons == [.unavailable])
+    model.cancelAudioSession()
+  }
+
+  @Test(arguments: [false, true])
+  @MainActor
+  func ordinaryConversationDoesNotCaptureOrUpload(look: Bool) async throws {
+    let capture = FakeContextCapture(
+      result: .text(appBundleId: "com.apple.Safari", text: "Must not be read")
+    )
+    let turnId = UUID()
+    let responseId = UUID()
+    let realtime = FakeRealtimeSessionClient(capabilities: audioCapabilities, events: [
+      .speechStarted(turnId: turnId),
+      .speechStopped(turnId: turnId),
+      .transcript(text: "Explain closures.", final: true, turnId: turnId),
+      .responseStarted(responseId: responseId, turnId: turnId),
+      .responseText(responseId: responseId, text: "A closure retains its lexical scope.", turnId: turnId),
+      .responseCompleted(responseId: responseId, turnId: turnId),
+    ])
+    let model = PresenceModel(
+      client: FakeCoreClient(statusValue: .init(state: .ready, version: "test")),
+      audioIO: FakeAudioIO(), contextCapture: capture, contextClient: FakeContextClient(),
+      defaults: isolatedPresenceDefaults(), realtimeClient: realtime
+    )
+    await model.refresh()
+    model.setNaturalPointingEnabled(look)
+    model.startAudioSession()
+    defer { model.cancelAudioSession() }
+    try await waitUntil { model.messages.contains { $0.text == "A closure retains its lexical scope." } }
+    #expect(capture.captureCount == 0)
+    #expect(capture.prepareNaturalPointingCaptureCount == (look ? 1 : 0))
+    #expect(await realtime.captureSuccessCount == 0)
+    #expect(await realtime.captureFailureReasons.isEmpty)
+  }
+
+  @Test(arguments: ["look-off", "clear", "stop", "system", "termination"])
+  @MainActor
+  func invalidationDuringCaptureNeverUploadsLateContent(action: String) async throws {
+    let capture = FakeContextCapture(
+      captureDelays: [.milliseconds(80)],
+      result: .text(appBundleId: "com.apple.Safari", text: "Late evidence")
+    )
+    let turnId = UUID()
+    let realtime = FakeRealtimeSessionClient(capabilities: audioCapabilities, events: [
+      .speechStopped(turnId: turnId),
+      .contextCaptureRequested(requestId: UUID(), turnId: turnId, expiresAt: Date().addingTimeInterval(10)),
+    ])
+    let model = PresenceModel(
+      client: FakeCoreClient(statusValue: .init(state: .ready, version: "test")),
+      audioIO: FakeAudioIO(), contextCapture: capture, contextClient: FakeContextClient(),
+      defaults: isolatedPresenceDefaults(), realtimeClient: realtime
+    )
+    await model.refresh()
+    model.setNaturalPointingEnabled(true)
+    model.startAudioSession()
+    defer { model.cancelAudioSession() }
+    try await waitUntil { capture.captureCount == 1 }
+    switch action {
+    case "look-off": model.setNaturalPointingEnabled(false)
+    case "clear": model.clearContext()
+    case "system": model.stop(reason: .systemLifecycle)
+    case "termination": model.stop(reason: .appTermination)
+    default: model.stop()
+    }
+    try await waitUntilAsync { await realtime.captureFailureReasons == [.cancelled] }
+    #expect(await realtime.captureSuccessCount == 0)
+    #expect(model.contextState == .idle)
+  }
+
+  @Test
+  @MainActor
+  func disablingLookRevokesAnUploadedCaptureWhileVisionIsPending() async throws {
+    let turnId = UUID()
+    let realtime = FakeRealtimeSessionClient(capabilities: audioCapabilities, events: [
+      .speechStopped(turnId: turnId),
+      .contextCaptureRequested(requestId: UUID(), turnId: turnId, expiresAt: Date().addingTimeInterval(10)),
+    ])
+    let model = PresenceModel(
+      client: FakeCoreClient(statusValue: .init(state: .ready, version: "test")),
+      audioIO: FakeAudioIO(),
+      contextCapture: FakeContextCapture(result: .text(appBundleId: "com.apple.Safari", text: "Authorized")),
+      contextClient: FakeContextClient(), defaults: isolatedPresenceDefaults(), realtimeClient: realtime
+    )
+    await model.refresh()
+    model.setNaturalPointingEnabled(true)
+    model.startAudioSession()
+    defer { model.cancelAudioSession() }
+    try await waitUntilAsync { await realtime.captureSuccessCount == 1 }
+    try await waitUntil { model.contextState == .idle }
+    model.setNaturalPointingEnabled(false)
+    try await waitUntilAsync { await realtime.captureFailureReasons == [.cancelled] }
+    #expect(await realtime.captureSuccessCount == 1)
+  }
+
+  @Test(arguments: [false, true])
+  @MainActor
+  func privacyBlockedContextNeverReachesRealtime(excludedApplication: Bool) async throws {
+    let turnId = UUID()
+    let realtime = FakeRealtimeSessionClient(capabilities: audioCapabilities, events: [
+      .speechStopped(turnId: turnId),
+      .contextCaptureRequested(requestId: UUID(), turnId: turnId, expiresAt: Date().addingTimeInterval(10)),
+    ])
+    let capture = FakeContextCapture(result: .text(
+      appBundleId: excludedApplication ? "com.example.confidential" : "com.example.Reader",
+      text: excludedApplication ? "Private content" : "token: sk-abcdefghijklmnop"
+    ))
+    let model = PresenceModel(
+      client: FakeCoreClient(statusValue: .init(state: .ready, version: "test")),
+      audioIO: FakeAudioIO(), contextCapture: capture, contextClient: FakeContextClient(),
+      contextPrivacyFilter: LocalContextPrivacyFilter(excludedBundleIds: ["com.example.confidential"]),
+      defaults: isolatedPresenceDefaults(), realtimeClient: realtime
+    )
+    await model.refresh()
+    model.setNaturalPointingEnabled(true)
+    model.startAudioSession()
+    defer { model.cancelAudioSession() }
+    try await waitUntilAsync { await realtime.captureFailureReasons == [.blocked] }
+    #expect(await realtime.captureSuccessCount == 0)
+    #expect(capture.captureCount == 1)
+  }
+
+  @Test(arguments: [false, true])
+  @MainActor
+  func neverUploadsOCRTextWithOnDemandImageEvidence(recordsReplay: Bool) async throws {
+    let directory = FileManager.default.temporaryDirectory
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let turnId = UUID()
+    let bitmap = NSBitmapImageRep(
+      bitmapDataPlanes: nil,
+      pixelsWide: 32,
+      pixelsHigh: 32,
+      bitsPerSample: 8,
+      samplesPerPixel: 4,
+      hasAlpha: true,
+      isPlanar: false,
+      colorSpaceName: .deviceRGB,
+      bytesPerRow: 0,
+      bitsPerPixel: 0
+    )
+    let imageData = try #require(
+      bitmap?.representation(using: .jpeg, properties: [.compressionFactor: 0.9])
+    )
+    let capture = FakeContextCapture(
+      result: .image(
+        appBundleId: "com.example.Editor",
+        data: imageData,
+        focusPoint: .init(x: 0.1, y: 0.9),
+        height: 32,
+        recognizedText: [
+          .init(
+            text: "Visible but not model evidence",
+            confidence: 0.99,
+            normalizedBounds: .init(x: 0.1, y: 0.1, width: 0.4, height: 0.1)
+          )
+        ],
+        region: nil,
+        width: 32
+      )
+    )
+    let realtime = FakeRealtimeSessionClient(
+      capabilities: audioCapabilities,
+      events: [
+        .speechStopped(turnId: turnId),
+        .transcript(text: "Explain selected code", final: true, turnId: turnId),
+        .contextCaptureRequested(
+          requestId: UUID(),
+          turnId: turnId,
+          expiresAt: Date().addingTimeInterval(10)
+        )
+      ]
+    )
+    let model = PresenceModel(
+      client: FakeCoreClient(statusValue: .init(state: .ready, version: "test")),
+      audioIO: FakeAudioIO(),
+      contextCapture: capture,
+      contextClient: FakeContextClient(),
+      defaults: isolatedPresenceDefaults(),
+      pointingReplayRecorder: recordsReplay
+        ? NaturalPointingReplayRecorder(directory: directory) : nil,
+      realtimeClient: realtime
+    )
+    await model.refresh()
+    model.setNaturalPointingEnabled(true)
+
+    model.startAudioSession()
+    try await waitUntilAsync { await realtime.captureSuccessCount == 1 }
+    let file = directory.appendingPathComponent("case.json")
+    #expect(FileManager.default.fileExists(atPath: file.path) == recordsReplay)
+    if recordsReplay {
+      let object = try #require(
+        JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any]
+      )
+      #expect(object["question"] as? String == "Explain selected code")
+      #expect(object["turnId"] as? String == turnId.uuidString)
+      #expect(object["localText"] == nil)
+      let image = try #require(object["image"] as? [String: Any])
+      #expect(image["sha256"] as? String == contextImageHash(imageData))
+      #expect(image["localText"] == nil)
+    }
+    model.cancelAudioSession()
+  }
+
+  @Test
+  @MainActor
+  func reportsUnavailableAutomaticContextToRealtime() async {
+    let defaults = isolatedPresenceDefaults()
+    let capture = FailingContextCapture(error: ContextCaptureError.unavailable)
+    let requestId = UUID()
+    let turnId = UUID()
+    let realtime = FakeRealtimeSessionClient(
+      capabilities: audioCapabilities,
+      events: [
+        .speechStopped(turnId: turnId),
+        .contextCaptureRequested(
+          requestId: requestId,
+          turnId: turnId,
+          expiresAt: Date().addingTimeInterval(10)
+        )
+      ]
+    )
+    let model = PresenceModel(
+      client: FakeCoreClient(statusValue: .init(state: .ready, version: "test")),
+      audioIO: FakeAudioIO(),
+      contextCapture: capture,
+      contextClient: FakeContextClient(),
+      defaults: defaults,
+      realtimeClient: realtime
+    )
+    await model.refresh()
+    model.setNaturalPointingEnabled(true)
+
+    model.startAudioSession()
+    try? await waitUntilAsync { await realtime.captureFailureReasons == [.unavailable] }
+    #expect(model.contextState == .idle)
+    #expect(await realtime.captureFailureReasons == [.unavailable])
+    model.cancelAudioSession()
+  }
+
+  @Test
+  @MainActor
+  func reportsUnavailableManualContextInTheUI() async {
+    let capture = FailingContextCapture(error: ContextCaptureError.unavailable)
+    let model = PresenceModel(
+      client: FakeCoreClient(statusValue: .init(state: .ready, version: "test")),
+      contextCapture: capture,
+      contextClient: FakeContextClient(),
+      defaults: isolatedPresenceDefaults()
+    )
+    await model.refresh()
+    model.captureContext(.selectedText)
+    await model.waitForContextPreparation()
+    #expect(model.contextState == .failed(message: "No readable context is available."))
+  }
 }
 
 @MainActor
@@ -717,26 +1677,73 @@ private struct FailingCoreClient: VioletCoreClientPort {
 
 @MainActor
 private final class FakeContextCapture: ContextCapturePort {
+  private let canPrepareNaturalPointingCapture: Bool
+  private let captureDelays: [Duration]
   private let result: CapturedContext
   private(set) var captureCount = 0
+  private(set) var capturedKinds: [ContextCaptureKind] = []
+  private(set) var prepareNaturalPointingCaptureCount = 0
 
-  init(result: CapturedContext) {
+  init(
+    canPrepareNaturalPointingCapture: Bool = true,
+    captureDelays: [Duration] = [],
+    result: CapturedContext
+  ) {
+    self.canPrepareNaturalPointingCapture = canPrepareNaturalPointingCapture
+    self.captureDelays = captureDelays
     self.result = result
   }
 
   func capture(_ kind: ContextCaptureKind) async throws -> CapturedContext {
+    let index = captureCount
     captureCount += 1
+    capturedKinds.append(kind)
+    if captureDelays.indices.contains(index) {
+      try? await Task.sleep(for: captureDelays[index])
+    }
     return result
   }
 
   func cancel() {}
+
+  func prepareNaturalPointingCapture() -> Bool {
+    prepareNaturalPointingCaptureCount += 1
+    return canPrepareNaturalPointingCapture
+  }
+
+  func prepareSelectedTextCapture() {}
+}
+
+@MainActor
+private final class FailingContextCapture: ContextCapturePort {
+  private let error: Error
+
+  init(error: Error) {
+    self.error = error
+  }
+
+  func capture(_ kind: ContextCaptureKind) async throws -> CapturedContext {
+    throw error
+  }
+
+  func cancel() {}
+
+  func prepareNaturalPointingCapture() -> Bool {
+    true
+  }
 
   func prepareSelectedTextCapture() {}
 }
 
 private actor FakeContextClient: ContextClientPort {
   private(set) var deletedSessionCount = 0
+  private(set) var submitStartedCount = 0
   private(set) var submittedContexts: [FilteredContext] = []
+  private let submitDelay: Duration
+
+  init(submitDelay: Duration = .zero) {
+    self.submitDelay = submitDelay
+  }
 
   func deleteContext(sessionId: UUID) async {
     deletedSessionCount += 1
@@ -747,7 +1754,9 @@ private actor FakeContextClient: ContextClientPort {
     deviceId: UUID,
     sessionId: UUID
   ) async throws -> ContextReceipt {
+    submitStartedCount += 1
     submittedContexts.append(context)
+    try? await Task.sleep(for: submitDelay)
     return ContextReceipt(
       expiresAt: Date().addingTimeInterval(300),
       sessionId: sessionId
@@ -825,7 +1834,11 @@ private actor FakeRealtimeSessionClient: RealtimeSessionClientPort {
   let eventInterval: Duration
   let events: [RealtimeServerEvent]
   private(set) var cancelResponseCount = 0
+  private(set) var captureFailureReasons: [RealtimeContextCaptureFailure] = []
+  private(set) var captureSuccessCount = 0
   private(set) var connectCount = 0
+  private var contextSessionIds: [UUID?] = []
+  private var onDemandContextValues: [Bool] = []
   private var frames: [VioletAudioFrame] = []
   private var streamFailureCount: Int
 
@@ -847,9 +1860,36 @@ private actor FakeRealtimeSessionClient: RealtimeSessionClientPort {
 
   func close() async {}
 
-  func connect(contextSessionId: UUID?) async throws -> RealtimeCapabilities {
+  func connect(
+    contextSessionId: UUID?,
+    onDemandContext: Bool
+  ) async throws -> RealtimeCapabilities {
     connectCount += 1
+    contextSessionIds.append(contextSessionId)
+    onDemandContextValues.append(onDemandContext)
     return capabilities
+  }
+
+  func connectedOnDemandContextValues() -> [Bool] {
+    onDemandContextValues
+  }
+
+  func connectedContextSessionIds() -> [UUID?] {
+    contextSessionIds
+  }
+
+  func sendContextCaptureResult(
+    _ result: RealtimeContextCaptureResult,
+    deviceId: UUID,
+    requestId: UUID,
+    turnId: UUID
+  ) async throws {
+    switch result {
+    case .failed(let reason):
+      captureFailureReasons.append(reason)
+    case .succeeded:
+      captureSuccessCount += 1
+    }
   }
 
   func receivedFrames() -> [VioletAudioFrame] {
@@ -940,4 +1980,25 @@ private func waitUntil(
 private enum TestError: Error {
   case streamFailure
   case timeout
+}
+
+private func waitUntilAsync(
+  timeout: Duration = .seconds(1),
+  condition: @escaping @Sendable () async -> Bool
+) async throws {
+  let clock = ContinuousClock()
+  let deadline = clock.now.advanced(by: timeout)
+  while !(await condition()) {
+    if clock.now >= deadline {
+      throw TestError.timeout
+    }
+    try await Task.sleep(for: .milliseconds(5))
+  }
+}
+
+private func isolatedPresenceDefaults() -> UserDefaults {
+  let name = "violet-presence-tests-\(UUID().uuidString)"
+  let defaults = UserDefaults(suiteName: name) ?? .standard
+  defaults.removePersistentDomain(forName: name)
+  return defaults
 }

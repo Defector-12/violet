@@ -23,6 +23,7 @@ public enum CapturedContext: Equatable, Sendable {
   case image(
     appBundleId: String?,
     data: Data,
+    focusPoint: NormalizedContextPoint?,
     height: Int,
     recognizedText: [RecognizedContextText],
     region: NormalizedContextRect?,
@@ -85,53 +86,53 @@ public struct LocalContextPrivacyFilter: LocalContextPrivacyFiltering {
     case .image(
       let appBundleId,
       let data,
+      let focusPoint,
       let height,
       let recognizedText,
       let region,
       let width
     ):
       try ensureAllowed(appBundleId)
-      let combined = redact(recognizedText.map(\.text).joined(separator: "\n"))
-      if combined.categories.contains(.absoluteSecret) {
+      let analyzedLines = recognizedTextLines(recognizedText).map { observations in
+        (
+          observations: observations,
+          redaction: redact(observations.map(\.text).joined(separator: " "))
+        )
+      }
+      if analyzedLines.contains(where: { $0.redaction.categories.contains(.absoluteSecret) }) {
         throw LocalContextPrivacyError.blockedSensitiveContent
       }
-      let sensitiveRegions = recognizedText.compactMap { observation -> SensitiveRegion? in
-        let result = redact(observation.text)
-        guard result.count > 0 else {
-          return nil
+      let sensitiveRegions = analyzedLines.flatMap { line -> [SensitiveRegion] in
+        guard line.redaction.count > 0 else {
+          return []
         }
-        return SensitiveRegion(
-          categories: result.categories,
-          normalizedBounds: observation.normalizedBounds
-        )
+        return line.observations.map { observation in
+          SensitiveRegion(
+            categories: line.redaction.categories,
+            normalizedBounds: observation.normalizedBounds
+          )
+        }
       }
-      let redactedImage =
+      let preparedImage =
         sensitiveRegions.isEmpty && isBoundedJPEG(data)
-        ? data
-        : try redactImage(
+        ? EncodedContextImage(data: data, height: height, width: width)
+        : try prepareImage(
           data,
-          height: height,
-          regions: sensitiveRegions,
-          width: width
+          regions: sensitiveRegions
         )
-      let safeText =
-        recognizedText
-        .map { redact($0.text).value }
-        .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-        .joined(separator: "\n")
-      let categories = sensitiveRegions.flatMap(\.categories)
+      let categories = analyzedLines.flatMap(\.redaction.categories)
       return FilteredContext(
         appBundleId: appBundleId,
         completeness: sensitiveRegions.isEmpty ? 1 : 0.8,
-        confidence: recognizedText.map(\.confidence).max() ?? 0.5,
+        confidence: 1,
         payload: .image(
-          data: redactedImage,
-          height: height,
-          localText: safeText.isEmpty ? nil : safeText,
+          data: preparedImage.data,
+          focusPoint: focusPoint,
+          height: preparedImage.height,
           mediaType: "image/jpeg",
           region: region,
-          sha256: contextImageHash(redactedImage),
-          width: width
+          sha256: contextImageHash(preparedImage.data),
+          width: preparedImage.width
         ),
         redactions: redactionCounts(categories),
         sensitivity: "personal"
@@ -162,6 +163,42 @@ private struct RedactionResult {
 private struct SensitiveRegion {
   let categories: [ContextRedaction.Category]
   let normalizedBounds: NormalizedContextRect
+}
+
+struct EncodedContextImage {
+  let data: Data
+  let height: Int
+  let width: Int
+}
+
+private func recognizedTextLines(
+  _ observations: [RecognizedContextText]
+) -> [[RecognizedContextText]] {
+  var lines: [[RecognizedContextText]] = []
+  for observation in observations.sorted(by: {
+    let leftY = $0.normalizedBounds.y + $0.normalizedBounds.height / 2
+    let rightY = $1.normalizedBounds.y + $1.normalizedBounds.height / 2
+    return leftY == rightY ? $0.normalizedBounds.x < $1.normalizedBounds.x : leftY > rightY
+  }) {
+    let centerY = observation.normalizedBounds.y + observation.normalizedBounds.height / 2
+    if let index = lines.firstIndex(where: { line in
+      let lineCenter =
+        line.reduce(0) {
+          $0 + $1.normalizedBounds.y + $1.normalizedBounds.height / 2
+        } / Double(line.count)
+      let maximumHeight =
+        line.map(\.normalizedBounds.height).max() ?? observation.normalizedBounds.height
+      return abs(lineCenter - centerY)
+        <= max(maximumHeight, observation.normalizedBounds.height) * 0.6
+    }) {
+      lines[index].append(observation)
+    } else {
+      lines.append([observation])
+    }
+  }
+  return lines.map { line in
+    line.sorted { $0.normalizedBounds.x < $1.normalizedBounds.x }
+  }
 }
 
 private let absoluteSecretPatterns: [NSRegularExpression] = [
@@ -212,18 +249,18 @@ private func redactionCounts(_ categories: [ContextRedaction.Category]) -> [Cont
     .sorted { $0.category.rawValue < $1.category.rawValue }
 }
 
-private func redactImage(
+private func prepareImage(
   _ data: Data,
-  height: Int,
-  regions: [SensitiveRegion],
-  width: Int
-) throws -> Data {
+  regions: [SensitiveRegion]
+) throws -> EncodedContextImage {
   guard
     let source = CGImageSourceCreateWithData(data as CFData, nil),
     let image = CGImageSourceCreateImageAtIndex(source, 0, nil)
   else {
-    return data
+    throw LocalContextPrivacyError.imageEncodingFailed
   }
+  let width = image.width
+  let height = image.height
   guard
     let context = CGContext(
       data: nil,
@@ -251,17 +288,79 @@ private func redactImage(
       )
     )
   }
-  guard
-    let redacted = context.makeImage(),
-    let encoded = NSBitmapImageRep(cgImage: redacted).representation(
-      using: .jpeg,
-      properties: [.compressionFactor: 0.9]
-    ),
-    encoded.count <= 8 * 1024 * 1024
-  else {
+  guard let redacted = context.makeImage() else {
     throw LocalContextPrivacyError.imageEncodingFailed
   }
-  return encoded
+  return try encodeBoundedContextImage(redacted, maximumBytes: 8 * 1024 * 1024)
+}
+
+func encodeBoundedContextImage(
+  _ image: CGImage,
+  maximumBytes: Int
+) throws -> EncodedContextImage {
+  guard maximumBytes > 0 else {
+    throw LocalContextPrivacyError.imageEncodingFailed
+  }
+  if let data = jpegData(image, quality: 0.9), data.count <= maximumBytes {
+    return EncodedContextImage(data: data, height: image.height, width: image.width)
+  }
+
+  var candidateImage = image
+  guard var candidateData = jpegData(candidateImage, quality: 0.8) else {
+    throw LocalContextPrivacyError.imageEncodingFailed
+  }
+  while candidateData.count > maximumBytes {
+    let scale = min(
+      0.9,
+      sqrt(Double(maximumBytes) / Double(candidateData.count))
+    )
+    let width = max(1, Int((Double(candidateImage.width) * scale).rounded(.down)))
+    let height = max(1, Int((Double(candidateImage.height) * scale).rounded(.down)))
+    guard
+      width < candidateImage.width || height < candidateImage.height,
+      let resized = resizedImage(candidateImage, width: width, height: height),
+      let resizedData = jpegData(resized, quality: 0.8)
+    else {
+      throw LocalContextPrivacyError.imageEncodingFailed
+    }
+    candidateImage = resized
+    candidateData = resizedData
+  }
+  return EncodedContextImage(
+    data: candidateData,
+    height: candidateImage.height,
+    width: candidateImage.width
+  )
+}
+
+private func jpegData(_ image: CGImage, quality: Double) -> Data? {
+  NSBitmapImageRep(cgImage: image).representation(
+    using: .jpeg,
+    properties: [.compressionFactor: quality]
+  )
+}
+
+private func resizedImage(
+  _ image: CGImage,
+  width: Int,
+  height: Int
+) -> CGImage? {
+  guard
+    let context = CGContext(
+      data: nil,
+      width: width,
+      height: height,
+      bitsPerComponent: 8,
+      bytesPerRow: 0,
+      space: CGColorSpaceCreateDeviceRGB(),
+      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+    )
+  else {
+    return nil
+  }
+  context.interpolationQuality = .high
+  context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+  return context.makeImage()
 }
 
 private func isBoundedJPEG(_ data: Data) -> Bool {

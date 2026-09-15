@@ -1,4 +1,4 @@
-import type { ConversationRole } from "./conversation.js";
+export type ConversationRole = "assistant" | "user";
 
 export interface LedgerMessage {
   readonly content: string;

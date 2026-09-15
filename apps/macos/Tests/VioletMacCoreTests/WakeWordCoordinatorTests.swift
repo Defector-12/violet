@@ -26,8 +26,10 @@ struct WakeWordCoordinatorTests {
   func enablesLocalDetectionAndPausesAfterWake() async throws {
     let defaults = isolatedDefaults()
     let detector = FakeWakeWordDetector()
+    let recorder = WakeAcceptanceRecorder()
     let coordinator = WakeWordCoordinator(
       detector: detector,
+      acceptanceRecorder: recorder,
       defaults: defaults
     )
     var detectionCount = 0
@@ -43,6 +45,10 @@ struct WakeWordCoordinatorTests {
     #expect(coordinator.state == .paused)
     #expect(!detector.isRunning)
     #expect(defaults.bool(forKey: "violet.wake-word-enabled"))
+    #expect(
+      recorder.marks.map(\.type)
+        == [.wakeListeningStarted, .wakeDetected, .wakeListeningStopped]
+    )
   }
 
   @Test
@@ -66,35 +72,184 @@ struct WakeWordCoordinatorTests {
     #expect(detector.startCount == 0)
     #expect(!detector.isRunning)
   }
+
+  @Test
+  @MainActor
+  func restartsDetectionAfterAudioConfigurationInvalidation() async throws {
+    let defaults = isolatedDefaults()
+    let detector = FakeWakeWordDetector()
+    let coordinator = WakeWordCoordinator(
+      detector: detector,
+      defaults: defaults,
+      routeRecoveryDelay: .zero
+    )
+
+    coordinator.setEnabled(true)
+    try await waitUntil { coordinator.state == .listening }
+    detector.invalidateAudioConfiguration()
+    try await waitUntil {
+      coordinator.state == .listening && detector.startCount == 2
+    }
+
+    #expect(detector.stopCount == 1)
+    #expect(detector.isRunning)
+  }
+
+  @Test
+  @MainActor
+  func refusesToResumeWhileTheSystemIsInactive() async throws {
+    let defaults = isolatedDefaults()
+    let detector = FakeWakeWordDetector()
+    let coordinator = WakeWordCoordinator(
+      detector: detector,
+      defaults: defaults
+    )
+    var detectionCount = 0
+    coordinator.onDetection = {
+      detectionCount += 1
+    }
+
+    coordinator.setEnabled(true)
+    try await waitUntil { coordinator.state == .listening }
+    coordinator.suspend(for: .sessionInactive)
+    coordinator.resume()
+    detector.trigger()
+
+    #expect(coordinator.state == .paused)
+    #expect(!detector.isRunning)
+    #expect(detector.startCount == 1)
+    #expect(detectionCount == 0)
+
+    coordinator.resume(from: .sessionInactive)
+    try await waitUntil {
+      coordinator.state == .listening && detector.startCount == 2
+    }
+    #expect(detector.isRunning)
+  }
+
+  @Test
+  @MainActor
+  func resumesOnlyAfterEverySystemSuspensionIsCleared() async throws {
+    let defaults = isolatedDefaults()
+    let detector = FakeWakeWordDetector()
+    let coordinator = WakeWordCoordinator(
+      detector: detector,
+      defaults: defaults
+    )
+
+    coordinator.setEnabled(true)
+    try await waitUntil { coordinator.state == .listening }
+    #expect(coordinator.suspend(for: .systemSleep))
+    #expect(!coordinator.suspend(for: .screenSleep))
+    #expect(!coordinator.resume(from: .systemSleep))
+
+    #expect(coordinator.state == .paused)
+    #expect(!detector.isRunning)
+    #expect(detector.startCount == 1)
+
+    #expect(coordinator.resume(from: .screenSleep))
+    try await waitUntil {
+      coordinator.state == .listening && detector.startCount == 2
+    }
+  }
+
+  @Test
+  @MainActor
+  func cancelledPermissionRequestCannotRestartListeningDuringALaterSuspension() async throws {
+    let defaults = isolatedDefaults()
+    let detector = FakeWakeWordDetector(defersAccess: true)
+    let coordinator = WakeWordCoordinator(
+      detector: detector,
+      defaults: defaults
+    )
+
+    coordinator.setEnabled(true)
+    try await waitUntil { detector.accessRequestCount == 1 }
+    coordinator.suspend(for: .systemSleep)
+    coordinator.resume(from: .systemSleep)
+    try await waitUntil { detector.accessRequestCount == 2 }
+
+    detector.resolveNextAccess(true)
+    try await waitUntil { detector.completedAccessCount == 1 }
+    coordinator.suspend(for: .screenSleep)
+    detector.resolveNextAccess(true)
+    try await waitUntil { detector.completedAccessCount == 2 }
+
+    #expect(coordinator.state == .paused)
+    #expect(!detector.isRunning)
+    #expect(detector.startCount == 0)
+  }
+}
+
+@MainActor
+private final class WakeAcceptanceRecorder: RealtimeAcceptanceRecording {
+  private(set) var marks: [RealtimeAcceptanceMark] = []
+
+  func flush() {}
+
+  func record(_ mark: RealtimeAcceptanceMark) {
+    marks.append(mark)
+  }
 }
 
 @MainActor
 private final class FakeWakeWordDetector: WakeWordDetectorPort {
   private let accessAllowed: Bool
+  private let defersAccess: Bool
+  private var accessContinuations: [CheckedContinuation<Bool, Never>] = []
+  private var audioConfigurationInvalidated: (@MainActor @Sendable () -> Void)?
   private var detection: (@MainActor @Sendable () -> Void)?
+  private(set) var accessRequestCount = 0
+  private(set) var completedAccessCount = 0
   private(set) var isRunning = false
   private(set) var startCount = 0
+  private(set) var stopCount = 0
 
-  init(accessAllowed: Bool = true) {
+  init(accessAllowed: Bool = true, defersAccess: Bool = false) {
     self.accessAllowed = accessAllowed
+    self.defersAccess = defersAccess
   }
 
   func requestAccess() async -> Bool {
-    accessAllowed
+    accessRequestCount += 1
+    let result =
+      if defersAccess {
+        await withCheckedContinuation { continuation in
+          accessContinuations.append(continuation)
+        }
+      } else {
+        accessAllowed
+      }
+    completedAccessCount += 1
+    return result
   }
 
-  func start(onDetection: @escaping @MainActor @Sendable () -> Void) {
+  func start(
+    onDetection: @escaping @MainActor @Sendable () -> Void,
+    onAudioConfigurationInvalidated: @escaping @MainActor @Sendable () -> Void
+  ) {
     detection = onDetection
+    audioConfigurationInvalidated = onAudioConfigurationInvalidated
     isRunning = true
     startCount += 1
   }
 
   func stop() {
+    stopCount += 1
+    audioConfigurationInvalidated = nil
     isRunning = false
   }
 
   func trigger() {
     detection?()
+  }
+
+  func invalidateAudioConfiguration() {
+    audioConfigurationInvalidated?()
+  }
+
+  func resolveNextAccess(_ allowed: Bool) {
+    accessContinuations.removeFirst().resume(returning: allowed)
   }
 }
 

@@ -23,7 +23,8 @@ private final class VioletApplicationDelegate: NSObject, NSApplicationDelegate {
   private var wakeWord: WakeWordCoordinator?
 
   func applicationDidFinishLaunching(_ notification: Notification) {
-    let acceptanceRecorder = configuredRealtimeAcceptanceRecorder()
+    var acceptanceRecorder = configuredRealtimeAcceptanceRecorder()
+    var testTrace: TestTraceRecorder?
     let dependencies:
       (
         configuration: VioletRuntimeConfiguration,
@@ -32,25 +33,29 @@ private final class VioletApplicationDelegate: NSObject, NSApplicationDelegate {
         realtimeClient: (any RealtimeSessionClientPort)?
       )
     do {
+      testTrace = try TestTraceRecorder.configured()
       let configuration = try VioletRuntimeConfiguration()
       let token = try RuntimeDeviceTokenProvider().deviceToken()
       dependencies = (
         configuration,
         GeneratedVioletCoreClient(
           serverURL: configuration.coreURL,
-          deviceToken: token
+          deviceToken: token,
+          testTrace: testTrace
         ),
         configuration.testMode
           ? SilentContextClient()
           : URLSessionContextClient(
             coreURL: configuration.coreURL,
-            deviceToken: token
+            deviceToken: token,
+            testTrace: testTrace
           ),
         configuration.testMode
           ? nil
           : URLSessionRealtimeClient(
             coreURL: configuration.coreURL,
-            deviceToken: token
+            deviceToken: token,
+            testTrace: testTrace
           )
       )
     } catch {
@@ -69,6 +74,12 @@ private final class VioletApplicationDelegate: NSObject, NSApplicationDelegate {
       )
     }
 
+    if let testTrace {
+      acceptanceRecorder = TestTraceRealtimeAcceptanceRecorder(
+        trace: testTrace,
+        downstream: acceptanceRecorder
+      )
+    }
     let audioIO: any AudioIOPort =
       dependencies.configuration.testMode
       ? SilentAudioIO()
@@ -79,7 +90,8 @@ private final class VioletApplicationDelegate: NSObject, NSApplicationDelegate {
       : SystemContextCapture(
         excludedBundleIds: defaultExcludedBundleIds.union(
           dependencies.configuration.excludedContextBundleIds
-        )
+        ),
+        testTrace: testTrace
       )
     let model = PresenceModel(
       client: dependencies.client,
@@ -92,8 +104,11 @@ private final class VioletApplicationDelegate: NSObject, NSApplicationDelegate {
         )
       ),
       deviceId: LocalDeviceIdentity().deviceId(),
+      pointingReplayRecorder: dependencies.configuration.testMode
+        ? nil : configuredNaturalPointingReplayRecorder(),
       realtimeClient: dependencies.realtimeClient,
-      acceptanceRecorder: acceptanceRecorder
+      acceptanceRecorder: acceptanceRecorder,
+      testTrace: testTrace
     )
     let shortcut: any GlobalShortcutPort =
       dependencies.configuration.testMode
@@ -112,9 +127,15 @@ private final class VioletApplicationDelegate: NSObject, NSApplicationDelegate {
           .appendingPathComponent("WakeWord", isDirectory: true)
           ?? URL(fileURLWithPath: "/nonexistent")
       )
-    let wakeWord = WakeWordCoordinator(detector: wakeDetector)
+    let wakeWord = WakeWordCoordinator(
+      detector: wakeDetector,
+      acceptanceRecorder: acceptanceRecorder
+    )
 
     self.model = model
+    (acceptanceRecorder as? TestTraceRealtimeAcceptanceRecorder)?.onFailure = { [weak model] in
+      model?.stop(reason: .failure)
+    }
     self.acceptanceRecorder = acceptanceRecorder
     self.portForwarder = portForwarder
     self.wakeWord = wakeWord
@@ -135,10 +156,10 @@ private final class VioletApplicationDelegate: NSObject, NSApplicationDelegate {
 
   func applicationWillTerminate(_ notification: Notification) {
     NSWorkspace.shared.notificationCenter.removeObserver(self)
+    statusController?.suspendSensitiveActivity(for: .appTermination)
     model?.stop(reason: .appTermination)
     acceptanceRecorder?.flush()
     model?.stopMonitoring()
-    wakeWord?.suspend()
     portForwarder?.stop()
     statusController?.stop()
   }
@@ -178,19 +199,35 @@ private final class VioletApplicationDelegate: NSObject, NSApplicationDelegate {
   }
 
   @objc
-  private func stopSensitiveActivity() {
-    wakeWord?.suspend()
+  private func stopSensitiveActivity(_ notification: Notification) {
+    guard
+      let reason = wakeWordSuspension(for: notification.name),
+      statusController?.suspendSensitiveActivity(for: reason) == true
+    else {
+      return
+    }
+    acceptanceRecorder?.record(
+      .init(type: .systemSuspended, reason: acceptanceReason(for: reason))
+    )
     model?.stop(reason: .systemLifecycle)
     acceptanceRecorder?.flush()
   }
 
   @objc
-  private func resumeAfterSystemActivity() {
+  private func resumeAfterSystemActivity(_ notification: Notification) {
+    guard
+      let reason = wakeWordSuspension(for: notification.name),
+      statusController?.resumeSensitiveActivity(from: reason) == true
+    else {
+      return
+    }
+    acceptanceRecorder?.record(
+      .init(type: .systemResumed, reason: acceptanceReason(for: reason))
+    )
     try? portForwarder?.start()
     Task {
       await model?.refresh()
     }
-    wakeWord?.resume()
   }
 
   @objc
@@ -203,6 +240,39 @@ private final class VioletApplicationDelegate: NSObject, NSApplicationDelegate {
       return
     }
     model?.prepareSelectedTextCapture()
+  }
+}
+
+private func wakeWordSuspension(
+  for notification: Notification.Name
+) -> WakeWordSystemSuspension? {
+  switch notification {
+  case NSWorkspace.screensDidSleepNotification,
+    NSWorkspace.screensDidWakeNotification:
+    .screenSleep
+  case NSWorkspace.sessionDidResignActiveNotification,
+    NSWorkspace.sessionDidBecomeActiveNotification:
+    .sessionInactive
+  case NSWorkspace.willSleepNotification,
+    NSWorkspace.didWakeNotification:
+    .systemSleep
+  default:
+    nil
+  }
+}
+
+private func acceptanceReason(
+  for suspension: WakeWordSystemSuspension
+) -> RealtimeAcceptanceReason {
+  switch suspension {
+  case .appTermination:
+    .appTermination
+  case .screenSleep:
+    .screenSleep
+  case .sessionInactive:
+    .sessionInactive
+  case .systemSleep:
+    .systemSleep
   }
 }
 

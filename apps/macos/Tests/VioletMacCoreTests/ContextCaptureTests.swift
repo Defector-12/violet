@@ -20,6 +20,43 @@ struct ContextCaptureTests {
   }
 
   @Test
+  func convertsAndNormalizesNaturalPointingLocation() throws {
+    let point = screenCapturePoint(
+      from: CGPoint(x: 750, y: 700),
+      primaryScreenFrame: CGRect(x: 0, y: 0, width: 1470, height: 956)
+    )
+    let normalized = try #require(
+      normalizedPoint(
+        point,
+        in: CGRect(x: 500, y: 100, width: 500, height: 400)
+      )
+    )
+
+    #expect(point == CGPoint(x: 750, y: 256))
+    #expect(normalized == .init(x: 0.5, y: 0.39))
+  }
+
+  @Test
+  func preservesNativeCaptureDimensions() {
+    let size = capturePixelSize(
+      contentRect: CGRect(x: 0, y: 0, width: 1470, height: 923),
+      pointPixelScale: 2
+    )
+
+    #expect(size == CGSize(width: 2940, height: 1846))
+  }
+
+  @Test
+  func selectsTheDisplayContainingTheFrozenPointer() {
+    let frames = [
+      CGRect(x: 0, y: 0, width: 1470, height: 956),
+      CGRect(x: 1470, y: 0, width: 1920, height: 1080),
+    ]
+
+    #expect(displayIndex(containing: CGPoint(x: 2000, y: 500), in: frames) == 1)
+  }
+
+  @Test
   @MainActor
   func readsSelectionFromApplicationPreparedBeforeVioletTakesFocus() async throws {
     let source = ContextApplicationTarget(
@@ -60,5 +97,157 @@ struct ContextCaptureTests {
           appBundleId: source.bundleIdentifier,
           text: "selected source text"
         ))
+  }
+
+  @Test
+  @MainActor
+  func naturalPointingAlwaysUsesAScreenshotEvenWhenAXHasSelectedText() async {
+    let source = ContextApplicationTarget(
+      bundleIdentifier: "com.example.Reader",
+      processIdentifier: 303
+    )
+    let capture = SystemContextCapture(
+      excludedBundleIds: [],
+      currentProcessIdentifier: 404,
+      activeApplication: { source },
+      accessibilityAccess: { true },
+      focusedElementReader: { _ in AXUIElementCreateSystemWide() },
+      selectionReader: { _, _ in .text("selected source text") },
+      screenCaptureAccess: { false }
+    )
+
+    #expect(capture.prepareNaturalPointingCapture())
+    await #expect(throws: ContextCaptureError.screenRecordingPermissionDenied) {
+      try await capture.capture(.naturalPointing)
+    }
+  }
+
+  @Test
+  @MainActor
+  func naturalPointingChecksThePointedElementBeforeTakingAScreenshot() async {
+    let source = ContextApplicationTarget(
+      bundleIdentifier: "com.apple.Preview",
+      processIdentifier: 405
+    )
+    let frozenPoint = CGPoint(x: 360, y: 705)
+    var receivedProcessIdentifier: pid_t?
+    var receivedPoint: CGPoint?
+    let capture = SystemContextCapture(
+      excludedBundleIds: [],
+      currentProcessIdentifier: 406,
+      activeApplication: { source },
+      accessibilityAccess: { true },
+      focusedElementReader: { _ in nil },
+      selectionReader: { _, _ in .unavailable },
+      pointedElementIsSecure: { processIdentifier, point in
+        receivedProcessIdentifier = processIdentifier
+        receivedPoint = point
+        return false
+      },
+      mouseLocation: { frozenPoint },
+      screenCaptureAccess: { false }
+    )
+
+    #expect(capture.prepareNaturalPointingCapture())
+    await #expect(throws: ContextCaptureError.screenRecordingPermissionDenied) {
+      try await capture.capture(.naturalPointing)
+    }
+
+    #expect(receivedProcessIdentifier == source.processIdentifier)
+    #expect(receivedPoint == frozenPoint)
+  }
+
+  @Test
+  @MainActor
+  func naturalPointingBlocksASecureFieldAtTheFrozenPointer() async {
+    let source = ContextApplicationTarget(
+      bundleIdentifier: "com.example.Login",
+      processIdentifier: 407
+    )
+    let capture = SystemContextCapture(
+      excludedBundleIds: [],
+      currentProcessIdentifier: 408,
+      activeApplication: { source },
+      accessibilityAccess: { true },
+      focusedElementReader: { _ in AXUIElementCreateSystemWide() },
+      selectionReader: { _, _ in .unavailable },
+      pointedElementIsSecure: { _, _ in true }
+    )
+
+    #expect(capture.prepareNaturalPointingCapture())
+    await #expect(throws: LocalContextPrivacyError.blockedApplication) {
+      try await capture.capture(.naturalPointing)
+    }
+  }
+
+  @Test
+  @MainActor
+  func naturalPointingUsesTheApplicationPreparedAtSpeechStop() async {
+    let source = ContextApplicationTarget(
+      bundleIdentifier: "com.example.Source",
+      processIdentifier: 505
+    )
+    let laterApplication = ContextApplicationTarget(
+      bundleIdentifier: "com.example.Later",
+      processIdentifier: 606
+    )
+    var activeApplication = source
+    var focusedElementReadCount = 0
+    var requestedProcessIdentifier: pid_t?
+    let capture = SystemContextCapture(
+      excludedBundleIds: [],
+      currentProcessIdentifier: 707,
+      activeApplication: { activeApplication },
+      accessibilityAccess: { true },
+      focusedElementReader: { _ in
+        focusedElementReadCount += 1
+        return AXUIElementCreateSystemWide()
+      },
+      selectionReader: { processIdentifier, _ in
+        requestedProcessIdentifier = processIdentifier
+        return .text("anchored source selection")
+      },
+      screenCaptureAccess: { false }
+    )
+
+    capture.prepareSelectedTextCapture()
+    #expect(capture.prepareNaturalPointingCapture())
+    activeApplication = laterApplication
+    await #expect(throws: ContextCaptureError.screenRecordingPermissionDenied) {
+      try await capture.capture(.naturalPointing)
+    }
+
+    #expect(focusedElementReadCount == 2)
+    #expect(requestedProcessIdentifier == source.processIdentifier)
+  }
+
+  @Test
+  @MainActor
+  func naturalPointingPreparationClearsAnUnavailablePreviousTarget() async {
+    let source = ContextApplicationTarget(
+      bundleIdentifier: "com.example.Source",
+      processIdentifier: 808
+    )
+    var activeApplication: ContextApplicationTarget? = source
+    let capture = SystemContextCapture(
+      excludedBundleIds: [],
+      currentProcessIdentifier: 909,
+      activeApplication: { activeApplication },
+      accessibilityAccess: { true },
+      focusedElementReader: { _ in AXUIElementCreateSystemWide() },
+      selectionReader: { _, _ in .text("stale selection") }
+    )
+    capture.prepareSelectedTextCapture()
+    activeApplication = nil
+
+    #expect(!capture.prepareNaturalPointingCapture())
+    do {
+      _ = try await capture.capture(.naturalPointing)
+      Issue.record("Expected unavailable capture")
+    } catch let error as ContextCaptureError {
+      #expect(error == .unavailable)
+    } catch {
+      Issue.record("Expected ContextCaptureError.unavailable")
+    }
   }
 }

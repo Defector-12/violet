@@ -60,7 +60,21 @@ public enum RealtimeServerEvent: Equatable, Sendable {
   case responseAudio(responseId: UUID, audio: Data, turnId: UUID)
   case responseCompleted(responseId: UUID, turnId: UUID)
   case responseCancelled(responseId: UUID)
+  case endRequested(turnId: UUID)
+  case contextCaptureRequested(requestId: UUID, turnId: UUID, expiresAt: Date)
   case error(code: String, message: String, retryable: Bool)
+}
+
+public enum RealtimeContextCaptureFailure: String, Codable, Equatable, Sendable {
+  case blocked
+  case cancelled
+  case permissionDenied = "permission_denied"
+  case unavailable
+}
+
+public enum RealtimeContextCaptureResult: Sendable {
+  case failed(RealtimeContextCaptureFailure)
+  case succeeded(FilteredContext)
 }
 
 public enum RealtimeSessionClientError: Error, Equatable, LocalizedError {
@@ -92,7 +106,16 @@ public enum RealtimeSessionClientError: Error, Equatable, LocalizedError {
 public protocol RealtimeSessionClientPort: Sendable {
   func cancelResponse() async
   func close() async
-  func connect(contextSessionId: UUID?) async throws -> RealtimeCapabilities
+  func connect(
+    contextSessionId: UUID?,
+    onDemandContext: Bool
+  ) async throws -> RealtimeCapabilities
+  func sendContextCaptureResult(
+    _ result: RealtimeContextCaptureResult,
+    deviceId: UUID,
+    requestId: UUID,
+    turnId: UUID
+  ) async throws
   func streamAudio(
     _ frames: AsyncStream<VioletAudioFrame>
   ) async -> AsyncThrowingStream<RealtimeServerEvent, Error>
@@ -103,6 +126,7 @@ public actor URLSessionRealtimeClient: RealtimeSessionClientPort {
   private let coreURL: URL
   private let deviceToken: String
   private let session: URLSession
+  private let testTrace: TestTraceRecorder?
   private var sessionId = UUID()
   private var clientSequence = 1
   private var serverSequence = 1
@@ -113,14 +137,19 @@ public actor URLSessionRealtimeClient: RealtimeSessionClientPort {
   public init(
     coreURL: URL,
     deviceToken: String,
-    session: URLSession = .shared
+    session: URLSession = .shared,
+    testTrace: TestTraceRecorder? = nil
   ) {
     self.coreURL = coreURL
     self.deviceToken = deviceToken
     self.session = session
+    self.testTrace = testTrace
   }
 
-  public func connect(contextSessionId: UUID?) async throws -> RealtimeCapabilities {
+  public func connect(
+    contextSessionId: UUID?,
+    onDemandContext: Bool
+  ) async throws -> RealtimeCapabilities {
     if socket != nil {
       throw RealtimeSessionClientError.invalidEvent
     }
@@ -130,8 +159,16 @@ public actor URLSessionRealtimeClient: RealtimeSessionClientPort {
     activeResponseId = nil
     turnActive = false
 
+    if let testTrace {
+      try testTrace.record("connection.preflight", fields: ["sessionId": sessionId.uuidString])
+      try await testTrace.prepareCore(coreURL: coreURL, deviceToken: deviceToken)
+    }
     var request = URLRequest(url: try realtimeURL(from: coreURL))
     request.setValue("Bearer \(deviceToken)", forHTTPHeaderField: "Authorization")
+    if let testTrace {
+      request.setValue(testTrace.runId, forHTTPHeaderField: "X-Violet-Test-Run")
+      request.setValue(testTrace.activeUntil, forHTTPHeaderField: "X-Violet-Test-Until")
+    }
     let newSocket = session.webSocketTask(with: request)
     socket = newSocket
     newSocket.resume()
@@ -143,6 +180,7 @@ public actor URLSessionRealtimeClient: RealtimeSessionClientPort {
             contextSessionId: contextSessionId,
             inputAudio: .init(sampleRate: 16_000),
             inputModalities: ["audio", "text"],
+            onDemandContext: onDemandContext ? true : nil,
             outputAudio: .init(sampleRate: 24_000),
             outputModalities: ["audio", "text"],
             protocolVersion: "1",
@@ -160,6 +198,7 @@ public actor URLSessionRealtimeClient: RealtimeSessionClientPort {
       }
       return capabilities
     } catch {
+      try? testTrace?.record("connection.failed", fields: ["error": error.localizedDescription])
       newSocket.cancel(with: .goingAway, reason: nil)
       socket = nil
       throw error
@@ -205,25 +244,74 @@ public actor URLSessionRealtimeClient: RealtimeSessionClientPort {
   }
 
   public func close() async {
+    try? testTrace?.finishIncompleteAnswers(reason: "session-closed")
     guard let socket else {
       return
     }
-    try? await send(
-      CloseEvent(
-        eventId: UUID(),
-        sequence: nextClientSequence(),
-        sessionId: sessionId,
-        type: "session.close"
+    do {
+      try await send(
+        CloseEvent(
+          eventId: UUID(),
+          sequence: nextClientSequence(),
+          sessionId: sessionId,
+          type: "session.close"
+        )
       )
-    )
+      if !(await waitForServerClose(socket)) {
+        try? testTrace?.record("connection.close-timeout")
+      }
+    } catch {
+      try? testTrace?.record("connection.close-send-failed", fields: [
+        "error": error.localizedDescription
+      ])
+    }
     socket.cancel(with: .normalClosure, reason: nil)
     self.socket = nil
     activeResponseId = nil
     turnActive = false
+    await collectCoreTrace()
   }
 
   public func cancelResponse() async {
     await cancelActiveResponse()
+  }
+
+  public func sendContextCaptureResult(
+    _ result: RealtimeContextCaptureResult,
+    deviceId: UUID,
+    requestId: UUID,
+    turnId: UUID
+  ) async throws {
+    switch result {
+    case .failed(let reason):
+      try await send(
+        ContextCaptureFailedEvent(
+          eventId: UUID(),
+          reason: reason,
+          requestId: requestId,
+          sequence: nextClientSequence(),
+          sessionId: sessionId,
+          turnId: turnId,
+          type: "context.capture.failed"
+        )
+      )
+    case .succeeded(let context):
+      try await send(
+        ContextCaptureSucceededEvent(
+          context: makeContextEnvelope(
+            context,
+            deviceId: deviceId,
+            sessionId: requestId
+          ),
+          eventId: UUID(),
+          requestId: requestId,
+          sequence: nextClientSequence(),
+          sessionId: sessionId,
+          turnId: turnId,
+          type: "context.capture.succeeded"
+        )
+      )
+    }
   }
 
   private func performAudioTurn(
@@ -292,7 +380,8 @@ public actor URLSessionRealtimeClient: RealtimeSessionClientPort {
       case .responseCompleted, .responseCancelled:
         activeResponseId = nil
         continuation.yield(event)
-      case .speechStarted, .speechStopped, .transcript, .responseText, .responseAudio:
+      case .speechStarted, .speechStopped, .transcript, .responseText, .responseAudio,
+        .endRequested, .contextCaptureRequested:
         continuation.yield(event)
       case .error(let code, let message, let retryable):
         throw RealtimeSessionClientError.server(
@@ -357,8 +446,11 @@ public actor URLSessionRealtimeClient: RealtimeSessionClientPort {
           message: message,
           retryable: retryable
         )
-      case .ready, .responseAudio, .responseCancelled, .speechStarted, .speechStopped,
-        .transcript:
+      case .endRequested:
+        continuation.finish()
+        return
+      case .ready, .responseAudio, .responseCancelled, .speechStarted, .speechStopped, .transcript,
+        .contextCaptureRequested:
         continue
       }
     }
@@ -393,6 +485,7 @@ public actor URLSessionRealtimeClient: RealtimeSessionClientPort {
       @unknown default:
         throw RealtimeSessionClientError.invalidEvent
       }
+    try testTrace?.wire("mac.receive", data: data)
     let envelope = try JSONDecoder().decode(ServerEnvelope.self, from: data)
     guard envelope.sessionId == sessionId else {
       throw RealtimeSessionClientError.sessionMismatch
@@ -412,10 +505,34 @@ public actor URLSessionRealtimeClient: RealtimeSessionClientPort {
       throw RealtimeSessionClientError.notConnected
     }
     let data = try JSONEncoder().encode(event)
+    try testTrace?.wire("mac.send", data: data)
     guard let value = String(data: data, encoding: .utf8) else {
       throw RealtimeSessionClientError.invalidEvent
     }
-    try await socket.send(.string(value))
+    do {
+      try await socket.send(.string(value))
+    } catch {
+      try? testTrace?.record("mac.send.failed", fields: ["error": error.localizedDescription])
+      throw error
+    }
+  }
+
+  private func collectCoreTrace() async {
+    guard let testTrace else { return }
+    do {
+      try await testTrace.collectCore(coreURL: coreURL, deviceToken: deviceToken)
+    } catch {
+      try? testTrace.record("core.trace.collection.failed", fields: ["error": error.localizedDescription])
+    }
+  }
+
+  private func waitForServerClose(_ socket: URLSessionWebSocketTask) async -> Bool {
+    let clock = ContinuousClock()
+    let deadline = clock.now.advanced(by: .seconds(2))
+    while socket.state != .completed, clock.now < deadline {
+      try? await Task.sleep(for: .milliseconds(25))
+    }
+    return socket.state == .completed
   }
 
   private func nextClientSequence() -> Int {
@@ -429,6 +546,7 @@ private struct ConfigureEvent: Encodable {
     let contextSessionId: UUID?
     let inputAudio: RealtimeAudioFormatEvent
     let inputModalities: [String]
+    let onDemandContext: Bool?
     let outputAudio: RealtimeAudioFormatEvent
     let outputModalities: [String]
     let protocolVersion: String
@@ -489,6 +607,26 @@ private struct CancelEvent: Encodable {
   let type: String
 }
 
+private struct ContextCaptureSucceededEvent: Encodable {
+  let context: ContextEnvelopeWire
+  let eventId: UUID
+  let requestId: UUID
+  let sequence: Int
+  let sessionId: UUID
+  let turnId: UUID
+  let type: String
+}
+
+private struct ContextCaptureFailedEvent: Encodable {
+  let eventId: UUID
+  let reason: RealtimeContextCaptureFailure
+  let requestId: UUID
+  let sequence: Int
+  let sessionId: UUID
+  let turnId: UUID
+  let type: String
+}
+
 private struct ServerEnvelope: Decodable {
   let sequence: Int
   let sessionId: UUID
@@ -520,6 +658,17 @@ private struct ErrorEvent: Decodable {
   let code: String
   let message: String
   let retryable: Bool
+}
+
+private struct SessionEndRequestEvent: Decodable {
+  let reason: String
+  let turnId: UUID
+}
+
+private struct ContextCaptureRequestEvent: Decodable {
+  let expiresAt: String
+  let requestId: UUID
+  let turnId: UUID
 }
 
 func decodeRealtimeServerEvent(_ data: Data) throws -> RealtimeServerEvent {
@@ -565,6 +714,22 @@ func decodeRealtimeServerEvent(_ data: Data) throws -> RealtimeServerEvent {
   case "response.cancelled":
     let event = try decoder.decode(ResponseEvent.self, from: data)
     return .responseCancelled(responseId: event.responseId)
+  case "session.end_requested":
+    let event = try decoder.decode(SessionEndRequestEvent.self, from: data)
+    guard event.reason == "user_intent" else {
+      throw RealtimeSessionClientError.invalidEvent
+    }
+    return .endRequested(turnId: event.turnId)
+  case "context.capture.requested":
+    let event = try decoder.decode(ContextCaptureRequestEvent.self, from: data)
+    guard let expiresAt = parseISO8601(event.expiresAt) else {
+      throw RealtimeSessionClientError.invalidEvent
+    }
+    return .contextCaptureRequested(
+      requestId: event.requestId,
+      turnId: event.turnId,
+      expiresAt: expiresAt
+    )
   case "error":
     let event = try decoder.decode(ErrorEvent.self, from: data)
     return .error(code: event.code, message: event.message, retryable: event.retryable)

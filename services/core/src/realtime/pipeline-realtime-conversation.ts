@@ -9,6 +9,7 @@ import type {
   RealtimeSessionConfiguration,
 } from "@violet/domain";
 import WebSocket, { type RawData } from "ws";
+import { AsyncQueue, abortReason, timeoutSignal } from "./async-queue.js";
 
 const inputAudio = {
   channels: 1,
@@ -95,12 +96,12 @@ export class PipelineRealtimeConversationPort implements RealtimeConversationPor
       dashScopeHeaders(this.#apiKey, this.#workspaceId),
     );
     const taskId = this.#generateId();
-    const setup = createTimeoutSignal(signal, this.#connectTimeoutMs);
+    const setupSignal = timeoutSignal(signal, this.#connectTimeoutMs);
 
     try {
-      await transport.connect(setup.signal);
+      await transport.connect(setupSignal);
       await transport.sendJson(asrRunTask(taskId, this.#asrModel));
-      await waitForJsonEvent(transport, "task-started", taskId, setup.signal);
+      await waitForJsonEvent(transport, "task-started", taskId, setupSignal);
       return new PipelineRealtimeConversation({
         apiKey: this.#apiKey,
         asrTaskId: taskId,
@@ -120,8 +121,6 @@ export class PipelineRealtimeConversationPort implements RealtimeConversationPor
     } catch (error) {
       transport.close();
       throw error;
-    } finally {
-      setup.dispose();
     }
   }
 }
@@ -187,7 +186,7 @@ class PipelineRealtimeConversation implements RealtimeConversation {
   readonly #generateId: () => string;
   readonly #history: ModelMessage[];
   readonly #modelGateway: ModelGateway;
-  readonly #outputQueue = new AsyncOutputQueue<RealtimeConversationOutput>();
+  readonly #outputQueue = new AsyncQueue<RealtimeConversationOutput>();
   readonly #ttsModel: string;
   readonly #voice: string;
   readonly #workspaceId: string;
@@ -272,6 +271,12 @@ class PipelineRealtimeConversation implements RealtimeConversation {
         throw new PipelineAdapterError(
           "AUTOMATIC_TURN_DETECTION",
           "The realtime pipeline uses server-side turn detection",
+          false,
+        );
+      case "context-result":
+        throw new PipelineAdapterError(
+          "UNSUPPORTED_REALTIME_INPUT",
+          "The realtime pipeline does not accept context tool results",
           false,
         );
       case "text":
@@ -456,15 +461,11 @@ class PipelineRealtimeConversation implements RealtimeConversation {
     const taskId = this.#generateId();
     response.ttsTaskId = taskId;
     response.ttsTransport = transport;
-    const setup = createTimeoutSignal(response.controller.signal, this.#connectTimeoutMs);
+    const setupSignal = timeoutSignal(response.controller.signal, this.#connectTimeoutMs);
 
-    try {
-      await transport.connect(setup.signal);
-      await transport.sendJson(ttsRunTask(taskId, this.#ttsModel, this.#voice));
-      await waitForJsonEvent(transport, "task-started", taskId, setup.signal);
-    } finally {
-      setup.dispose();
-    }
+    await transport.connect(setupSignal);
+    await transport.sendJson(ttsRunTask(taskId, this.#ttsModel, this.#voice));
+    await waitForJsonEvent(transport, "task-started", taskId, setupSignal);
     return {
       pump: this.#pumpTts(response, transport, taskId).then(
         () => ({ ok: true }),
@@ -538,7 +539,7 @@ class PipelineRealtimeConversation implements RealtimeConversation {
 }
 
 class WebSocketDashScopeTransport implements DashScopeRealtimeTransport {
-  readonly #events = new AsyncOutputQueue<DashScopeRealtimeMessage>();
+  readonly #events = new AsyncQueue<DashScopeRealtimeMessage>();
   readonly #socket: WebSocket;
   #closed = false;
 
@@ -650,93 +651,6 @@ class WebSocketDashScopeTransport implements DashScopeRealtimeTransport {
         }
       });
     });
-  }
-}
-
-class AsyncOutputQueue<T> {
-  readonly #values: T[] = [];
-  readonly #waiters: Array<{
-    readonly reject: (error: unknown) => void;
-    readonly resolve: (value: T | undefined) => void;
-  }> = [];
-  #closed = false;
-  #failure: unknown;
-
-  close(): void {
-    if (this.#closed) {
-      return;
-    }
-    this.#closed = true;
-    for (const waiter of this.#waiters.splice(0)) {
-      waiter.resolve(undefined);
-    }
-  }
-
-  fail(error: unknown): void {
-    if (this.#failure || this.#closed) {
-      return;
-    }
-    this.#failure = error;
-    for (const waiter of this.#waiters.splice(0)) {
-      waiter.reject(error);
-    }
-  }
-
-  next(signal?: AbortSignal): Promise<T | undefined> {
-    const value = this.#values.shift();
-    if (value !== undefined) {
-      return Promise.resolve(value);
-    }
-    if (this.#failure) {
-      return Promise.reject(this.#failure);
-    }
-    if (this.#closed || signal?.aborted) {
-      return Promise.resolve(undefined);
-    }
-    return new Promise((resolve, reject) => {
-      const waiter = {
-        reject: (error: unknown) => {
-          cleanup();
-          reject(error);
-        },
-        resolve: (nextValue: T | undefined) => {
-          cleanup();
-          resolve(nextValue);
-        },
-      };
-      const onAbort = () => {
-        const index = this.#waiters.indexOf(waiter);
-        if (index >= 0) {
-          this.#waiters.splice(index, 1);
-        }
-        waiter.resolve(undefined);
-      };
-      const cleanup = () => {
-        signal?.removeEventListener("abort", onAbort);
-      };
-      this.#waiters.push(waiter);
-      signal?.addEventListener("abort", onAbort, { once: true });
-    });
-  }
-
-  async nextRequired(signal?: AbortSignal): Promise<T> {
-    const value = await this.next(signal);
-    if (value === undefined) {
-      throw abortReason(signal);
-    }
-    return value;
-  }
-
-  push(value: T): void {
-    if (this.#closed || this.#failure) {
-      return;
-    }
-    const waiter = this.#waiters.shift();
-    if (waiter) {
-      waiter.resolve(value);
-    } else {
-      this.#values.push(value);
-    }
   }
 }
 
@@ -989,33 +903,4 @@ function required(value: string, label: string): string {
     throw new Error(`${label} is required`);
   }
   return result;
-}
-
-function abortReason(signal: AbortSignal | undefined): Error {
-  return signal?.reason instanceof Error ? signal.reason : new Error("Operation aborted");
-}
-
-function createTimeoutSignal(
-  parent: AbortSignal | undefined,
-  timeoutMs: number,
-): {
-  readonly dispose: () => void;
-  readonly signal: AbortSignal;
-} {
-  const controller = new AbortController();
-  const onAbort = () => controller.abort(parent?.reason);
-  const timeout = setTimeout(() => {
-    controller.abort(new Error("Pipeline provider setup timed out"));
-  }, timeoutMs);
-  parent?.addEventListener("abort", onAbort, { once: true });
-  if (parent?.aborted) {
-    onAbort();
-  }
-  return {
-    dispose: () => {
-      clearTimeout(timeout);
-      parent?.removeEventListener("abort", onAbort);
-    },
-    signal: controller.signal,
-  };
 }
