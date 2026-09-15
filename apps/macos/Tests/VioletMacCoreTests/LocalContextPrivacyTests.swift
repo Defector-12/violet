@@ -42,6 +42,50 @@ struct LocalContextPrivacyTests {
         )
       )
     }
+    #expect(throws: LocalContextPrivacyError.blockedSensitiveContent) {
+      try filter.filter(
+        .text(
+          appBundleId: "com.example.Reader",
+          text: "验证码: 123456"
+        )
+      )
+    }
+  }
+
+  @Test(
+    arguments: [
+      "api_key=abcdefghijklmnop",
+      "access_token: abcdefghijklmnop",
+      "TOS_SECRET_ACCESS_KEY=abcdefghijklmnop",
+      "Authorization: Bearer abcdefghijklmnop",
+    ])
+  func blocksCommonLabeledCredentialFormats(_ secret: String) {
+    let filter = LocalContextPrivacyFilter(excludedBundleIds: [])
+
+    #expect(throws: LocalContextPrivacyError.blockedSensitiveContent) {
+      try filter.filter(
+        .text(appBundleId: "com.example.Editor", text: secret)
+      )
+    }
+  }
+
+  @Test
+  func blocksImagesWhenLocalPrivacyAnalysisFails() throws {
+    let filter = LocalContextPrivacyFilter(excludedBundleIds: [])
+
+    #expect(throws: LocalContextPrivacyError.privacyAnalysisFailed) {
+      try filter.filter(
+        .image(
+          appBundleId: "com.example.Reader",
+          data: imageWithSyntheticText(),
+          focusPoint: nil,
+          height: 96,
+          recognizedText: nil,
+          region: nil,
+          width: 128
+        )
+      )
+    }
   }
 
   @Test
@@ -144,7 +188,7 @@ struct LocalContextPrivacyTests {
         redacted += 1
         #expect(filteredData != data)
       } else {
-        misses.append("\(sample) -> \(recognized.map(\.text).joined(separator: " | "))")
+        misses.append("\(sample) -> \((recognized ?? []).map(\.text).joined(separator: " | "))")
       }
     }
 

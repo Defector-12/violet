@@ -1,7 +1,8 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { resolve } from "node:path";
 import type {
+  ContextUnderstandingPort,
   ModelGateway,
   RealtimeConversationInput,
   RealtimeConversationOutput,
@@ -252,6 +253,65 @@ describe("Core HTTP API", () => {
     expect(JSON.parse(current?.content ?? "{}")).toMatchObject({
       currentContext: expect.stringContaining("Selected context"),
       userRequest: "What is this?",
+    });
+  });
+
+  it("injects a reliable manual image summary into the following chat request", async () => {
+    const model = new RecordingModelGateway();
+    const understanding: ContextUnderstandingPort = {
+      async understand() {
+        return {
+          confidence: 0.95,
+          model: "test-vision",
+          provider: "test",
+          summary: "The selected chart peaks at 42.",
+        };
+      },
+    };
+    const { app, client } = await startCore(false, undefined, model, undefined, understanding);
+    const sessionId = randomUUID();
+    const capturedAt = new Date();
+    const bytes = Buffer.from("synthetic-image");
+    await app.inject({
+      headers: { authorization: `Bearer ${deviceToken}` },
+      method: "POST",
+      payload: {
+        ...contextEnvelope(sessionId, capturedAt),
+        payload: {
+          image: {
+            data: bytes.toString("base64"),
+            height: 100,
+            mediaType: "image/jpeg",
+            sha256: createHash("sha256").update(bytes).digest("hex"),
+            width: 200,
+          },
+          type: "focus.region",
+          region: { height: 0.5, width: 0.5, x: 0.1, y: 0.1 },
+        },
+        source: {
+          deviceId: randomUUID(),
+          modality: "screen",
+        },
+      },
+      url: "/v1/context/envelopes",
+    });
+
+    for await (const _event of client.streamChat({
+      contextSessionId: sessionId,
+      message: "What is the peak?",
+      requestId: randomUUID(),
+    })) {
+      // Consume the response.
+    }
+
+    const current = model.lastMessages.at(-1);
+    const content = JSON.parse(current?.content ?? "{}") as {
+      currentContext?: string;
+    };
+    expect(JSON.parse(content.currentContext ?? "{}")).toMatchObject({
+      confidence: 0.95,
+      evidence: expect.stringContaining("peaks at 42"),
+      status: "ready",
     });
   });
 
@@ -545,6 +605,7 @@ async function startCore(
   }),
   modelGateway: ModelGateway = new DeterministicModelGateway(),
   testTraces?: TestTraceStore,
+  contextUnderstanding: ContextUnderstandingPort = new DeterministicContextUnderstandingPort(),
 ): Promise<{
   readonly app: ReturnType<typeof buildCoreApp>;
   readonly baseUrl: string;
@@ -569,7 +630,7 @@ async function startCore(
     contextService: new ContextService({
       artifactStore: new InMemoryContextArtifactStore(),
       repository: new InMemoryContextSessionRepository(),
-      understanding: new DeterministicContextUnderstandingPort(),
+      understanding: contextUnderstanding,
     }),
     realtimeConversationPort,
     realtimeLedger: ledger,
