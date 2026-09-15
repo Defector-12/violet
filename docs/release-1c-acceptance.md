@@ -1,7 +1,7 @@
 # Release 1C / 1C.1 / 1C.2 验收
 
-状态：Release 1C/1C.1 用户产品验收和 `3b9ffc1` 部署基线已完成；进入 1D 前的
-Release 1C.2 源码硬化候选已完成本地修复与自动化，交付与部署状态见下文。
+状态：Release 1C/1C.1 用户产品验收已完成；Release 1C.2 源码硬化、Git 交付和
+最终部署已完成。
 本文件是当前状态与剩余工作的事实源；不能把历史测试数字当成当前版本的新测试。
 
 ## 交付范围
@@ -91,14 +91,22 @@ Release 1C.2 源码硬化候选已完成本地修复与自动化，交付与部�
 - 复审后 Node 全量 152/152、生成一致、类型检查与 Biome 通过：
   `b438086f-ce08-4dcc-9460-cb16d786130c`；Swift 全量 92/92：
   `d5d3fe64-e7d0-4621-a9a3-a44e0bbaba32`。
-- 上述复审硬化尚未重新部署；运行态继续使用下方已验收的 `3b9ffc1-release-1c`。
+- 上述复审硬化已随 Release 1C.2 部署，历史运行基线仍保留用于回滚。
 - Release 1C.2 本地候选进一步修复：区域框选绕过保密应用、常见凭证格式漏检、
   OCR 失败时图片 fail-open、手动图片 Context 无法进入后续问答，以及 Smart-turn
   迟到响应错绑新轮次。
 - 1C.2 候选 Node 全量 154/154、生成一致、类型检查与 Biome 通过：
   `778ed4c1-74d2-479c-8eb3-3997ae68b53c`；Swift 全量 95/95：
-  `444b5506-277a-4b0a-ad6a-46400ed84080`。该候选尚未部署，
-  不能把上述结果记为当前运行版本证据。
+  `444b5506-277a-4b0a-ad6a-46400ed84080`。
+- 确定源码提交 `97aee4a7f2e1f3f58acc2635082404428f3462f1` 已通过 Bits MR !21
+  合入 `1168bd7`，并通过 GitHub PR #4 合入 `26aea81`；该源码合并树为
+  `8143dac5`。
+- exact commit Core 构建 `24fa8e1b-fc66-4698-8aff-dca9b64119b1`，部署
+  `dfa51803-0567-4a95-979d-db114702ebe2`；完整 `dist` 清单哈希比对、容器状态、
+  Trace 权限和回滚镜像验证为 `9ec14771-0fdd-4a6f-a469-2334ddf78f28`，认证状态验证为
+  `5b78e9d6-8101-4095-bb3f-3e6c6f6cc076`。
+- Mac exact commit 构建、签名记录为 `6a71707e-43c8-4843-9cbd-38c41ded0d66`；
+  普通启动、隧道和无 Debug/Test 环境验证为 `9d190251-edc8-4dc0-8bed-9c4d4dc1a65f`。
 
 ## 历史失败与修复
 
@@ -144,18 +152,22 @@ Release 1C.2 源码硬化候选已完成本地修复与自动化，交付与部�
 
 最终运行版本：
 
-- Core：`3b9ffc1-release-1c`，镜像
-  `sha256:8083a796621c94a9c103208d757e13af3bfe88081783858ec129fa88c5ee4000`，
-  健康且 restart count 为 0。关键模块 SHA-256 与本地 exact commit 构建逐一一致。
+- Core：`97aee4a-release-1c2`，镜像
+  `sha256:46070d90ce613da245391958a85c5af0065d2d76d55a8a803b6dfe84114f4975`，
+  健康且 restart count 为 0。完整 `dist` 清单 SHA-256
+  `1366b96f0b10b61435b0748b16494058327c0e9bc4af33716a4637fb196337f3`
+  与本地 exact commit 构建一致。
 - Core test-trace 目录为容器内 `1000:1000 / 0700`；运行环境不存在
   `VIOLET_DEBUG_TRACE`。
 - Mac 二进制 SHA-256：
-  `f19888af4dba2fe6fa0ca5f12717383439efa3c0c2bb2f0d978e8d7a69a890ad`，
+  `05bd929694c6970f86752d83812b506fb4044ca0e226142db9a722e97d40c083`，
   严格签名验证通过；普通启动未设置 Debug 或 test-run 环境。
-- 首次部署命令 `e9d9f291-6f13-4ab4-b6dd-af15fee1ac09` 已完成远端健康切换，
-  仅因沙箱拒绝 bytedcli 更新本机 `known_hosts` 临时文件而以非零退出；独立只读验证
-  `ec5a59bc-4c30-4159-a4a7-2facdd5d87d6` 为最终运行证据。
-- Core 回滚标签 `violet-core:pre-release-1c-20260915`；Mac 回滚包
+- Core 部署、完整哈希和认证状态证据分别为
+  `dfa51803-0567-4a95-979d-db114702ebe2`、
+  `9ec14771-0fdd-4a6f-a469-2334ddf78f28` 和
+  `5b78e9d6-8101-4095-bb3f-3e6c6f6cc076`。
+- Core 回滚标签 `violet-core:pre-release-1c2-20260915` 指向原
+  `3b9ffc1-release-1c` 镜像；Mac 回滚包
   `.local-acceptance/rollback/Violet-freshness-v6-before-clean-vision.app`。
 - 关闭 Look 可停用按需视觉；显式 deterministic Vision 或 memory Context 配置可用于
   受控降级。供应商失败不自动切换，不使用旧 Context 猜答案。
