@@ -152,6 +152,33 @@ struct WakeWordCoordinatorTests {
       coordinator.state == .listening && detector.startCount == 2
     }
   }
+
+  @Test
+  @MainActor
+  func cancelledPermissionRequestCannotRestartListeningDuringALaterSuspension() async throws {
+    let defaults = isolatedDefaults()
+    let detector = FakeWakeWordDetector(defersAccess: true)
+    let coordinator = WakeWordCoordinator(
+      detector: detector,
+      defaults: defaults
+    )
+
+    coordinator.setEnabled(true)
+    try await waitUntil { detector.accessRequestCount == 1 }
+    coordinator.suspend(for: .systemSleep)
+    coordinator.resume(from: .systemSleep)
+    try await waitUntil { detector.accessRequestCount == 2 }
+
+    detector.resolveNextAccess(true)
+    try await waitUntil { detector.completedAccessCount == 1 }
+    coordinator.suspend(for: .screenSleep)
+    detector.resolveNextAccess(true)
+    try await waitUntil { detector.completedAccessCount == 2 }
+
+    #expect(coordinator.state == .paused)
+    #expect(!detector.isRunning)
+    #expect(detector.startCount == 0)
+  }
 }
 
 @MainActor
@@ -168,18 +195,33 @@ private final class WakeAcceptanceRecorder: RealtimeAcceptanceRecording {
 @MainActor
 private final class FakeWakeWordDetector: WakeWordDetectorPort {
   private let accessAllowed: Bool
+  private let defersAccess: Bool
+  private var accessContinuations: [CheckedContinuation<Bool, Never>] = []
   private var audioConfigurationInvalidated: (@MainActor @Sendable () -> Void)?
   private var detection: (@MainActor @Sendable () -> Void)?
+  private(set) var accessRequestCount = 0
+  private(set) var completedAccessCount = 0
   private(set) var isRunning = false
   private(set) var startCount = 0
   private(set) var stopCount = 0
 
-  init(accessAllowed: Bool = true) {
+  init(accessAllowed: Bool = true, defersAccess: Bool = false) {
     self.accessAllowed = accessAllowed
+    self.defersAccess = defersAccess
   }
 
   func requestAccess() async -> Bool {
-    accessAllowed
+    accessRequestCount += 1
+    let result =
+      if defersAccess {
+        await withCheckedContinuation { continuation in
+          accessContinuations.append(continuation)
+        }
+      } else {
+        accessAllowed
+      }
+    completedAccessCount += 1
+    return result
   }
 
   func start(
@@ -204,6 +246,10 @@ private final class FakeWakeWordDetector: WakeWordDetectorPort {
 
   func invalidateAudioConfiguration() {
     audioConfigurationInvalidated?()
+  }
+
+  func resolveNextAccess(_ allowed: Bool) {
+    accessContinuations.removeFirst().resume(returning: allowed)
   }
 }
 

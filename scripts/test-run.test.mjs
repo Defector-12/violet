@@ -185,12 +185,21 @@ describe("test-run reporting", () => {
   it("redacts labeled secrets and credential-bearing URLs", () => {
     expect(
       redactCommandOutput(
-        'https://user:private@example.test token=private-value {"password":"json-secret","api_key":"json-api-key"}',
+        [
+          "https://user:private@example.test",
+          "postgresql://violet:database-secret@postgres:5432/violet",
+          "token=private-value",
+          "TOS_SECRET_ACCESS_KEY=tos-secret",
+          "AWS_ACCESS_KEY_ID=aws-key",
+          '{"password":"json-secret","api_key":"json-api-key"}',
+        ].join(" "),
       ),
     ).not.toContain("private");
-    expect(redactCommandOutput('{"password":"json-secret","api_key":"json-api-key"}')).not.toMatch(
-      /json-(?:secret|api-key)/u,
-    );
+    expect(
+      redactCommandOutput(
+        'postgresql://violet:database-secret@postgres:5432/violet TOS_SECRET_ACCESS_KEY=tos-secret AWS_ACCESS_KEY_ID=aws-key {"password":"json-secret","api_key":"json-api-key"}',
+      ),
+    ).not.toMatch(/database-secret|tos-secret|aws-key|json-(?:secret|api-key)/u);
   });
 
   it("fingerprints untracked source content", async () => {

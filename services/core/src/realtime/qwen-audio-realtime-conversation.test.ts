@@ -475,6 +475,47 @@ describe("QwenAudioRealtimeConversationPort", () => {
     expect(transport.sent).toContainEqual({ type: "response.cancel" });
   });
 
+  it("binds delayed provider responses to the turn that requested them", async () => {
+    const transport = new FakeTransport([
+      { type: "session.created" },
+      { type: "session.updated" },
+      {
+        response: { id: "resp-qwen-1", status: "in_progress" },
+        type: "response.created",
+      },
+      {
+        response: { id: "resp-qwen-2", status: "in_progress" },
+        type: "response.created",
+      },
+    ]);
+    const generatedIds = ["local-response-1", "local-response-2"];
+    const port = new QwenAudioRealtimeConversationPort({
+      apiKey: "test-qwen-api-key",
+      createTransport: () => transport,
+      generateId: () => generatedIds.shift() ?? "unexpected-id",
+      model: "qwen-audio-3.0-realtime-plus",
+      voice: "longanqian",
+      workspaceId: "ws-jvh4fvlcktrjvtbj",
+    });
+    const conversation = await port.open(configuration());
+
+    await conversation.send({ text: "First", turnId: "turn-1", type: "text" });
+    await conversation.send({ text: "Second", turnId: "turn-2", type: "text" });
+
+    expect(await take(conversation.outputs(), 2)).toEqual([
+      {
+        responseId: "local-response-1",
+        turnId: "turn-1",
+        type: "response-started",
+      },
+      {
+        responseId: "local-response-2",
+        turnId: "turn-2",
+        type: "response-started",
+      },
+    ]);
+  });
+
   it("treats a no-active-response race after automatic barge-in as cancelled", async () => {
     const transport = new FakeTransport([
       { type: "session.created" },
@@ -546,6 +587,33 @@ describe("QwenAudioRealtimeConversationPort", () => {
 
     expect(output.map((event) => event.type)).toEqual(["response-started", "response-completed"]);
     expect(transport.sent).not.toContainEqual({ type: "response.cancel" });
+  });
+
+  it("cancels an active response after a UUID case round trip", async () => {
+    const transport = new FakeTransport([
+      { type: "session.created" },
+      { type: "session.updated" },
+      {
+        response: { id: "resp-qwen-1", status: "in_progress" },
+        type: "response.created",
+      },
+    ]);
+    const responseId = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+    const port = new QwenAudioRealtimeConversationPort({
+      apiKey: "test-qwen-api-key",
+      createTransport: () => transport,
+      generateId: () => responseId,
+      model: "qwen-audio-3.0-realtime-plus",
+      voice: "longanqian",
+      workspaceId: "ws-jvh4fvlcktrjvtbj",
+    });
+    const conversation = await port.open(configuration());
+    const outputs = conversation.outputs()[Symbol.asyncIterator]();
+
+    expect((await outputs.next()).value).toMatchObject({ responseId, type: "response-started" });
+    await conversation.send({ responseId: responseId.toUpperCase(), type: "cancel" });
+
+    expect(transport.sent).toContainEqual({ type: "response.cancel" });
   });
 
   it("treats a provider no-active-response error after cancellation as cancelled", async () => {

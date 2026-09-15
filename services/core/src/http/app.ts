@@ -28,6 +28,7 @@ import {
   withTestTrace,
   withTestTraceIds,
 } from "../realtime/test-trace.js";
+import { formatVisualResult } from "../realtime/visual-grounding.js";
 import { recordHttpRequest } from "../telemetry-signals.js";
 
 const maximumRealtimePayloadBytes = 12 * 1024 * 1024;
@@ -293,7 +294,9 @@ export function buildCoreApp(options: CoreAppOptions): FastifyInstance {
     let contextEvidence: string | undefined;
     if (request.body.contextSessionId) {
       try {
-        contextEvidence = (await options.contextService.get(request.body.contextSessionId)).summary;
+        contextEvidence = formatVisualResult(
+          await options.contextService.get(request.body.contextSessionId),
+        );
       } catch (error) {
         if (error instanceof ContextServiceError) {
           return reply.code(error.status).send(

@@ -431,11 +431,11 @@ export function redactCommandOutput(value) {
     .replaceAll(/\b(?:sk|ak)-[A-Za-z0-9_-]{16,}\b/gu, "[REDACTED]")
     .replaceAll(/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/gu, "[REDACTED]")
     .replaceAll(
-      /["']?(?:password|passwd|token|secret|api[_-]?key|device[_-]?token|access[_-]?token|验证码)["']?\s*[:=：]\s*["']?[^"'\s,;}]+["']?/giu,
+      /["']?[A-Za-z0-9_-]*(?:password|passwd|token|secret|api[_-]?key|access[_-]?key)[A-Za-z0-9_-]*["']?\s*[:=：]\s*["']?[^"'\s,;}]+["']?/giu,
       "[REDACTED]",
     )
     .replaceAll(/\bBearer\s+\S+/giu, "Bearer [REDACTED]")
-    .replaceAll(/https?:\/\/[^\s/@]+:[^\s/@]+@/gu, "https://[REDACTED]@");
+    .replaceAll(/\b([a-z][a-z0-9+.-]*):\/\/[^\s/@]+:[^\s/@]+@/giu, "$1://[REDACTED]@");
 }
 
 export async function purgeRuns(base = runs, now = Date.now()) {

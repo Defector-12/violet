@@ -15,6 +15,10 @@ import { formatVisualResult } from "./visual-grounding.js";
 
 const maximumCaptureClockSkewMs = 30_000;
 
+function canonicalId(value: string): string {
+  return value.toLowerCase();
+}
+
 interface PendingContextCapture {
   readonly abortController: AbortController;
   readonly callId: string;
@@ -160,7 +164,7 @@ export class RealtimeSession {
           const context = this.#conversationPort.supportsContextLookup
             ? await this.#contextService.getAvailable(this.#contextSessionId)
             : await this.#contextService.get(this.#contextSessionId);
-          contextEvidence = context.summary;
+          contextEvidence = formatVisualResult(context);
         } catch (error) {
           if (error instanceof ContextServiceError) {
             yield this.#error(event.sessionId, error.code, "The requested context is unavailable");
@@ -279,7 +283,7 @@ export class RealtimeSession {
       await this.#persistUserTurn(event.turnId, event.text);
     }
     if (event.type === "response.cancel") {
-      const turnId = this.#responseTurnIds.get(event.responseId);
+      const turnId = this.#responseTurnIds.get(canonicalId(event.responseId));
       if (turnId) this.#cancelContextCapturesForTurn(turnId);
     }
 
@@ -302,7 +306,7 @@ export class RealtimeSession {
     for await (const receivedOutput of conversation.outputs(signal)) {
       recordTestTrace("runtime.output", receivedOutput);
       if (receivedOutput.type === "response-started") {
-        this.#responseTurnIds.set(receivedOutput.responseId, receivedOutput.turnId);
+        this.#responseTurnIds.set(canonicalId(receivedOutput.responseId), receivedOutput.turnId);
       }
       const deferredTurnId = responseTurnIdForDeferral(receivedOutput);
       if (this.#onDemandContext && deferredTurnId && !this.#finalTranscripts.has(deferredTurnId)) {
@@ -326,7 +330,7 @@ export class RealtimeSession {
       }
       for (const output of outputs) {
         if (output.type === "context-request") {
-          this.#responseTurnIds.set(output.responseId, output.turnId);
+          this.#responseTurnIds.set(canonicalId(output.responseId), output.turnId);
           if (this.#onDemandContext) {
             this.#deferredResponseOutputs.delete(output.turnId);
             if (this.#visibleResponseIds.delete(output.responseId) && this.#sessionId) {
@@ -383,7 +387,7 @@ export class RealtimeSession {
           this.#visibleResponseIds.add(output.responseId);
         } else if (output.type === "response-completed" || output.type === "response-cancelled") {
           this.#visibleResponseIds.delete(output.responseId);
-          this.#responseTurnIds.delete(output.responseId);
+          this.#responseTurnIds.delete(canonicalId(output.responseId));
         }
         if (!this.#sessionId) {
           return;
@@ -594,10 +598,7 @@ export class RealtimeSession {
     } else {
       try {
         const context = await this.#contextService.get(contextSessionId);
-        result = JSON.stringify({
-          evidence: context.summary,
-          status: "ready",
-        });
+        result = formatVisualResult(context);
       } catch (error) {
         result = JSON.stringify({
           message:

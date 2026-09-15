@@ -29,6 +29,7 @@ public final class WakeWordCoordinator: ObservableObject {
   private let routeRecoveryDelay: Duration
   private var routeRecoveryTask: Task<Void, Never>?
   private var startTask: Task<Void, Never>?
+  private var startToken: UUID?
   private var systemSuspensions = Set<WakeWordSystemSuspension>()
 
   public init(
@@ -64,6 +65,7 @@ public final class WakeWordCoordinator: ObservableObject {
       routeRecoveryTask = nil
       startTask?.cancel()
       startTask = nil
+      startToken = nil
       stopDetector()
       state = .disabled
     }
@@ -80,18 +82,29 @@ public final class WakeWordCoordinator: ObservableObject {
       return
     }
     state = .paused
+    let token = UUID()
+    startToken = token
     startTask = Task { [weak self, detector] in
       guard let self else {
         return
       }
+      defer {
+        if self.startToken == token {
+          self.startTask = nil
+          self.startToken = nil
+        }
+      }
       let allowed = await detector.requestAccess()
-      guard !Task.isCancelled, self.isEnabled else {
-        self.startTask = nil
+      guard
+        !Task.isCancelled,
+        self.startToken == token,
+        self.isEnabled,
+        self.systemSuspensions.isEmpty
+      else {
         return
       }
       guard allowed else {
         self.state = .unavailable(message: "Microphone access is required for wake word.")
-        self.startTask = nil
         return
       }
       do {
@@ -117,7 +130,6 @@ public final class WakeWordCoordinator: ObservableObject {
             ?? "Wake word is unavailable."
         )
       }
-      self.startTask = nil
     }
   }
 
@@ -126,6 +138,7 @@ public final class WakeWordCoordinator: ObservableObject {
     routeRecoveryTask = nil
     startTask?.cancel()
     startTask = nil
+    startToken = nil
     stopDetector()
     state = isEnabled ? .paused : .disabled
   }
@@ -153,6 +166,7 @@ public final class WakeWordCoordinator: ObservableObject {
     }
     startTask?.cancel()
     startTask = nil
+    startToken = nil
     stopDetector()
     state = .paused
     routeRecoveryTask?.cancel()

@@ -366,6 +366,69 @@ describe("RealtimeSession", () => {
     });
   });
 
+  it("does not expose a low-confidence image as ready context evidence", async () => {
+    const sessionId = randomUUID();
+    const contextSessionId = randomUUID();
+    const contextService = new ContextService({
+      artifactStore: new InMemoryContextArtifactStore(),
+      repository: new InMemoryContextSessionRepository(),
+      understanding: {
+        async understand() {
+          return {
+            answer: "Maybe the label is EMBER.",
+            confidence: 0.69,
+            model: "test",
+            provider: "test",
+            summary: "Maybe the label is EMBER.",
+          };
+        },
+      },
+    });
+    const capturedAt = new Date();
+    await contextService.submit(
+      imageContextEnvelope(contextSessionId, capturedAt, { x: 0.5, y: 0.5 }),
+    );
+    await contextService.get(contextSessionId);
+    let observedConfiguration: Parameters<DeterministicRealtimeConversationPort["open"]>[0] | null =
+      null;
+    const deterministic = new DeterministicRealtimeConversationPort({
+      generateId: randomUUID,
+    });
+    const session = new RealtimeSession({
+      conversationEndIntent: neverEndsConversation,
+      contextService,
+      conversationPort: {
+        supportsContextLookup: true,
+        async open(configuration, signal) {
+          observedConfiguration = configuration;
+          return deterministic.open(configuration, signal);
+        },
+      },
+      generateId: randomUUID,
+      ledger: new InMemoryConversationLedger(),
+    });
+
+    await collect(
+      session.handle({
+        configuration: {
+          contextSessionId,
+          inputModalities: ["audio", "text"],
+          outputModalities: ["audio", "text"],
+          protocolVersion: "1",
+        },
+        eventId: randomUUID(),
+        sequence: 1,
+        sessionId,
+        type: "session.configure",
+      }),
+    );
+
+    expect(observedConfiguration).toMatchObject({
+      contextEvidence: expect.stringContaining('"status":"unavailable"'),
+    });
+    expect(JSON.stringify(observedConfiguration)).not.toContain("Maybe the label is EMBER.");
+  });
+
   it("resolves provider context requests without exposing them to the client", async () => {
     const sessionId = randomUUID();
     const contextSessionId = randomUUID();
@@ -1138,7 +1201,7 @@ describe("RealtimeSession", () => {
             await collect(
               f.session.handle({
                 ...(action === "cancel"
-                  ? { type: "response.cancel" as const, responseId }
+                  ? { type: "response.cancel" as const, responseId: responseId.toUpperCase() }
                   : {
                       type: "input.text" as const,
                       text: "Explain closures.",
