@@ -197,13 +197,11 @@ export interface components {
             } | {
                 focusPoint?: components["schemas"]["normalizedPoint"];
                 image: components["schemas"]["image"];
-                localText?: string;
                 /** @constant */
                 type: "screen.snapshot";
             } | {
                 focusPoint?: components["schemas"]["normalizedPoint"];
                 image: components["schemas"]["image"];
-                localText?: string;
                 region: components["schemas"]["normalizedRect"];
                 /** @constant */
                 type: "focus.region";

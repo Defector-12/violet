@@ -52,6 +52,13 @@
   distribution rather than the best run.
 - Never claim completion from prompt inspection, mocked output, or model self-reported
   confidence alone.
+- Every manual acceptance test, agent replay, and automated test run must have its own
+  inspectable record under `.local-acceptance/test-runs/`; see `docs/testing/README.md`.
+  Verify recorder readiness before asking the user to test. Preserve questions, actual
+  sent/received evidence, correlation IDs, intermediate decisions, errors and every attempt.
+  Never clear a failed run or ask for a repeat merely because tracing was not prepared.
+  Mark missing evidence explicitly; do not reconstruct it as fact. Keep credentials and
+  raw microphone audio out of records, and respect bounded consent and retention.
 
 ## Privacy And Authority
 

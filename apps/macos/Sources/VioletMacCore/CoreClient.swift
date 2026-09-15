@@ -56,11 +56,19 @@ extension VioletCoreClientPort {
 
 public struct GeneratedVioletCoreClient: VioletCoreClientPort {
   private let client: Client
+  private let testTrace: TestTraceRecorder?
+  private let serverURL: URL
+  private let deviceToken: String
 
-  public init(serverURL: URL, deviceToken: String) {
+  public init(serverURL: URL, deviceToken: String, testTrace: TestTraceRecorder? = nil) {
+    self.testTrace = testTrace
+    self.serverURL = serverURL
+    self.deviceToken = deviceToken
     client = VioletProtocolClientFactory.make(
       serverURL: serverURL,
-      deviceToken: deviceToken
+      deviceToken: deviceToken,
+      testRunId: testTrace?.runId,
+      testRunActiveUntil: testTrace?.activeUntil
     )
   }
 
@@ -99,6 +107,13 @@ public struct GeneratedVioletCoreClient: VioletCoreClientPort {
     AsyncThrowingStream { continuation in
       let task = Task {
         do {
+          if let testTrace {
+            try await testTrace.prepareCore(coreURL: serverURL, deviceToken: deviceToken)
+            try testTrace.record("chat.send", fields: [
+              "requestId": requestId.uuidString, "message": message,
+              "contextSessionId": contextSessionId?.uuidString ?? "",
+            ])
+          }
           let output = try await client.streamChat(
             .init(
               body: .json(
@@ -113,7 +128,20 @@ public struct GeneratedVioletCoreClient: VioletCoreClientPort {
           switch output {
           case .ok(let response):
             let body = try response.body.application_x_hyphen_ndjson
-            try await decodeChatStream(body, continuation: continuation)
+            let answer = try await decodeChatStream(
+              body,
+              continuation: continuation,
+              testTrace: testTrace,
+              requestId: requestId
+            )
+            if let testTrace {
+              try await testTrace.collectCore(coreURL: serverURL, deviceToken: deviceToken)
+              try testTrace.record("chat.completed", fields: [
+                "requestId": requestId.uuidString,
+                "text": answer,
+              ])
+            }
+            continuation.finish()
           case .unauthorized:
             throw VioletCoreClientError.requestFailed(code: 401)
           case .code423:
@@ -122,8 +150,12 @@ public struct GeneratedVioletCoreClient: VioletCoreClientPort {
             throw VioletCoreClientError.requestFailed(code: statusCode)
           }
         } catch is CancellationError {
+          try? testTrace?.record("chat.cancelled", fields: ["requestId": requestId.uuidString])
+          try? await testTrace?.collectCore(coreURL: serverURL, deviceToken: deviceToken)
           continuation.finish()
         } catch {
+          try? testTrace?.record("chat.failed", fields: ["requestId": requestId.uuidString, "error": error.localizedDescription])
+          try? await testTrace?.collectCore(coreURL: serverURL, deviceToken: deviceToken)
           continuation.finish(throwing: error)
         }
       }
@@ -146,33 +178,44 @@ private struct ChatWireEvent: Decodable {
 
 private func decodeChatStream(
   _ body: HTTPBody,
-  continuation: AsyncThrowingStream<String, Error>.Continuation
-) async throws {
+  continuation: AsyncThrowingStream<String, Error>.Continuation,
+  testTrace: TestTraceRecorder?,
+  requestId: UUID
+) async throws -> String {
   var buffer = Data()
+  var answer = ""
+  do {
+    for try await chunk in body {
+      try Task.checkCancellation()
+      buffer.append(contentsOf: chunk)
 
-  for try await chunk in body {
-    try Task.checkCancellation()
-    buffer.append(contentsOf: chunk)
-
-    while let newline = buffer.firstIndex(of: 0x0A) {
-      let line = buffer[..<newline]
-      buffer.removeSubrange(...newline)
-      try decodeChatLine(Data(line), continuation: continuation)
+      while let newline = buffer.firstIndex(of: 0x0A) {
+        let line = buffer[..<newline]
+        buffer.removeSubrange(...newline)
+        answer += try decodeChatLine(Data(line), continuation: continuation)
+      }
     }
-  }
 
-  if !buffer.isEmpty {
-    try decodeChatLine(buffer, continuation: continuation)
+    if !buffer.isEmpty {
+      answer += try decodeChatLine(buffer, continuation: continuation)
+    }
+    return answer
+  } catch {
+    try? testTrace?.record("chat.incomplete", fields: [
+      "requestId": requestId.uuidString,
+      "text": answer,
+      "error": error.localizedDescription,
+    ])
+    throw error
   }
-  continuation.finish()
 }
 
 private func decodeChatLine(
   _ data: Data,
   continuation: AsyncThrowingStream<String, Error>.Continuation
-) throws {
+) throws -> String {
   guard !data.isEmpty else {
-    return
+    return ""
   }
   let event = try JSONDecoder().decode(ChatWireEvent.self, from: data)
   switch event.type {
@@ -181,12 +224,13 @@ private func decodeChatLine(
       throw VioletCoreClientError.invalidResponse
     }
     continuation.yield(content)
+    return content
   case "error":
     throw VioletCoreClientError.streamError(
       message: event.error?.message ?? "Violet Core realtime request failed."
     )
   case "complete", "start":
-    break
+    return ""
   default:
     throw VioletCoreClientError.invalidResponse
   }

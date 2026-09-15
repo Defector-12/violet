@@ -4,13 +4,12 @@ import type {
   ContextArtifactStore,
   ContextPayload,
   ContextSessionRepository,
-  ContextTargetEvidence,
   ContextUnderstandingPort,
   ResolvedContext,
 } from "@violet/domain";
 import { evaluateContextAccess } from "@violet/policy";
 import type { ContextEnvelope, ContextReceipt } from "@violet/protocol";
-
+import { recordTestTrace } from "../realtime/test-trace.js";
 import { recordContextStageDuration } from "../telemetry-signals.js";
 
 type ImageContextPayload = Extract<ContextPayload, { readonly image: unknown }>;
@@ -20,7 +19,6 @@ type ContextResolution = {
   readonly model: string;
   readonly provider: string;
   readonly summary: string;
-  readonly target?: ContextTargetEvidence;
 };
 
 export class ContextServiceError extends Error {
@@ -76,6 +74,7 @@ export class ContextService {
     signal?: AbortSignal,
     question?: string,
   ): Promise<ContextReceipt> {
+    signal?.throwIfAborted();
     const startedAt = performance.now();
     const now = this.#now();
     const capturedAt = new Date(envelope.capturedAt);
@@ -88,12 +87,19 @@ export class ContextService {
       now,
       sensitivity: envelope.sensitivity,
     });
+    recordTestTrace("context.access", { contextSessionId: sessionId, decision });
     if (!decision.allowed) {
       throw new ContextServiceError(decision.code, decision.status);
     }
 
     this.#assertSequence(envelope, sessionId);
     const payload = decodePayload(envelope.payload);
+    this.#pendingUnderstanding.get(sessionId)?.abortController.abort();
+    this.#pendingUnderstanding.delete(sessionId);
+    this.#sessionVersions.set(sessionId, {
+      eventId: envelope.eventId,
+      sequence: envelope.sequence,
+    });
     const imagePayload =
       payload.type === "focus.region" || payload.type === "screen.snapshot" ? payload : undefined;
     if (imagePayload) {
@@ -109,6 +115,7 @@ export class ContextService {
       const result = await measureContextStage("understanding", () =>
         resolvePayload(payload, envelope.eventId, this.#understanding, signal, question),
       );
+      this.#assertCurrent(envelope.eventId, sessionId, expiresAt, signal);
       await this.#repository.put(
         resolvedContext({
           envelope,
@@ -118,10 +125,6 @@ export class ContextService {
         }),
       );
     }
-    this.#sessionVersions.set(sessionId, {
-      eventId: envelope.eventId,
-      sequence: envelope.sequence,
-    });
     recordContextStageDuration({
       durationMs: performance.now() - startedAt,
       stage: "total",
@@ -179,7 +182,6 @@ export class ContextService {
     readonly sessionId: string;
     readonly signal?: AbortSignal;
   }): Promise<void> {
-    this.#pendingUnderstanding.get(input.sessionId)?.abortController.abort();
     const abortController = new AbortController();
     const abortFromRequest = () => abortController.abort();
     input.signal?.addEventListener("abort", abortFromRequest, { once: true });
@@ -198,7 +200,8 @@ export class ContextService {
       (result) => ({ result, status: "fulfilled" }) as const,
       () => ({ status: "rejected" }) as const,
     );
-    try {
+    // Register work before waiting for storage so deletion can cancel an in-flight upload.
+    const stored = (async () => {
       await measureContextStage("artifact_store", () =>
         this.#artifactStore.put({
           bytes: input.payload.image.bytes,
@@ -209,9 +212,12 @@ export class ContextService {
           sha256: input.payload.image.sha256,
         }),
       );
-      if (input.signal?.aborted) {
-        throw new Error("Context submission aborted");
-      }
+      this.#assertCurrent(
+        input.envelope.eventId,
+        input.sessionId,
+        input.expiresAt,
+        abortController.signal,
+      );
       await this.#repository.put(
         resolvedContext({
           envelope: input.envelope,
@@ -220,42 +226,58 @@ export class ContextService {
           sessionId: input.sessionId,
         }),
       );
-      this.#sessionVersions.set(input.sessionId, {
-        eventId: input.envelope.eventId,
-        sequence: input.envelope.sequence,
+    })();
+    const completion = Promise.all([understanding, stored])
+      .then(async ([outcome]) => {
+        const current = this.#sessionVersions.get(input.sessionId);
+        if (
+          outcome.status !== "fulfilled" ||
+          abortController.signal.aborted ||
+          current?.eventId !== input.envelope.eventId ||
+          input.expiresAt <= this.#now()
+        ) {
+          return;
+        }
+        await this.#repository.put(
+          resolvedContext({
+            envelope: input.envelope,
+            expiresAt: input.expiresAt,
+            result: outcome.result,
+            sessionId: input.sessionId,
+          }),
+        );
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        input.signal?.removeEventListener("abort", abortFromRequest);
+        if (this.#pendingUnderstanding.get(input.sessionId)?.eventId === input.envelope.eventId) {
+          this.#pendingUnderstanding.delete(input.sessionId);
+        }
       });
-      const completion = understanding
-        .then(async (outcome) => {
-          const current = this.#sessionVersions.get(input.sessionId);
-          if (outcome.status !== "fulfilled" || current?.eventId !== input.envelope.eventId) {
-            return;
-          }
-          await this.#repository.put(
-            resolvedContext({
-              envelope: input.envelope,
-              expiresAt: input.expiresAt,
-              result: outcome.result,
-              sessionId: input.sessionId,
-            }),
-          );
-        })
-        .finally(() => {
-          if (this.#pendingUnderstanding.get(input.sessionId)?.eventId === input.envelope.eventId) {
-            this.#pendingUnderstanding.delete(input.sessionId);
-          }
-        });
-      this.#pendingUnderstanding.set(input.sessionId, {
-        abortController,
-        completion,
-        eventId: input.envelope.eventId,
-      });
+    this.#pendingUnderstanding.set(input.sessionId, {
+      abortController,
+      completion,
+      eventId: input.envelope.eventId,
+    });
+    try {
+      await stored;
     } catch (error) {
       abortController.abort();
-      await understanding;
-      await this.#artifactStore.deleteSession(input.sessionId).catch(() => {});
+      const current = this.#sessionVersions.get(input.sessionId);
+      if (!current || current.eventId === input.envelope.eventId) {
+        await this.delete(input.sessionId);
+      }
       throw error;
-    } finally {
-      input.signal?.removeEventListener("abort", abortFromRequest);
+    }
+  }
+
+  #assertCurrent(eventId: string, sessionId: string, expiresAt: Date, signal?: AbortSignal): void {
+    signal?.throwIfAborted();
+    if (this.#sessionVersions.get(sessionId)?.eventId !== eventId) {
+      throw new ContextServiceError("CONTEXT_NOT_FOUND", 404);
+    }
+    if (expiresAt <= this.#now()) {
+      throw new ContextServiceError("CONTEXT_EXPIRED", 410);
     }
   }
 
@@ -276,15 +298,12 @@ export class ContextService {
   }
 }
 
-function localImageFallback(payload: ImageContextPayload): ContextResolution {
-  const localText = payload.localText?.trim();
+function localImageFallback(_payload: ImageContextPayload): ContextResolution {
   return {
-    confidence: localText ? 0.75 : 0.25,
-    model: "vision-ocr-v1",
+    confidence: 0.25,
+    model: "pending-v1",
     provider: "violet-device",
-    summary: localText
-      ? `Locally recognized text from the authorized image:\n${localText}`
-      : "An authorized image was captured, but no local text was recognized.",
+    summary: "An authorized image was captured and is awaiting visual understanding.",
   };
 }
 
@@ -314,7 +333,6 @@ function resolvedContext(input: {
     ]
       .filter((value): value is string => Boolean(value))
       .join("\n"),
-    ...(input.result.target ? { target: input.result.target } : {}),
   };
 }
 
@@ -323,6 +341,7 @@ async function measureContextStage<T>(
   operation: () => Promise<T>,
 ): Promise<T> {
   const startedAt = performance.now();
+  recordTestTrace("context.stage.started", { stage });
   try {
     const result = await operation();
     recordContextStageDuration({
@@ -330,8 +349,14 @@ async function measureContextStage<T>(
       stage,
       status: "ok",
     });
+    recordTestTrace("context.stage.completed", { stage, elapsedMs: performance.now() - startedAt });
     return result;
   } catch (error) {
+    recordTestTrace("context.stage.failed", {
+      stage,
+      elapsedMs: performance.now() - startedAt,
+      error: error instanceof Error ? error.message : "unknown",
+    });
     recordContextStageDuration({
       durationMs: performance.now() - startedAt,
       stage,
@@ -358,7 +383,6 @@ function decodePayload(payload: ContextEnvelope["payload"]): ContextPayload {
       return {
         ...(payload.focusPoint ? { focusPoint: payload.focusPoint } : {}),
         image,
-        ...(payload.localText !== undefined ? { localText: payload.localText } : {}),
         type: payload.type,
       };
     }
@@ -373,7 +397,6 @@ function decodePayload(payload: ContextEnvelope["payload"]): ContextPayload {
       return {
         ...(payload.focusPoint ? { focusPoint: payload.focusPoint } : {}),
         image,
-        ...(payload.localText !== undefined ? { localText: payload.localText } : {}),
         region: payload.region,
         type: payload.type,
       };
@@ -423,7 +446,6 @@ async function resolvePayload(
   readonly model: string;
   readonly provider: string;
   readonly summary: string;
-  readonly target?: ContextTargetEvidence;
 }> {
   switch (payload.type) {
     case "focus.text":
@@ -451,25 +473,13 @@ async function resolvePayload(
     case "screen.snapshot": {
       const result = await understanding.understand(
         {
-          ...(payload.localText !== undefined ? { localText: payload.localText } : {}),
           payload,
           ...(question ? { question } : {}),
           requestId,
         },
         signal,
       );
-      const localText = payload.localText?.trim();
-      return {
-        ...result,
-        summary: localText
-          ? [
-              "Device OCR evidence from the authorized image:",
-              localText,
-              "Visual interpretation:",
-              result.summary,
-            ].join("\n")
-          : result.summary,
-      };
+      return result;
     }
   }
 }

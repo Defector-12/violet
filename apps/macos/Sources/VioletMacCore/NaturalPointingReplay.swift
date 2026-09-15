@@ -21,7 +21,7 @@ public final class NaturalPointingReplayRecorder {
   ) throws -> Bool {
     guard !consumed, now < armedUntil,
       !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-      case .image(let data, let point, let height, _, let mediaType, _, let hash, let width) =
+      case .image(let data, let point, let height, let mediaType, _, let hash, let width) =
         context.payload
     else {
       return false

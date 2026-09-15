@@ -1,170 +1,60 @@
-# Natural Pointing 交接
+# Natural Pointing
 
-## 结论
+## 当前合同
 
-终端相邻命令误识别已修复，并于 2026-09-07 通过真实 Trae 终端人工验收。
-整个 Release 1C/1C.1 仍未通过，剩余门禁见 [Release 1C 验收](./release-1c-acceptance.md)。
+1. `Look` 开启时，Qwen 判断问题是否需要当前画面并调用 `inspect_current_view`。
+2. Mac 使用语音结束时冻结的前台应用、`turnId` 和鼠标位置。
+3. Mac 截取鼠标所在显示器的完整画面，不做普通指针或章节裁图。
+4. 图片在本机完成保密应用、绝对秘密和受控敏感信息过滤。
+5. Core 将一张完整截图、冻结坐标和用户原问题发送给 DeepSeek。
+6. DeepSeek 只返回 `answer` 与 `confidence`；可靠答案直接交给 Qwen。
 
-推荐目标：AX 优先；AX 不可用时，截取鼠标所在的单个显示器，以鼠标为注意力锚点，
-由 DeepSeek 根据用户问题定位并回答。保持失败关闭，不降低置信度。
+## 边界
 
-## 用户意图
+- Qwen 是唯一视觉意图路由器，Core 不维护视觉关键词 fallback。
+- Natural Pointing 不使用 AX 正文直接回答；AX 只检查安全字段。
+- 手动 `Selected Text` 是独立功能，仍可返回明确选中的 AX 文字。
+- OCR 只用于本机隐私过滤；原文不上传、不进入提示、不验证模型答案。
+- 图片在 `8 MiB` 内保持原始像素；超限时先降 JPEG 质量，再等比缩小。
+- 坐标以截图左上角为原点，同时用归一化、百分比和像素值表达。
+- 截图不包含 live cursor，避免异步移动导致 cursor 与冻结坐标指向不同对象。
+- Core 只保留授权、关联、当前轮次、过期、取消、生命周期和 confidence `>= 0.7`
+  门禁。
+- 严格点框属于未来点击或执行动作，不属于只读问答。
 
-- 用户说“这个、这里、我选中的内容”时，无需复制粘贴。
-- 模型先理解问题意图，再从鼠标附近寻找相关证据。
-- 颜色、高亮和边框只是候选信号，不能单独决定目标。
-- “选中内容”要求完整识别连续选区。
-- “这个词在这一段是什么意思”要求先定位词，再读取所属段落或代码块。
-- 按钮、图标问题要求定位鼠标下的真实控件。
-- 人工绘制的定位环永远不是目标。
-
-## 已确认事实
-
-### AX
-
-- 普通编辑器暴露 `AXSelectedText`，现有 AX 路径可以精确读取。
-- Trae 集成终端不暴露选区属性，同一 AX 代码只能返回 unavailable。
-- 禁止通过模拟 Command-C 读取剪贴板。
-
-### 截图与坐标
-
-- Mac 已发送截图、用户原问题和归一化鼠标坐标。
-- 原始 Trae 窗口约 `2940 x 1846` 像素。
-- 旧代码分别把宽、高限制到 `2048`，得到 `2048 x 1846`，破坏宽高比。
-- 图片下方出现大片白区；鼠标点 `(0.039, 0.907)` 被画到白区，而非终端选区。
-- 正确等比结果约为 `2048 x 1286`。
-
-### 模型实测
-
-- DeepSeek 第一轮看到了整张图和鼠标坐标。
-- 它误把编辑器绿色 diff 当成选区，并把定位环作为 target。
-- 第一轮置信度 `0.9`，说明模型自报置信度不能单独作为可信依据。
-- 旧二次验证按错误 target 裁图，只得到 `173 x 167` 的圆环图片。
-- 二次模型正确指出裁剪图没有代码，将置信度降为 `0.2`；Core 随后拒绝回答。
-- 后续去掉二次调用后，模型又把选中的 `pnpm` 输出错认成相邻 `printf`。
-  自报置信度、文本字段和鼠标包含关系均不足以发现这种错误。
-- 固定图反复调用证明输出存在波动，但之前没有保存相同输入，不能把用户三次不同结果
-  简单归咎于随机性。详见 [诊断记录](./diagnostics/terminal-selection-ungrounded.md)。
-
-### 已实现，勿回退
-
-- `2753351`：已鉴权 Realtime WebSocket 上限为 `12 MiB`，单图上限为 `8 MiB`。
-- `680f5c9`：在 `input.speech.stopped` 时冻结应用、AX 目标和鼠标，绑定 turnId；
-  证据 30 秒过期且一次性消费，错轮、重复和迟到请求均拒绝。
-- OCR 只做本机秘密检测和遮挡，不参与目标识别，也不限制图片证据置信度。
-- Core 要求图片带 `focusPoint`、`confidence >= 0.7`，且 `target.bounds` 包含鼠标点。
-- `f7590ba`：将“发送取消后收到 no active response”转换为正常取消，不再终止会话。
-- `01a1151`：最终转写完成前缓存回复事件，视觉问题不再先播一两个字再截断。
-- `f88b71e`：截取冻结鼠标所在的单个显示器；原图优先，超限时先降 JPEG 质量，再统一
-  等比缩小，并同步最终图片尺寸。
-- `df3160e`：按用户问题和鼠标注意力锚点定义 DeepSeek 任务，删除二次裁剪与第二次模型
-  调用。
-- `846c10f`、`2134720`：拒绝定位环等人工目标；文本选区必须返回合法类型和完整文字，
-  同时避免把按钮问题误判为文本选区。
-
-## 图片大小实测
-
-限制：
-
-- Mac/Core 图片上限：`8 MiB`
-- Realtime WebSocket 上限：`12 MiB`
-- `8 MiB` 图片经 Base64 后约 `10.67 MiB`
-
-当前 `2940 x 1912` 显示器：
-
-| 样本 | 次数 | 最大 JPEG | 超过 8 MiB |
-|---|---:|---:|---:|
-| 实际 Violet UI | 1 | 0.49 MiB | 否 |
-| 随机噪声，质量 90 | 20 | 4.43 MiB | 0/20 |
-| 照片类画面，质量 90 | 20 | 2.14 MiB | 0/20 |
-| 4K 随机噪声，质量 90 | 10 | 6.52 MiB | 0/10 |
-| 6K 随机噪声，质量 90 | 3 | 16.01 MiB | 3/3 |
-
-结论：当前单屏无需默认缩放。只有超限时才缩放，且必须使用统一比例。
-
-## 已实现
-
-### 1. 截图
-
-- 捕获冻结鼠标所在的单个显示器，不拼接多显示器。
-- 以原始像素尺寸完成隐私遮挡；不绘制定位环，共享截图路径不包含原生光标。
-- JPEG 质量 0.9；不超过 `8 MiB` 时原图发送。
-- 超限时先降到质量 0.8；仍超限再统一等比缩小并重新编码。
-- 禁止分别限制宽高；禁止裁剪或填充后继续使用旧坐标。
-- 坐标以同一显示器边界归一化，Y 轴只转换一次。
-
-### 2. DeepSeek 任务定义
-
-当前候选在同一次请求中发送未改动的全屏图和局部证据图。选区问题若同时满足问题语义、
-冻结鼠标和宽扁连通蓝色高亮，则紧裁该选区并使用像素框；否则回退到最多
-`1200 x 320` 的指针局部图与模型框。裁剪不依赖模型先猜，OCR 仍不决定目标。
-
-模型按以下顺序执行：
-
-1. 根据用户问题识别任务类型：选区、单词、段落、代码块、按钮、图标或一般对象。
-2. 鼠标坐标仅作为注意力中心；定位环是人工标记，禁止作为 target。
-3. 从鼠标附近开始，按“包含鼠标点、距离、问题语义、布局连续性”排序候选。
-4. 颜色和高亮仅为辅助信号。
-5. 选区问题返回完整连续文字；词义问题读取词所在段落或代码块。
-6. target 必须表示回答依据，并包含 `kind`、`bounds`；文本任务还必须包含 `text`。
-7. 无法可靠定位时返回低于 `0.7` 的置信度，不猜测。
-8. 终端 prompt、输入命令与打印输出分别判断；先逐字转写选区，再解释。保留缩进、
-   反斜杠和硬换行。选区超出局部图时拒答，不能猜测缺失内容。
-
-建议沿用现有 JSON：
+DeepSeek 输出：
 
 ```json
 {
   "answer": "直接回答",
-  "confidence": 0.9,
-  "target": {
-    "kind": "text-selection",
-    "bounds": { "x": 0.1, "y": 0.7, "width": 0.4, "height": 0.08 },
-    "text": "完整选区"
-  }
+  "confidence": 0.9
 }
 ```
 
-### 3. Core 校验
+已删除：`ContextTargetEvidence`、`localText`、`pointerTextVerified`、普通指针局部图、
+第二张图、二次模型调用、颜色/位置/OCR 答案校验和 AX 正文捷径。
 
-- 不进行依赖模型猜测框的二次裁剪或第二次模型调用。
-- 指针/定位环/annotation/marker 不允许作为语义 target。
-- 选区问题只接受 `text-selection`、`text` 或 `code-block`，并要求 `target.text`。
-- `target.bounds` 必须包含鼠标点；仅容许一个原图像素的坐标量化误差。
-- 保留置信度 `>= 0.7`、位置、颜色、新鲜度和 turnId 校验。
+## 验收
 
-## 主要文件
+- Core/Node 全量 150/150：`03b12862-5beb-4c36-966f-23cfa984c10a`。
+- Swift 全量 92/92：`1340867c-ed31-45fa-b54e-735214e7cb0c`。
+- 受控 HTTP/WebSocket trace 116 个事件、0 个证据缺口：
+  `81357081-8e37-4e64-b982-2c37e6db604b`。
+- 图片预览前三题真人 3/3：
+  `7b740c4e-b051-4c6f-92e8-61d0a6cae39f`。
+- 后续用户抽测 3/3，覆盖 Tuesday 峰值、Wednesday 数值/日期和完整库存汇总；用户
+  明确接受图片预览整项通过：
+  `683bb61f-87e3-4a42-850c-8a238bd8c594`。
 
-- `apps/macos/Sources/VioletMacCore/ContextCapture.swift`
-- `apps/macos/Sources/VioletMacCore/LocalContextPrivacy.swift`
-- `apps/macos/Tests/VioletMacCoreTests/ContextCaptureTests.swift`
-- `services/core/src/context/deepseek-vision-understanding.ts`
-- `services/core/src/context/deepseek-vision-understanding.test.ts`
-- `services/core/src/realtime/visual-grounding.ts`
-- `services/core/src/realtime/visual-grounding.test.ts`
+## 运行与回滚
 
-## 验收标准
+- Core：`d2cccc9-clean-vision-v2-candidate`
+- Core image：`sha256:e22d11e17ab0f63c8443d08570ac825ab56166f7e2bdc4563ef18f0f4e507278`
+- Mac App SHA-256：
+  `ec26b6ab7de648bb17e2b4ee88c84f0155e975f03e7481f094ace6986cfd9853`
+- 回滚 Core：`violet-core:pre-clean-vision-v2-20260914`
+- 回滚 Mac：`.local-acceptance/rollback/Violet-freshness-v6-before-clean-vision.app`
 
-1. 截图无拉伸、裁切或白色填充区。
-2. 鼠标归一化及局部图框回映正确，不通过在原图绘环定位。
-3. 终端选区问题中，target 是选区或代码块，不是定位环。
-4. 模型只调用一次；无 verification crop。
-5. 普通非视觉问题不截图且回复无额外明显延迟。
-6. 视觉问题不播放被取消回复的音频前缀。
-7. 无法识别时明确拒绝，不降低 `0.7` 门禁。
-8. `pnpm check:ci`、`pnpm macos:test`、`pnpm macos:app` 和深度签名全部通过。
-9. 用真实 Trae 终端、徽标和按钮样本复测。
-
-## 当前状态
-
-- 功能分支：`feat/1c1-natural-pointing`
-- 本地删除了硬编码 HTTP 取证插桩；诊断关闭后已清理私有截图和模型结果。
-- 候选提交 `c2ea558` 已部署；Core 健康，Mac App 单进程在线。
-- 自动测试覆盖原生尺寸、单显示器选择、超限等比缩放、像素保护、单次模型调用、
-  高亮连通区域、局部坐标回映、文本空白保留、一次性录制和语义门禁。
-- 固定终端样本中，最终方案的 9 次完成调用均解释正确目标；严格逐字为 6/10，
-  另有 1 次低置信拒绝和 1 次超时。Qwen 对固定正确结果 3/3 交付正确。
-- 真实终端验收已通过；下一步完成徽标、按钮、非默认高亮色、长选区、隐私与生命周期矩阵。
-- MR !20 保持 Draft，完整视觉矩阵通过前不得合并。
-- 无数据库、协议或依赖变更。
-- 回滚和运行版本以 [验收状态](./release-1c-acceptance.md) 为准。
+持续 Debug Trace 已由用户关闭；历史证据保留。测试记录规范见
+[Test Evidence](./testing/README.md)，最终发布状态见
+[Release 1C 验收](./release-1c-acceptance.md)。

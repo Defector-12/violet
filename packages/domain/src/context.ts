@@ -11,13 +11,11 @@ export type ContextPayload =
   | {
       readonly focusPoint?: NormalizedPoint;
       readonly image: ContextImage;
-      readonly localText?: string;
       readonly type: "screen.snapshot";
     }
   | {
       readonly focusPoint?: NormalizedPoint;
       readonly image: ContextImage;
-      readonly localText?: string;
       readonly region: NormalizedRect;
       readonly type: "focus.region";
     }
@@ -47,17 +45,9 @@ export interface NormalizedPoint {
 }
 
 export interface ContextUnderstandingRequest {
-  readonly localText?: string;
   readonly payload: ContextPayload;
   readonly question?: string;
   readonly requestId: string;
-}
-
-export interface ContextTargetEvidence {
-  readonly bounds?: NormalizedRect;
-  readonly color?: string;
-  readonly kind: string;
-  readonly text?: string;
 }
 
 export interface ContextUnderstandingResult {
@@ -66,7 +56,6 @@ export interface ContextUnderstandingResult {
   readonly model: string;
   readonly provider: string;
   readonly summary: string;
-  readonly target?: ContextTargetEvidence;
 }
 
 export interface ContextUnderstandingPort {
@@ -83,7 +72,6 @@ export interface ResolvedContext {
   readonly expiresAt: Date;
   readonly sessionId: string;
   readonly summary: string;
-  readonly target?: ContextTargetEvidence;
 }
 
 export interface ContextSessionRepository {

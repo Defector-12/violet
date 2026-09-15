@@ -126,6 +126,7 @@ public actor URLSessionRealtimeClient: RealtimeSessionClientPort {
   private let coreURL: URL
   private let deviceToken: String
   private let session: URLSession
+  private let testTrace: TestTraceRecorder?
   private var sessionId = UUID()
   private var clientSequence = 1
   private var serverSequence = 1
@@ -136,11 +137,13 @@ public actor URLSessionRealtimeClient: RealtimeSessionClientPort {
   public init(
     coreURL: URL,
     deviceToken: String,
-    session: URLSession = .shared
+    session: URLSession = .shared,
+    testTrace: TestTraceRecorder? = nil
   ) {
     self.coreURL = coreURL
     self.deviceToken = deviceToken
     self.session = session
+    self.testTrace = testTrace
   }
 
   public func connect(
@@ -156,8 +159,16 @@ public actor URLSessionRealtimeClient: RealtimeSessionClientPort {
     activeResponseId = nil
     turnActive = false
 
+    if let testTrace {
+      try testTrace.record("connection.preflight", fields: ["sessionId": sessionId.uuidString])
+      try await testTrace.prepareCore(coreURL: coreURL, deviceToken: deviceToken)
+    }
     var request = URLRequest(url: try realtimeURL(from: coreURL))
     request.setValue("Bearer \(deviceToken)", forHTTPHeaderField: "Authorization")
+    if let testTrace {
+      request.setValue(testTrace.runId, forHTTPHeaderField: "X-Violet-Test-Run")
+      request.setValue(testTrace.activeUntil, forHTTPHeaderField: "X-Violet-Test-Until")
+    }
     let newSocket = session.webSocketTask(with: request)
     socket = newSocket
     newSocket.resume()
@@ -187,6 +198,7 @@ public actor URLSessionRealtimeClient: RealtimeSessionClientPort {
       }
       return capabilities
     } catch {
+      try? testTrace?.record("connection.failed", fields: ["error": error.localizedDescription])
       newSocket.cancel(with: .goingAway, reason: nil)
       socket = nil
       throw error
@@ -232,21 +244,32 @@ public actor URLSessionRealtimeClient: RealtimeSessionClientPort {
   }
 
   public func close() async {
+    try? testTrace?.finishIncompleteAnswers(reason: "session-closed")
     guard let socket else {
       return
     }
-    try? await send(
-      CloseEvent(
-        eventId: UUID(),
-        sequence: nextClientSequence(),
-        sessionId: sessionId,
-        type: "session.close"
+    do {
+      try await send(
+        CloseEvent(
+          eventId: UUID(),
+          sequence: nextClientSequence(),
+          sessionId: sessionId,
+          type: "session.close"
+        )
       )
-    )
+      if !(await waitForServerClose(socket)) {
+        try? testTrace?.record("connection.close-timeout")
+      }
+    } catch {
+      try? testTrace?.record("connection.close-send-failed", fields: [
+        "error": error.localizedDescription
+      ])
+    }
     socket.cancel(with: .normalClosure, reason: nil)
     self.socket = nil
     activeResponseId = nil
     turnActive = false
+    await collectCoreTrace()
   }
 
   public func cancelResponse() async {
@@ -462,6 +485,7 @@ public actor URLSessionRealtimeClient: RealtimeSessionClientPort {
       @unknown default:
         throw RealtimeSessionClientError.invalidEvent
       }
+    try testTrace?.wire("mac.receive", data: data)
     let envelope = try JSONDecoder().decode(ServerEnvelope.self, from: data)
     guard envelope.sessionId == sessionId else {
       throw RealtimeSessionClientError.sessionMismatch
@@ -481,10 +505,34 @@ public actor URLSessionRealtimeClient: RealtimeSessionClientPort {
       throw RealtimeSessionClientError.notConnected
     }
     let data = try JSONEncoder().encode(event)
+    try testTrace?.wire("mac.send", data: data)
     guard let value = String(data: data, encoding: .utf8) else {
       throw RealtimeSessionClientError.invalidEvent
     }
-    try await socket.send(.string(value))
+    do {
+      try await socket.send(.string(value))
+    } catch {
+      try? testTrace?.record("mac.send.failed", fields: ["error": error.localizedDescription])
+      throw error
+    }
+  }
+
+  private func collectCoreTrace() async {
+    guard let testTrace else { return }
+    do {
+      try await testTrace.collectCore(coreURL: coreURL, deviceToken: deviceToken)
+    } catch {
+      try? testTrace.record("core.trace.collection.failed", fields: ["error": error.localizedDescription])
+    }
+  }
+
+  private func waitForServerClose(_ socket: URLSessionWebSocketTask) async -> Bool {
+    let clock = ContinuousClock()
+    let deadline = clock.now.advanced(by: .seconds(2))
+    while socket.state != .completed, clock.now < deadline {
+      try? await Task.sleep(for: .milliseconds(25))
+    }
+    return socket.state == .completed
   }
 
   private func nextClientSequence() -> Int {

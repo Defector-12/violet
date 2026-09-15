@@ -32,10 +32,13 @@ public enum RealtimeAcceptanceReason: String, Codable, Sendable {
   case menuBar = "menu_bar"
   case modelIntent = "model_intent"
   case popoverClosed = "popover_closed"
+  case screenSleep = "screen_sleep"
   case serverSpeech = "server_speech"
+  case sessionInactive = "session_inactive"
   case shortcut
   case streamEnded = "stream_ended"
   case systemLifecycle = "system_lifecycle"
+  case systemSleep = "system_sleep"
   case userClick = "user_click"
   case userStop = "user_stop"
 }
@@ -78,6 +81,35 @@ public final class NoopRealtimeAcceptanceRecorder: RealtimeAcceptanceRecording {
   public func flush() {}
 
   public func record(_ mark: RealtimeAcceptanceMark) {}
+}
+
+@MainActor
+public final class TestTraceRealtimeAcceptanceRecorder: RealtimeAcceptanceRecording {
+  private let trace: TestTraceRecorder
+  private let downstream: any RealtimeAcceptanceRecording
+  public var onFailure: (() -> Void)?
+
+  public init(trace: TestTraceRecorder, downstream: any RealtimeAcceptanceRecording) {
+    self.trace = trace
+    self.downstream = downstream
+  }
+
+  public func flush() { downstream.flush() }
+
+  public func record(_ mark: RealtimeAcceptanceMark) {
+    downstream.record(mark)
+    do {
+      try trace.record("lifecycle.\(mark.type.rawValue)", fields: [
+        "presenceSessionId": mark.sessionId?.uuidString ?? "",
+        "turnId": mark.turnId?.uuidString ?? "", "responseId": mark.responseId?.uuidString ?? "",
+        "triggerId": mark.triggerId?.uuidString ?? "", "reason": mark.reason?.rawValue ?? "",
+      ])
+    } catch {
+      let handler = onFailure
+      onFailure = nil
+      handler?()
+    }
+  }
 }
 
 @MainActor

@@ -1099,9 +1099,6 @@ components:
                   $ref: '#/components/schemas/normalizedPoint'
                 image:
                   $ref: '#/components/schemas/image'
-                localText:
-                  type: string
-                  maxLength: 65536
                 type:
                   const: screen.snapshot
             - type: object
@@ -1115,9 +1112,6 @@ components:
                   $ref: '#/components/schemas/normalizedPoint'
                 image:
                   $ref: '#/components/schemas/image'
-                localText:
-                  type: string
-                  maxLength: 65536
                 region:
                   $ref: '#/components/schemas/normalizedRect'
                 type:

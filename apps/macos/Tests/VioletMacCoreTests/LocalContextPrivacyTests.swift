@@ -137,13 +137,12 @@ struct LocalContextPrivacyTests {
         )
       )
       if result.redactions.contains(where: { $0.category == .controlledSensitive }) {
-        guard case .image(let filteredData, _, _, let localText, _, _, _, _) = result.payload else {
+        guard case .image(let filteredData, _, _, _, _, _, _) = result.payload else {
           Issue.record("Expected a filtered image")
           continue
         }
         redacted += 1
         #expect(filteredData != data)
-        #expect(localText?.contains(sample) != true)
       } else {
         misses.append("\(sample) -> \(recognized.map(\.text).joined(separator: " | "))")
       }
@@ -208,7 +207,7 @@ struct LocalContextPrivacyTests {
       )
     )
 
-    guard case .image(let data, _, _, _, let mediaType, _, _, _) = result.payload else {
+    guard case .image(let data, _, _, let mediaType, _, _, _) = result.payload else {
       Issue.record("Expected a filtered image")
       return
     }
@@ -249,7 +248,7 @@ struct LocalContextPrivacyTests {
 
     guard
       case .image(
-        let data, let returnedPoint, let height, let text, let mediaType,
+        let data, let returnedPoint, let height, let mediaType,
         let returnedRegion, let sha256, let width
       ) = result.payload
     else {
@@ -264,7 +263,6 @@ struct LocalContextPrivacyTests {
     #expect(returnedRegion == region)
     #expect(width == 128)
     #expect(height == 96)
-    #expect(text == nil)
     #expect(mediaType == "image/jpeg")
     #expect(sha256 == contextImageHash(source))
     #expect(result.redactions.isEmpty)
@@ -310,9 +308,9 @@ struct LocalContextPrivacyTests {
     )
 
     guard
-      case .image(let unpointedData, _, _, _, _, _, _, _) = unpointed.payload,
+      case .image(let unpointedData, _, _, _, _, _, _) = unpointed.payload,
       case .image(
-        let data, let returnedPoint, let height, let text, let mediaType,
+        let data, let returnedPoint, let height, let mediaType,
         let returnedRegion, let sha256, let width
       ) = result.payload
     else {
@@ -336,8 +334,6 @@ struct LocalContextPrivacyTests {
         == (hasSensitiveText ? [.init(category: .controlledSensitive, count: 1)] : [])
     )
     #expect(result.completeness == (hasSensitiveText ? 0.8 : 1))
-    #expect(hasSensitiveText ? text?.contains("ID [REDACTED]") == true : text == nil)
-    #expect(text?.contains("11010519491231002X") != true)
 
     let decoded = try #require(NSBitmapImageRep(data: data))
     #expect(decoded.pixelsWide == width)
@@ -365,116 +361,6 @@ struct LocalContextPrivacyTests {
       outside.redComponent > 0.9 && outside.greenComponent > 0.9 && outside.blueComponent > 0.9,
       "Redaction must not mask the vertically mirrored non-sensitive region"
     )
-  }
-
-  @Test
-  func prioritizesSafeOCRTextNearestThePointer() throws {
-    let bitmap = NSBitmapImageRep(
-      bitmapDataPlanes: nil,
-      pixelsWide: 32,
-      pixelsHigh: 32,
-      bitsPerSample: 8,
-      samplesPerPixel: 4,
-      hasAlpha: true,
-      isPlanar: false,
-      colorSpaceName: .deviceRGB,
-      bytesPerRow: 0,
-      bitsPerPixel: 0
-    )
-    let source = try #require(
-      bitmap?.representation(using: .jpeg, properties: [.compressionFactor: 0.85])
-    )
-    let filter = LocalContextPrivacyFilter(excludedBundleIds: [])
-
-    let result = try filter.filter(
-      .image(
-        appBundleId: "com.example.Terminal",
-        data: source,
-        focusPoint: .init(x: 0.25, y: 0.75),
-        height: 32,
-        recognizedText: [
-          .init(
-            text: "Restore history",
-            confidence: 0.99,
-            normalizedBounds: .init(x: 0.1, y: 0.45, width: 0.2, height: 0.1)
-          ),
-          .init(
-            text: "pkill -x Violet",
-            confidence: 0.99,
-            normalizedBounds: .init(x: 0.1, y: 0.2, width: 0.4, height: 0.1)
-          ),
-        ],
-        region: nil,
-        width: 32
-      )
-    )
-
-    guard case .image(let data, let focusPoint, _, let text, _, _, _, _) = result.payload else {
-      Issue.record("Expected a filtered image")
-      return
-    }
-    #expect(
-      data.elementsEqual(source),
-      "OCR prioritization must not draw a focus marker into the JPEG"
-    )
-    #expect(
-      text?.hasPrefix(
-        "Pointer-adjacent OCR candidate (not proof of selection):\npkill -x Violet"
-      ) == true
-    )
-    #expect(text?.contains("Other OCR text in the authorized window:\nRestore history") == true)
-    #expect(focusPoint == .init(x: 0.25, y: 0.75))
-    guard case .image(_, _, _, let onDemandText, _, _, _, _) =
-      result.withoutLocalOCR().payload
-    else {
-      Issue.record("Expected an on-demand image")
-      return
-    }
-    #expect(onDemandText == nil)
-  }
-
-  @Test
-  func doesNotPromoteOCRTextThatIsOnlyNearThePointer() throws {
-    let bitmap = NSBitmapImageRep(
-      bitmapDataPlanes: nil,
-      pixelsWide: 32,
-      pixelsHigh: 32,
-      bitsPerSample: 8,
-      samplesPerPixel: 4,
-      hasAlpha: true,
-      isPlanar: false,
-      colorSpaceName: .deviceRGB,
-      bytesPerRow: 0,
-      bitsPerPixel: 0
-    )
-    let source = try #require(
-      bitmap?.representation(using: .jpeg, properties: [.compressionFactor: 0.85])
-    )
-    let filter = LocalContextPrivacyFilter(excludedBundleIds: [])
-
-    let result = try filter.filter(
-      .image(
-        appBundleId: "com.example.Terminal",
-        data: source,
-        focusPoint: .init(x: 0.25, y: 0.56),
-        height: 32,
-        recognizedText: [
-          .init(
-            text: "loads/self/Violet/apps/macos/.build/app/Violet.app",
-            confidence: 0.99,
-            normalizedBounds: .init(x: 0.1, y: 0.36, width: 0.4, height: 0.02)
-          )
-        ],
-        region: nil,
-        width: 32
-      )
-    )
-
-    guard case .image(_, _, _, let text, _, _, _, _) = result.payload else {
-      Issue.record("Expected a filtered image")
-      return
-    }
-    #expect(text == "loads/self/Violet/apps/macos/.build/app/Violet.app")
   }
 
   @Test
@@ -512,17 +398,12 @@ struct LocalContextPrivacyTests {
       )
     )
 
-    guard
-      case .image(let data, let focusPoint, _, let text, let mediaType, _, _, _) = result.payload
-    else {
+    guard case .image(let data, let focusPoint, _, let mediaType, _, _, _) = result.payload else {
       Issue.record("Expected a filtered image")
       return
     }
     #expect(mediaType == "image/jpeg")
     #expect(data != source)
-    #expect(
-      text == "Pointer-adjacent OCR candidate (not proof of selection):\nID [REDACTED]"
-    )
     #expect(focusPoint == .init(x: 0.25, y: 0.75))
     #expect(result.redactions == [.init(category: .controlledSensitive, count: 1)])
   }
@@ -562,9 +443,7 @@ struct LocalContextPrivacyTests {
         recognizedText: [], region: nil, width: 128
       )
     )
-    let envelope = makeContextEnvelope(
-      filtered.withoutLocalOCR(), deviceId: UUID(), sessionId: UUID()
-    )
+    let envelope = makeContextEnvelope(filtered, deviceId: UUID(), sessionId: UUID())
     let object = try #require(
       JSONSerialization.jsonObject(with: JSONEncoder().encode(envelope)) as? [String: Any]
     )

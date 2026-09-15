@@ -79,6 +79,7 @@ public final class SystemContextCapture: NSObject, ContextCapturePort {
   private let excludedBundleIds: Set<String>
   private let focusedElementReader: (pid_t) -> AXUIElement?
   private let mouseLocation: () -> CGPoint
+  private let screenCaptureAccess: () -> Bool
   private var pickerContinuation: CheckedContinuation<SelectedFilter, Error>?
   private var regionSelector: RegionSelectionController?
   private var naturalPointingElement: AXUIElement?
@@ -88,8 +89,12 @@ public final class SystemContextCapture: NSObject, ContextCapturePort {
   private var selectedTextElement: AXUIElement?
   private var selectedTextTarget: ContextApplicationTarget?
   private let selectionReader: (pid_t?, AXUIElement?) -> AccessibilitySelectionResult
+  private let testTrace: TestTraceRecorder?
 
-  public convenience init(excludedBundleIds: Set<String> = defaultExcludedBundleIds) {
+  public convenience init(
+    excludedBundleIds: Set<String> = defaultExcludedBundleIds,
+    testTrace: TestTraceRecorder? = nil
+  ) {
     self.init(
       excludedBundleIds: excludedBundleIds,
       currentProcessIdentifier: ProcessInfo.processInfo.processIdentifier,
@@ -106,7 +111,9 @@ public final class SystemContextCapture: NSObject, ContextCapturePort {
       focusedElementReader: focusedAccessibilityElement,
       selectionReader: readAccessibilitySelection,
       pointedTextReader: readAccessibilityTextAtPoint,
-      mouseLocation: { NSEvent.mouseLocation }
+      mouseLocation: { NSEvent.mouseLocation },
+      screenCaptureAccess: { CGPreflightScreenCaptureAccess() },
+      testTrace: testTrace
     )
   }
 
@@ -120,7 +127,9 @@ public final class SystemContextCapture: NSObject, ContextCapturePort {
     pointedTextReader: @escaping (pid_t, CGPoint) -> AccessibilitySelectionResult = {
       _, _ in .unavailable
     },
-    mouseLocation: @escaping () -> CGPoint = { NSEvent.mouseLocation }
+    mouseLocation: @escaping () -> CGPoint = { NSEvent.mouseLocation },
+    screenCaptureAccess: @escaping () -> Bool = { CGPreflightScreenCaptureAccess() },
+    testTrace: TestTraceRecorder? = nil
   ) {
     self.accessibilityAccess = accessibilityAccess
     self.activeApplication = activeApplication
@@ -129,7 +138,9 @@ public final class SystemContextCapture: NSObject, ContextCapturePort {
     self.focusedElementReader = focusedElementReader
     self.mouseLocation = mouseLocation
     self.pointedTextReader = pointedTextReader
+    self.screenCaptureAccess = screenCaptureAccess
     self.selectionReader = selectionReader
+    self.testTrace = testTrace
     super.init()
   }
 
@@ -169,6 +180,8 @@ public final class SystemContextCapture: NSObject, ContextCapturePort {
   }
 
   public func capture(_ kind: ContextCaptureKind) async throws -> CapturedContext {
+    try testTrace?.record("capture.request", fields: ["kind": String(describing: kind)])
+    do {
     switch kind {
     case .naturalPointing:
       return try await captureNaturalPointing()
@@ -182,6 +195,12 @@ public final class SystemContextCapture: NSObject, ContextCapturePort {
       }
       let rect = try await selectRegion()
       return try await captureRegion(rect, appBundleId: nil)
+    }
+    } catch {
+      try? testTrace?.record("capture.error", fields: [
+        "kind": String(describing: kind), "error": error.localizedDescription,
+      ])
+      throw error
     }
   }
 
@@ -239,35 +258,37 @@ public final class SystemContextCapture: NSObject, ContextCapturePort {
     if let bundleIdentifier = target.bundleIdentifier,
       excludedBundleIds.contains(bundleIdentifier)
     {
+      try testTrace?.record("capture.blocked", fields: ["reason": "excluded-application"])
       throw LocalContextPrivacyError.blockedApplication
     }
+    try testTrace?.record("capture.target", fields: [
+      "appBundleId": target.bundleIdentifier ?? "",
+      "appKitPointer": ["x": naturalPointingLocation.x, "y": naturalPointingLocation.y],
+      "hasAXFocus": focusedElement != nil,
+    ])
 
     if accessibilityAccess() {
       if let focusedElement {
-        let selection = selectionReader(
-          target.processIdentifier,
-          focusedElement
-        )
-        switch selection {
+        switch selectionReader(target.processIdentifier, focusedElement) {
         case .secureField:
           throw LocalContextPrivacyError.blockedApplication
-        case .text(let text):
-          return .text(appBundleId: target.bundleIdentifier, text: text)
-        case .unavailable:
+        case .text, .unavailable:
           break
         }
       }
       switch pointedTextReader(target.processIdentifier, naturalPointingLocation) {
       case .secureField:
         throw LocalContextPrivacyError.blockedApplication
-      case .text(let text):
-        return .text(appBundleId: target.bundleIdentifier, text: text)
-      case .unavailable:
+      case .text, .unavailable:
         break
       }
     }
 
-    guard CGPreflightScreenCaptureAccess() else {
+    try testTrace?.record("capture.path", fields: [
+      "path": "screen",
+      "showsCursor": false,
+    ])
+    guard screenCaptureAccess() else {
       throw ContextCaptureError.screenRecordingPermissionDenied
     }
     let content = try await SCShareableContent.excludingDesktopWindows(
@@ -631,27 +652,6 @@ private func readAccessibilityTextAtPoint(
   }
   if role == "AXSecureTextField" {
     return .secureField
-  }
-  guard ["AXHeading", "AXLink", "AXStaticText"].contains(role) else {
-    return .unavailable
-  }
-
-  for attribute in [
-    kAXValueAttribute as CFString,
-    kAXTitleAttribute as CFString,
-    kAXDescriptionAttribute as CFString,
-  ] {
-    var value: CFTypeRef?
-    guard
-      AXUIElementCopyAttributeValue(element, attribute, &value) == .success,
-      let text = value as? String
-    else {
-      continue
-    }
-    let normalized = text.trimmingCharacters(in: .whitespacesAndNewlines)
-    if !normalized.isEmpty, normalized.count <= 4_096 {
-      return .text(normalized)
-    }
   }
   return .unavailable
 }

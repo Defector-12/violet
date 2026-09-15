@@ -10,14 +10,14 @@ import type { RealtimeClientEvent, RealtimeServerEvent } from "@violet/protocol"
 
 import { type ContextService, ContextServiceError } from "../context/context-service.js";
 import type { ConversationEndIntentPort } from "./conversation-end-intent.js";
+import { recordTestTrace, withTestTraceIds } from "./test-trace.js";
 import { formatVisualResult } from "./visual-grounding.js";
-import { explicitlyRequiresCurrentView } from "./visual-intent.js";
 
 const maximumCaptureClockSkewMs = 30_000;
 
 interface PendingContextCapture {
   readonly abortController: AbortController;
-  readonly callId?: string;
+  readonly callId: string;
   readonly conversation: RealtimeConversation;
   readonly expiresAt: Date;
   readonly query: string;
@@ -50,10 +50,11 @@ export class RealtimeSession {
   readonly #finalTranscripts = new Map<string, string>();
   readonly #pendingContextCaptures = new Map<string, PendingContextCapture>();
   readonly #persistedTurns = new Set<string>();
+  readonly #responseTurnIds = new Map<string, string>();
   readonly #visibleResponseIds = new Set<string>();
-  readonly #visualRequiredTurns = new Map<string, string>();
   readonly #visualRequestedTurns = new Set<string>();
   #closed = false;
+  #activeTurnId: string | null = null;
   #conversation: RealtimeConversation | null = null;
   #contextSessionId: string | null = null;
   #onDemandContext = false;
@@ -83,7 +84,6 @@ export class RealtimeSession {
       return;
     }
     this.#closed = true;
-    await this.#conversation?.close();
     this.#assistantContent.clear();
     this.#clientEventIds.clear();
     this.#deferredResponseOutputs.clear();
@@ -95,10 +95,11 @@ export class RealtimeSession {
     }
     this.#pendingContextCaptures.clear();
     this.#persistedTurns.clear();
+    this.#responseTurnIds.clear();
     this.#visibleResponseIds.clear();
-    this.#visualRequiredTurns.clear();
     this.#visualRequestedTurns.clear();
     this.#contextSessionId = null;
+    await this.#conversation?.close();
   }
 
   async *handle(
@@ -151,6 +152,7 @@ export class RealtimeSession {
       const history = (await this.#ledger.list())
         .slice(-40)
         .map(({ content, role }) => ({ content, role }));
+      recordTestTrace("session.history", { history, configuration: event.configuration });
       let contextEvidence: string | undefined;
       if (event.configuration.contextSessionId) {
         try {
@@ -223,10 +225,16 @@ export class RealtimeSession {
       const turnId = event.turnId.toLowerCase();
       const pending = this.#pendingContextCaptures.get(requestId);
       if (!pending || pending.turnId.toLowerCase() !== turnId) {
+        recordTestTrace("capture.rejected", {
+          requestId,
+          turnId,
+          reason: "unknown-or-stale-request",
+        });
         return;
       }
       clearTimeout(pending.timeout);
       if (pending.expiresAt <= this.#now()) {
+        recordTestTrace("capture.rejected", { requestId, turnId, reason: "expired" });
         this.#pendingContextCaptures.delete(requestId);
         pending.abortController.abort();
         void this.#sendUnavailableContext(pending, "The context capture request expired.");
@@ -238,6 +246,7 @@ export class RealtimeSession {
           new Date(event.context.capturedAt).getTime() <
             pending.requestedAt.getTime() - maximumCaptureClockSkewMs)
       ) {
+        recordTestTrace("capture.rejected", { requestId, turnId, reason: "capture-mismatch" });
         this.#pendingContextCaptures.delete(requestId);
         pending.abortController.abort();
         void this.#sendUnavailableContext(
@@ -257,12 +266,21 @@ export class RealtimeSession {
         );
         return;
       }
-      void this.#resolveOnDemandContext(pending, event.context).catch(() => undefined);
+      void withTestTraceIds({ requestId, turnId }, () =>
+        this.#resolveOnDemandContext(pending, event.context),
+      ).catch(() => undefined);
       return;
     }
 
     if (event.type === "input.text") {
+      this.#activeTurnId = event.turnId;
+      this.#cancelPendingContextCaptures(event.turnId);
+      this.#recordFinalText(event.turnId, event.text, signal);
       await this.#persistUserTurn(event.turnId, event.text);
+    }
+    if (event.type === "response.cancel") {
+      const turnId = this.#responseTurnIds.get(event.responseId);
+      if (turnId) this.#cancelContextCapturesForTurn(turnId);
     }
 
     try {
@@ -282,11 +300,21 @@ export class RealtimeSession {
       return;
     }
     for await (const receivedOutput of conversation.outputs(signal)) {
+      recordTestTrace("runtime.output", receivedOutput);
+      if (receivedOutput.type === "response-started") {
+        this.#responseTurnIds.set(receivedOutput.responseId, receivedOutput.turnId);
+      }
       const deferredTurnId = responseTurnIdForDeferral(receivedOutput);
       if (this.#onDemandContext && deferredTurnId && !this.#finalTranscripts.has(deferredTurnId)) {
         const deferred = this.#deferredResponseOutputs.get(deferredTurnId) ?? [];
         deferred.push(receivedOutput);
         this.#deferredResponseOutputs.set(deferredTurnId, deferred);
+        if (receivedOutput.type === "response-started") {
+          recordTestTrace("routing.deferred", {
+            turnId: deferredTurnId,
+            reason: "waiting-for-final-transcript",
+          });
+        }
         continue;
       }
       const outputs =
@@ -298,6 +326,7 @@ export class RealtimeSession {
       }
       for (const output of outputs) {
         if (output.type === "context-request") {
+          this.#responseTurnIds.set(output.responseId, output.turnId);
           if (this.#onDemandContext) {
             this.#deferredResponseOutputs.delete(output.turnId);
             if (this.#visibleResponseIds.delete(output.responseId) && this.#sessionId) {
@@ -307,6 +336,18 @@ export class RealtimeSession {
               } as const;
               await this.#persistOutput(cancelled);
               yield this.#mapOutput(this.#sessionId, cancelled);
+            }
+            if (this.#activeTurnId !== null && this.#activeTurnId !== output.turnId) {
+              const unavailable = JSON.stringify({
+                message: "The visual request no longer belongs to the current turn.",
+                status: "unavailable",
+              });
+              await conversation.send({
+                callId: output.callId,
+                output: unavailable,
+                type: "context-result",
+              });
+              continue;
             }
             const request = this.#beginContextCapture({
               callId: output.callId,
@@ -322,30 +363,19 @@ export class RealtimeSession {
           }
           continue;
         }
-        if (output.type === "speech-started") {
+        if (output.type === "speech-started" || output.type === "speech-stopped") {
+          this.#activeTurnId = output.turnId;
           this.#cancelPendingContextCaptures(output.turnId);
         }
         if (output.type === "transcript" && output.final) {
-          this.#finalTranscripts.set(output.turnId, output.text);
-          if (
-            this.#onDemandContext &&
-            !this.#visualRequestedTurns.has(output.turnId) &&
-            explicitlyRequiresCurrentView(output.text)
-          ) {
-            this.#visualRequiredTurns.set(output.turnId, output.text);
-          }
-          this.#endIntentByTurn.set(
-            output.turnId,
-            this.#conversationEndIntent
-              .shouldEnd({ text: output.text, turnId: output.turnId }, signal)
-              .catch(() => false),
-          );
+          this.#activeTurnId = output.turnId;
+          this.#recordFinalText(output.turnId, output.text, signal);
         }
-        if (this.#shouldSuppressForVisualRouting(output)) {
-          const request = await this.#fallbackContextCapture(conversation, output);
-          if (request) {
-            yield request;
-          }
+        if (
+          output.type === "response-cancelled" &&
+          this.#visualRequestedTurns.size > 0 &&
+          !this.#visibleResponseIds.has(output.responseId)
+        ) {
           continue;
         }
         await this.#persistOutput(output);
@@ -353,6 +383,7 @@ export class RealtimeSession {
           this.#visibleResponseIds.add(output.responseId);
         } else if (output.type === "response-completed" || output.type === "response-cancelled") {
           this.#visibleResponseIds.delete(output.responseId);
+          this.#responseTurnIds.delete(output.responseId);
         }
         if (!this.#sessionId) {
           return;
@@ -374,6 +405,14 @@ export class RealtimeSession {
     }
   }
 
+  #recordFinalText(turnId: string, text: string, signal?: AbortSignal): void {
+    this.#finalTranscripts.set(turnId, text);
+    this.#endIntentByTurn.set(
+      turnId,
+      this.#conversationEndIntent.shouldEnd({ text, turnId }, signal).catch(() => false),
+    );
+  }
+
   async #takeEndIntent(turnId: string): Promise<boolean> {
     const pending = this.#endIntentByTurn.get(turnId);
     this.#endIntentByTurn.delete(turnId);
@@ -381,12 +420,16 @@ export class RealtimeSession {
   }
 
   #beginContextCapture(input: {
-    readonly callId?: string;
+    readonly callId: string;
     readonly conversation: RealtimeConversation;
     readonly query: string;
     readonly turnId: string;
   }): RealtimeServerEvent | null {
     if (!this.#sessionId || this.#visualRequestedTurns.has(input.turnId)) {
+      recordTestTrace("capture.skipped", {
+        turnId: input.turnId,
+        reason: "already-requested-or-no-session",
+      });
       return null;
     }
     this.#visualRequestedTurns.add(input.turnId);
@@ -396,7 +439,7 @@ export class RealtimeSession {
     const abortController = new AbortController();
     const pending: PendingContextCapture = {
       abortController,
-      ...(input.callId ? { callId: input.callId } : {}),
+      callId: input.callId,
       conversation: input.conversation,
       expiresAt,
       query: input.query,
@@ -412,6 +455,14 @@ export class RealtimeSession {
       turnId: input.turnId,
     };
     this.#pendingContextCaptures.set(requestId, pending);
+    recordTestTrace("capture.requested", {
+      requestId,
+      turnId: input.turnId,
+      callId: input.callId,
+      question: input.query,
+      expiresAt,
+      source: "model-tool",
+    });
     return {
       expiresAt: expiresAt.toISOString(),
       requestId,
@@ -421,55 +472,11 @@ export class RealtimeSession {
     };
   }
 
-  #shouldSuppressForVisualRouting(output: RealtimeConversationOutput): boolean {
-    if (
-      output.type !== "response-started" &&
-      output.type !== "response-text" &&
-      output.type !== "response-audio" &&
-      output.type !== "response-cancelled"
-    ) {
-      return false;
-    }
-    return output.type === "response-cancelled"
-      ? this.#visualRequestedTurns.size > 0 && !this.#visibleResponseIds.has(output.responseId)
-      : this.#visualRequiredTurns.has(output.turnId);
-  }
-
-  async #fallbackContextCapture(
-    conversation: RealtimeConversation,
-    output: RealtimeConversationOutput,
-  ): Promise<RealtimeServerEvent | null> {
-    if (
-      output.type !== "response-text" &&
-      output.type !== "response-audio" &&
-      output.type !== "response-completed"
-    ) {
-      return null;
-    }
-    const turnId = output.turnId;
-    const query = this.#visualRequiredTurns.get(turnId);
-    if (!query || this.#visualRequestedTurns.has(turnId)) {
-      return null;
-    }
-    if (output.type !== "response-completed") {
-      await conversation.send({
-        responseId: output.responseId,
-        type: "cancel",
-      });
-    }
-    return this.#beginContextCapture({
-      conversation,
-      query,
-      turnId,
-    });
-  }
-
   #clearVisualTurn(turnId: string): void {
-    this.#visualRequiredTurns.delete(turnId);
     this.#visualRequestedTurns.delete(turnId);
   }
 
-  #cancelPendingContextCaptures(activeTurnId: string): void {
+  #cancelPendingContextCaptures(activeTurnId?: string): void {
     for (const turnId of this.#deferredResponseOutputs.keys()) {
       if (turnId !== activeTurnId) {
         this.#deferredResponseOutputs.delete(turnId);
@@ -482,6 +489,7 @@ export class RealtimeSession {
       this.#pendingContextCaptures.delete(requestId);
       clearTimeout(pending.timeout);
       pending.abortController.abort();
+      recordTestTrace("capture.cancelled", { requestId, turnId: pending.turnId, activeTurnId });
       this.#clearVisualTurn(pending.turnId);
     }
     for (const turnId of this.#finalTranscripts.keys()) {
@@ -491,6 +499,20 @@ export class RealtimeSession {
         this.#clearVisualTurn(turnId);
       }
     }
+  }
+
+  #cancelContextCapturesForTurn(turnId: string): void {
+    this.#deferredResponseOutputs.delete(turnId);
+    for (const [requestId, pending] of this.#pendingContextCaptures) {
+      if (pending.turnId !== turnId) continue;
+      this.#pendingContextCaptures.delete(requestId);
+      clearTimeout(pending.timeout);
+      pending.abortController.abort();
+      recordTestTrace("capture.cancelled", { requestId, turnId });
+      this.#clearVisualTurn(turnId);
+    }
+    this.#finalTranscripts.delete(turnId);
+    this.#endIntentByTurn.delete(turnId);
   }
 
   async #resolveOnDemandContext(
@@ -505,21 +527,19 @@ export class RealtimeSession {
       await this.#contextService.submit(envelope, pending.abortController.signal, question);
       const context = await this.#contextService.get(envelope.sessionId);
       pending.abortController.signal.throwIfAborted();
-      const focusPoint =
-        envelope.payload.type === "focus.region" || envelope.payload.type === "screen.snapshot"
-          ? envelope.payload.focusPoint
-          : undefined;
-      const imageSize =
-        envelope.payload.type === "focus.region" || envelope.payload.type === "screen.snapshot"
-          ? {
-              height: envelope.payload.image.height,
-              width: envelope.payload.image.width,
-            }
-          : undefined;
-      const result = formatVisualResult(context, question, focusPoint, imageSize);
+      const result = formatVisualResult(context);
+      recordTestTrace("grounding.result", {
+        question,
+        context,
+        result: JSON.parse(result),
+      });
       this.#clearVisualTurn(pending.turnId);
       await this.#sendResolvedContext(pending, result);
-    } catch {
+    } catch (error) {
+      recordTestTrace("capture.resolve.failed", {
+        error: error instanceof Error ? error.message : "unknown",
+        aborted: pending.abortController.signal.aborted,
+      });
       if (pending.abortController.signal.aborted) {
         return;
       }
@@ -532,6 +552,7 @@ export class RealtimeSession {
         this.#pendingContextCaptures.delete(pending.requestId);
       }
       await this.#contextService.delete(envelope.sessionId).catch(() => undefined);
+      recordTestTrace("context.deleted", { requestId: pending.requestId, turnId: pending.turnId });
     }
   }
 
@@ -544,22 +565,18 @@ export class RealtimeSession {
   }
 
   async #sendResolvedContext(pending: PendingContextCapture, output: string): Promise<void> {
-    if (pending.callId) {
-      await pending.conversation.send({
-        callId: pending.callId,
-        output,
-        type: "context-result",
-      });
-      return;
-    }
-    await pending.conversation
-      .send({
-        output,
-        query: pending.query,
-        turnId: pending.turnId,
-        type: "context-grounding",
-      })
-      .catch(() => undefined);
+    if (this.#closed) return;
+    recordTestTrace("tool.result", {
+      turnId: pending.turnId,
+      requestId: pending.requestId,
+      callId: pending.callId,
+      output,
+    });
+    await pending.conversation.send({
+      callId: pending.callId,
+      output,
+      type: "context-result",
+    });
   }
 
   async #resolveContextRequest(
@@ -622,6 +639,11 @@ export class RealtimeSession {
         break;
       case "response-completed": {
         const content = this.#assistantContent.get(output.responseId);
+        recordTestTrace("answer.completed", {
+          turnId: output.turnId,
+          responseId: output.responseId,
+          text: content ?? "",
+        });
         this.#assistantContent.delete(output.responseId);
         if (content) {
           await this.#ledger.append({
@@ -635,6 +657,10 @@ export class RealtimeSession {
         break;
       }
       case "response-cancelled":
+        recordTestTrace("answer.cancelled", {
+          responseId: output.responseId,
+          text: this.#assistantContent.get(output.responseId) ?? "",
+        });
         this.#assistantContent.delete(output.responseId);
         break;
       case "error":

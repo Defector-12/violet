@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
+import type { ContextUnderstandingRequest } from "@violet/domain";
 import type { ContextEnvelope } from "@violet/protocol";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { ContextService, ContextServiceError } from "./context-service.js";
 import { DeterministicContextUnderstandingPort } from "./deterministic-context-understanding.js";
@@ -25,7 +26,6 @@ describe("ContextService", () => {
             sha256: createHash("sha256").update(bytes).digest("hex"),
             width: 200,
           },
-          localText: "Architecture diagram",
           type: "screen.snapshot",
         },
         sessionId,
@@ -34,13 +34,11 @@ describe("ContextService", () => {
     const resolved = await service.get(sessionId);
 
     expect(receipt.status).toBe("ready");
-    expect(resolved.summary).toContain("Architecture diagram");
-    expect(resolved.summary).toContain("Device OCR evidence from the authorized image:");
-    expect(resolved.summary).toContain("Visual interpretation:");
+    expect(resolved.summary).toContain("200x100");
     expect(JSON.stringify(resolved)).not.toContain(bytes.toString("base64"));
   });
 
-  it("preserves a question-grounded answer and target evidence", async () => {
+  it("preserves a question-grounded answer", async () => {
     const bytes = Buffer.from("synthetic-image");
     const sessionId = randomUUID();
     const service = new ContextService({
@@ -56,11 +54,6 @@ describe("ContextService", () => {
             model: "test",
             provider: "test",
             summary: "右下角绿色按钮用于发送消息。",
-            target: {
-              bounds: { height: 0.04, width: 0.03, x: 0.95, y: 0.93 },
-              color: "green",
-              kind: "button",
-            },
           };
         },
       },
@@ -87,10 +80,6 @@ describe("ContextService", () => {
     await expect(service.get(sessionId)).resolves.toMatchObject({
       answer: "右下角绿色按钮用于发送消息。",
       confidence: 0.9,
-      target: {
-        color: "green",
-        kind: "button",
-      },
     });
   });
 
@@ -153,7 +142,7 @@ describe("ContextService", () => {
     expect(receipt.status).toBe("ready");
     expect(events).toEqual(["understanding-started", "storage-started"]);
     const available = await service.getAvailable(receipt.sessionId);
-    expect(available.summary).toContain("no local text was recognized");
+    expect(available.summary).toContain("awaiting visual understanding");
     let questionUnblocked = false;
     const resolvedContext = service.get(receipt.sessionId).then((resolved) => {
       questionUnblocked = true;
@@ -167,7 +156,7 @@ describe("ContextService", () => {
     expect(events).toEqual(["understanding-started", "storage-started", "understanding-finished"]);
   });
 
-  it("falls back to local OCR when visual understanding fails", async () => {
+  it("returns an unavailable image placeholder when visual understanding fails", async () => {
     const deletedSessions: string[] = [];
     const bytes = Buffer.from("synthetic-image");
     const sessionId = randomUUID();
@@ -197,7 +186,6 @@ describe("ContextService", () => {
             sha256: createHash("sha256").update(bytes).digest("hex"),
             width: 200,
           },
-          localText: "Fallback OCR text",
           type: "screen.snapshot",
         },
         sessionId,
@@ -205,8 +193,8 @@ describe("ContextService", () => {
     );
     const resolved = await service.get(receipt.sessionId);
 
-    expect(resolved.summary).toContain("Fallback OCR text");
-    expect(resolved.summary).toContain("violet-device/vision-ocr-v1");
+    expect(resolved.summary).toContain("awaiting visual understanding");
+    expect(resolved.summary).toContain("violet-device/pending-v1");
     expect(deletedSessions).toEqual([]);
 
     await service.delete(sessionId);
@@ -280,6 +268,164 @@ describe("ContextService", () => {
     ).rejects.toMatchObject({
       code: "CONTEXT_HASH_MISMATCH",
       status: 400,
+    });
+  });
+
+  describe("in-flight lifecycle", () => {
+    function fixture(delayStorage = false) {
+      let finish = () => {};
+      let stored = () => {};
+      const vision = new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+      const storage = new Promise<void>((resolve) => {
+        stored = resolve;
+      });
+      const repository = new InMemoryContextSessionRepository();
+      const put = vi.spyOn(repository, "put");
+      const deleteSession = vi.fn(async () => {});
+      let signal: AbortSignal | undefined;
+      const understand = vi.fn(
+        async (_request: ContextUnderstandingRequest, incomingSignal?: AbortSignal) => {
+          signal = incomingSignal;
+          await vision;
+          return { confidence: 1, model: "test", provider: "test", summary: "Late image answer" };
+        },
+      );
+      let clock = now;
+      const artifactPut = vi.fn(async () => {
+        if (delayStorage) await storage;
+      });
+      const service = new ContextService({
+        artifactStore: { put: artifactPut, deleteSession },
+        now: () => clock,
+        repository,
+        understanding: { understand },
+      });
+      const bytes = Buffer.from("synthetic lifecycle image");
+      const image = envelope({
+        payload: {
+          type: "screen.snapshot",
+          image: {
+            data: bytes.toString("base64"),
+            width: 1,
+            height: 1,
+            mediaType: "image/png",
+            sha256: createHash("sha256").update(bytes).digest("hex"),
+          },
+        },
+      });
+      return {
+        service,
+        image,
+        put,
+        artifactPut,
+        deleteSession,
+        understand,
+        signal: () => signal,
+        finish,
+        stored,
+        expire: () => {
+          clock = new Date(now.getTime() + 300_001);
+        },
+      };
+    }
+
+    it("propagates cancellation after upload and rejects a late model write", async () => {
+      const f = fixture();
+      const controller = new AbortController();
+      try {
+        await f.service.submit(f.image, controller.signal);
+        controller.abort();
+        expect(f.signal()?.aborted).toBe(true);
+        f.finish();
+        await f.service.get(f.image.sessionId).catch(() => undefined);
+        expect(f.put.mock.calls.some(([c]) => c.summary.includes("Late image answer"))).toBe(false);
+      } finally {
+        f.finish();
+        await f.service.delete(f.image.sessionId);
+      }
+    });
+
+    it.each(["text", "image"] as const)("cancels an image when replaced by %s", async (kind) => {
+      const f = fixture();
+      try {
+        await f.service.submit(f.image);
+        const oldSignal = f.signal();
+        const replacement = {
+          ...f.image,
+          eventId: randomUUID(),
+          previousEventId: f.image.eventId,
+          sequence: 2,
+          payload:
+            kind === "text" ? { type: "focus.text" as const, text: "New text" } : f.image.payload,
+        };
+        await f.service.submit(replacement);
+        expect(oldSignal?.aborted).toBe(true);
+        f.finish();
+        expect((await f.service.get(f.image.sessionId)).eventId).toBe(replacement.eventId);
+        expect(
+          f.put.mock.calls
+            .filter(([c]) => c.summary.includes("Late image answer"))
+            .every(([c]) => c.eventId === replacement.eventId),
+        ).toBe(true);
+      } finally {
+        f.finish();
+        await f.service.delete(f.image.sessionId);
+      }
+    });
+
+    it("deleting during upload prevents a late submission from recreating context", async () => {
+      const f = fixture(true);
+      const submitted = f.service.submit(f.image).then(
+        () => "accepted",
+        () => "rejected",
+      );
+      try {
+        await f.service.delete(f.image.sessionId);
+        expect(f.signal()?.aborted).toBe(true);
+        f.stored();
+        f.finish();
+        expect(await submitted).toBe("rejected");
+        expect(f.put).not.toHaveBeenCalled();
+        await expect(f.service.get(f.image.sessionId)).rejects.toMatchObject({
+          code: "CONTEXT_NOT_FOUND",
+        });
+        expect(f.deleteSession).toHaveBeenCalled();
+      } finally {
+        f.stored();
+        f.finish();
+        await submitted;
+        await f.service.delete(f.image.sessionId);
+      }
+    });
+
+    it("does not publish a model result that expired while understanding was running", async () => {
+      const f = fixture();
+      try {
+        await f.service.submit(f.image);
+        const resolved = f.service.get(f.image.sessionId).then(
+          () => "accepted",
+          () => "rejected",
+        );
+        f.expire();
+        f.finish();
+        expect(await resolved).toBe("rejected");
+        expect(f.put.mock.calls.some(([c]) => c.summary.includes("Late image answer"))).toBe(false);
+      } finally {
+        f.finish();
+        await f.service.delete(f.image.sessionId);
+      }
+    });
+
+    it("does not start storage or vision for an already cancelled request", async () => {
+      const f = fixture();
+      const controller = new AbortController();
+      controller.abort();
+      f.finish();
+      await expect(f.service.submit(f.image, controller.signal)).rejects.toThrow();
+      expect(f.understand).not.toHaveBeenCalled();
+      expect(f.artifactPut).not.toHaveBeenCalled();
     });
   });
 

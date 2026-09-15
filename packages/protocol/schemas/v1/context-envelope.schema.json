@@ -105,10 +105,6 @@
             "image": {
               "$ref": "#/$defs/image"
             },
-            "localText": {
-              "type": "string",
-              "maxLength": 65536
-            },
             "type": {
               "const": "screen.snapshot"
             }
@@ -124,10 +120,6 @@
             },
             "image": {
               "$ref": "#/$defs/image"
-            },
-            "localText": {
-              "type": "string",
-              "maxLength": 65536
             },
             "region": {
               "$ref": "#/$defs/normalizedRect"

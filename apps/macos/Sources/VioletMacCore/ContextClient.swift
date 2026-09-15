@@ -7,7 +7,6 @@ public enum ContextPayload: Equatable, Sendable {
     data: Data,
     focusPoint: NormalizedContextPoint?,
     height: Int,
-    localText: String?,
     mediaType: String,
     region: NormalizedContextRect?,
     sha256: String,
@@ -143,15 +142,18 @@ public actor URLSessionContextClient: ContextClientPort {
   private let coreURL: URL
   private let deviceToken: String
   private let session: URLSession
+  private let testTrace: TestTraceRecorder?
 
   public init(
     coreURL: URL,
     deviceToken: String,
-    session: URLSession = .shared
+    session: URLSession = .shared,
+    testTrace: TestTraceRecorder? = nil
   ) {
     self.coreURL = coreURL
     self.deviceToken = deviceToken
     self.session = session
+    self.testTrace = testTrace
   }
 
   public func submitContext(
@@ -159,6 +161,7 @@ public actor URLSessionContextClient: ContextClientPort {
     deviceId: UUID,
     sessionId: UUID
   ) async throws -> ContextReceipt {
+    try await testTrace?.prepareCore(coreURL: coreURL, deviceToken: deviceToken)
     let envelope = makeContextEnvelope(
       context,
       deviceId: deviceId,
@@ -168,23 +171,48 @@ public actor URLSessionContextClient: ContextClientPort {
     request.httpMethod = "POST"
     request.setValue("Bearer \(deviceToken)", forHTTPHeaderField: "Authorization")
     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    if let testTrace {
+      request.setValue(testTrace.runId, forHTTPHeaderField: "X-Violet-Test-Run")
+      request.setValue(testTrace.activeUntil, forHTTPHeaderField: "X-Violet-Test-Until")
+    }
     request.httpBody = try JSONEncoder().encode(envelope)
+    if let testTrace, let body = request.httpBody {
+      let object = try JSONSerialization.jsonObject(with: body)
+      let traced = try JSONSerialization.data(withJSONObject: [
+        "type": "context.capture.succeeded", "requestId": sessionId.uuidString,
+        "turnId": sessionId.uuidString, "context": object,
+      ])
+      try testTrace.wire("http.context.send", data: traced)
+    }
 
     let (data, response) = try await session.data(for: request)
     guard let http = response as? HTTPURLResponse else {
       throw VioletCoreClientError.invalidResponse
     }
     guard http.statusCode == 200 else {
+      try? testTrace?.record("http.context.failed", fields: ["status": http.statusCode, "requestId": sessionId.uuidString])
+      try? await testTrace?.collectCore(coreURL: coreURL, deviceToken: deviceToken)
       throw VioletCoreClientError.requestFailed(code: http.statusCode)
     }
-    let receipt = try JSONDecoder().decode(ContextReceiptWire.self, from: data)
-    guard
-      let id = UUID(uuidString: receipt.sessionId),
-      let expiresAt = parseISO8601(receipt.expiresAt)
-    else {
-      throw VioletCoreClientError.invalidResponse
+    do {
+      let receipt = try JSONDecoder().decode(ContextReceiptWire.self, from: data)
+      guard
+        let id = UUID(uuidString: receipt.sessionId),
+        id == sessionId,
+        let expiresAt = parseISO8601(receipt.expiresAt)
+      else {
+        throw VioletCoreClientError.invalidResponse
+      }
+      try await testTrace?.collectCore(coreURL: coreURL, deviceToken: deviceToken)
+      try testTrace?.record("http.context.received", fields: [
+        "sessionId": receipt.sessionId,
+        "expiresAt": receipt.expiresAt,
+      ])
+      return ContextReceipt(expiresAt: expiresAt, sessionId: id)
+    } catch {
+      await deleteContext(sessionId: sessionId)
+      throw error
     }
-    return ContextReceipt(expiresAt: expiresAt, sessionId: id)
   }
 
   public func deleteContext(sessionId: UUID) async {
@@ -241,7 +269,6 @@ enum ContextPayloadWire: Encodable {
     data: Data,
     focusPoint: NormalizedContextPoint?,
     height: Int,
-    localText: String?,
     mediaType: String,
     region: NormalizedContextRect?,
     sha256: String,
@@ -257,7 +284,6 @@ enum ContextPayloadWire: Encodable {
       let data,
       let focusPoint,
       let height,
-      let localText,
       let mediaType,
       let region,
       let sha256,
@@ -266,7 +292,6 @@ enum ContextPayloadWire: Encodable {
         data: data,
         focusPoint: focusPoint,
         height: height,
-        localText: localText,
         mediaType: mediaType,
         region: region,
         sha256: sha256,
@@ -288,7 +313,6 @@ enum ContextPayloadWire: Encodable {
       let data,
       let focusPoint,
       let height,
-      let localText,
       let mediaType,
       let region,
       let sha256,
@@ -304,7 +328,6 @@ enum ContextPayloadWire: Encodable {
         ),
         forKey: .image
       )
-      try container.encodeIfPresent(localText, forKey: .localText)
       if let region {
         try container.encode(region, forKey: .region)
         try container.encode("focus.region", forKey: .type)
@@ -322,7 +345,6 @@ enum ContextPayloadWire: Encodable {
     case appName
     case focusPoint
     case image
-    case localText
     case region
     case text
     case type

@@ -11,8 +11,8 @@ export function validateFixture(fixture) {
     typeof fixture.question !== "string" ||
     !fixture.question.trim() ||
     !point ||
-    !probability(point.x) ||
-    !probability(point.y) ||
+    probability(point.x) === false ||
+    probability(point.y) === false ||
     typeof image?.data !== "string" ||
     image.data.length > 11_184_812 ||
     !["image/jpeg", "image/png", "image/webp"].includes(image.mediaType) ||
@@ -35,48 +35,25 @@ export function validateFixture(fixture) {
 
 export function evaluateReplay(result, gate, expected) {
   if (
-    typeof expected?.text !== "string" ||
-    !expected.text.trim() ||
-    !validBounds(expected.bounds)
+    !Array.isArray(expected?.includes) ||
+    expected.includes.length === 0 ||
+    expected.includes.some((value) => typeof value !== "string" || !value.trim())
   ) {
-    throw new Error("Expected text and normalized bounds are required");
+    throw new Error("Expected answer fragments are required");
   }
-  const sameText =
-    result.target?.text?.replaceAll("\r\n", "\n") === expected.text.replaceAll("\r\n", "\n");
-  const bounds = result.target?.bounds;
-  const insideExpected = Boolean(
-    validBounds(bounds) &&
-      bounds.x >= expected.bounds.x &&
-      bounds.y >= expected.bounds.y &&
-      bounds.x + bounds.width <= expected.bounds.x + expected.bounds.width &&
-      bounds.y + bounds.height <= expected.bounds.y + expected.bounds.height,
-  );
-  const sufficientCoverage = Boolean(
-    validBounds(bounds) &&
-      bounds.width >= expected.bounds.width * 0.8 &&
-      bounds.height >= expected.bounds.height * 0.5,
+  const answer = typeof gate?.answer === "string" ? gate.answer : result?.answer;
+  const normalizedAnswer = typeof answer === "string" ? answer.toLocaleLowerCase() : "";
+  const matches = expected.includes.map((value) =>
+    normalizedAnswer.includes(value.trim().toLocaleLowerCase()),
   );
   return {
-    sameText,
-    insideExpected,
-    sufficientCoverage,
-    passed: gate.status === "ready" && sameText && insideExpected && sufficientCoverage,
+    matches,
+    passed: gate.status === "ready" && matches.every(Boolean),
   };
 }
 
 function probability(value) {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1;
-}
-
-function validBounds(bounds) {
-  return (
-    bounds &&
-    ["x", "y", "width", "height"].every((key) => probability(bounds[key])) &&
-    bounds.width > 0 &&
-    bounds.height > 0 &&
-    bounds.x + bounds.width <= 1 &&
-    bounds.y + bounds.height <= 1
-  );
 }
 
 async function main() {
@@ -134,31 +111,20 @@ async function main() {
         AbortSignal.timeout(120_000),
       );
       const gate = JSON.parse(
-        formatVisualResult(
-          {
-            ...result,
-            eventId: requestId,
-            expiresAt: new Date(Date.now() + 60_000),
-            sessionId: requestId,
-          },
-          fixture.question,
-          fixture.focusPoint,
-          { width: fixture.image.width, height: fixture.image.height },
-        ),
+        formatVisualResult({
+          ...result,
+          eventId: requestId,
+          expiresAt: new Date(Date.now() + 60_000),
+          sessionId: requestId,
+        }),
       );
-      const { sameText, insideExpected, sufficientCoverage, passed } = evaluateReplay(
-        result,
-        gate,
-        expected,
-      );
+      const { matches, passed } = evaluateReplay(result, gate, expected);
       outcomes.push({
         iteration,
         sha256,
         elapsedMs: Date.now() - started,
         passed,
-        sameText,
-        insideExpected,
-        sufficientCoverage,
+        matches,
         gate,
         result,
       });
@@ -168,9 +134,7 @@ async function main() {
           elapsedMs: Date.now() - started,
           passed,
           status: gate.status,
-          sameText,
-          insideExpected,
-          sufficientCoverage,
+          matches,
         })}\n`,
       );
     } catch (error) {

@@ -20,9 +20,14 @@ import { ModelConversationEndIntent } from "./realtime/conversation-end-intent.j
 import { DeterministicRealtimeConversationPort } from "./realtime/deterministic-realtime-conversation.js";
 import { PipelineRealtimeConversationPort } from "./realtime/pipeline-realtime-conversation.js";
 import { QwenAudioRealtimeConversationPort } from "./realtime/qwen-audio-realtime-conversation.js";
+import { TestTraceStore } from "./realtime/test-trace.js";
 import { PostgresConversationLedger } from "./storage/postgres-conversation-ledger.js";
 
 const config = loadCoreRuntimeConfig(process.env);
+const testTraceDirectory = process.env["VIOLET_TEST_TRACE_DIR"]?.trim();
+const testTraces = testTraceDirectory ? new TestTraceStore(testTraceDirectory) : undefined;
+const traceCleanup = testTraces ? setInterval(() => testTraces.purgeExpired(), 60_000) : undefined;
+traceCleanup?.unref();
 const pool =
   config.contentKey && config.databaseUrl
     ? new Pool({
@@ -127,8 +132,10 @@ const app = buildCoreApp({
   realtimeLedger: ledger,
   sealed: !config.contentKey,
   version: config.version,
+  ...(testTraces ? { testTraces } : {}),
 });
 app.addHook("onClose", async () => {
+  if (traceCleanup) clearInterval(traceCleanup);
   await pool?.end();
 });
 

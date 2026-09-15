@@ -3,8 +3,8 @@
 单用户私人智能体项目。当前可用入口为原生 macOS 菜单栏 App 和文字开发 CLI；
 云端 Core 负责对话、模型调用、加密事件与短时视觉上下文。
 
-Release 1A/1B 已交付；1C Sight 与 1C.1 Natural Pointing 仍是候选，终端精确选区
-尚未通过验收。长期记忆、持久任务、Worker 和浏览器扩展属于后续目标，不是现有能力。
+Release 1A/1B/1C 已完成产品验收；当前分支正在完成 1C 的工程收尾。
+长期记忆、持久任务、Worker 和浏览器扩展属于后续目标，不是现有能力。
 
 ## 开发
 
@@ -37,13 +37,11 @@ Mac 配置、权限、启动与一次性失败样本录制见 [Mac README](./app
 ## 文档入口
 
 - [当前部署与验收状态](./docs/release-1c-acceptance.md)：唯一维护动态版本与测试结果的位置。
-- [Natural Pointing 交接](./docs/natural-pointing-handoff.md)：实现约束与下一步。
-- [终端误识别诊断](./docs/diagnostics/terminal-selection-ungrounded.md)：失败证据和回放边界。
+- [Natural Pointing](./docs/natural-pointing-handoff.md)：当前实现合同与边界。
 - [历史记录](./docs/历史记录.md)：阶段变化，不代替当前健康状态。
 - [架构方向](./docs/architecture-direction.md)、[工程路线](./docs/engineering-roadmap.md)：
   已实现边界与未来方向。
 - [产品宪法](./docs/product-philosophy-and-constitution.md)：产品与授权原则，不是实现清单。
-- [开发规则待审](./docs/development-rules-review.md)：供用户决定删改，不是新增强制流程。
 
 诊断图片、秘密、本地日志和构建产物不进入 Git 或 Docker 构建上下文。
-不强推共享历史，不损坏其他人的工作区；MR !20 在完整验收通过前保持 Draft。
+不强推共享历史，不损坏其他人的工作区。

@@ -120,22 +120,6 @@ public struct LocalContextPrivacyFilter: LocalContextPrivacyFiltering {
           data,
           regions: sensitiveRegions
         )
-      let safeRecognizedText = analyzedLines.flatMap { line -> [RecognizedContextText] in
-        guard line.redaction.count > 0, let first = line.observations.first else {
-          return line.observations
-        }
-        return [
-          RecognizedContextText(
-            text: line.redaction.value,
-            confidence: line.observations.map(\.confidence).min() ?? first.confidence,
-            normalizedBounds: first.normalizedBounds
-          )
-        ]
-      }
-      let safeText = prioritizedLocalText(
-        safeRecognizedText,
-        focusPoint: focusPoint
-      )
       let categories = analyzedLines.flatMap(\.redaction.categories)
       return FilteredContext(
         appBundleId: appBundleId,
@@ -145,7 +129,6 @@ public struct LocalContextPrivacyFilter: LocalContextPrivacyFiltering {
           data: preparedImage.data,
           focusPoint: focusPoint,
           height: preparedImage.height,
-          localText: safeText.isEmpty ? nil : safeText,
           mediaType: "image/jpeg",
           region: region,
           sha256: contextImageHash(preparedImage.data),
@@ -177,42 +160,6 @@ private struct RedactionResult {
   let value: String
 }
 
-extension FilteredContext {
-  func withoutLocalOCR() -> FilteredContext {
-    guard
-      case .image(
-        let data,
-        let focusPoint,
-        let height,
-        _,
-        let mediaType,
-        let region,
-        let sha256,
-        let width
-      ) = payload
-    else {
-      return self
-    }
-    return FilteredContext(
-      appBundleId: appBundleId,
-      completeness: completeness,
-      confidence: confidence,
-      payload: .image(
-        data: data,
-        focusPoint: focusPoint,
-        height: height,
-        localText: nil,
-        mediaType: mediaType,
-        region: region,
-        sha256: sha256,
-        width: width
-      ),
-      redactions: redactions,
-      sensitivity: sensitivity
-    )
-  }
-}
-
 private struct SensitiveRegion {
   let categories: [ContextRedaction.Category]
   let normalizedBounds: NormalizedContextRect
@@ -222,11 +169,6 @@ struct EncodedContextImage {
   let data: Data
   let height: Int
   let width: Int
-}
-
-private struct RedactedOCRText {
-  let normalizedBounds: NormalizedContextRect
-  let text: String
 }
 
 private func recognizedTextLines(
@@ -305,70 +247,6 @@ private func redactionCounts(_ categories: [ContextRedaction.Category]) -> [Cont
   Dictionary(grouping: categories, by: { $0 })
     .map { ContextRedaction(category: $0.key, count: $0.value.count) }
     .sorted { $0.category.rawValue < $1.category.rawValue }
-}
-
-private func prioritizedLocalText(
-  _ recognizedText: [RecognizedContextText],
-  focusPoint: NormalizedContextPoint?
-) -> String {
-  let observations = recognizedText.compactMap { observation -> RedactedOCRText? in
-    let text = redact(observation.text).value.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !text.isEmpty else {
-      return nil
-    }
-    return RedactedOCRText(
-      normalizedBounds: observation.normalizedBounds,
-      text: text
-    )
-  }
-  let allText = observations.map(\.text).joined(separator: "\n")
-  guard let focusPoint else {
-    return allText
-  }
-  let nearestIndex = observations.indices.min {
-    distanceSquared(
-      from: focusPoint,
-      toVisionBounds: observations[$0].normalizedBounds
-    )
-      < distanceSquared(
-        from: focusPoint,
-        toVisionBounds: observations[$1].normalizedBounds
-      )
-  }
-  let nearestDistance = nearestIndex.map {
-    distanceSquared(from: focusPoint, toVisionBounds: observations[$0].normalizedBounds)
-  }
-  guard
-    let nearestIndex,
-    let nearestDistance,
-    nearestDistance <= 0.0004
-  else {
-    return allText
-  }
-
-  let otherText = observations.enumerated()
-    .filter { $0.offset != nearestIndex }
-    .map { $0.element.text }
-    .joined(separator: "\n")
-  return [
-    "Pointer-adjacent OCR candidate (not proof of selection):\n\(observations[nearestIndex].text)",
-    otherText.isEmpty ? nil : "Other OCR text in the authorized window:\n\(otherText)",
-  ]
-  .compactMap { $0 }
-  .joined(separator: "\n\n")
-}
-
-private func distanceSquared(
-  from point: NormalizedContextPoint,
-  toVisionBounds bounds: NormalizedContextRect
-) -> Double {
-  let minimumX = bounds.x
-  let maximumX = bounds.x + bounds.width
-  let minimumY = 1 - bounds.y - bounds.height
-  let maximumY = 1 - bounds.y
-  let deltaX = point.x < minimumX ? minimumX - point.x : max(0, point.x - maximumX)
-  let deltaY = point.y < minimumY ? minimumY - point.y : max(0, point.y - maximumY)
-  return deltaX * deltaX + deltaY * deltaY
 }
 
 private func prepareImage(

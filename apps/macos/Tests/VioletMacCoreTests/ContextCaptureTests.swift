@@ -101,7 +101,7 @@ struct ContextCaptureTests {
 
   @Test
   @MainActor
-  func naturalPointingReadsCurrentSelectedText() async throws {
+  func naturalPointingAlwaysUsesAScreenshotEvenWhenAXHasSelectedText() async {
     let source = ContextApplicationTarget(
       bundleIdentifier: "com.example.Reader",
       processIdentifier: 303
@@ -112,23 +112,48 @@ struct ContextCaptureTests {
       activeApplication: { source },
       accessibilityAccess: { true },
       focusedElementReader: { _ in AXUIElementCreateSystemWide() },
-      selectionReader: { _, _ in .text("selected word") }
+      selectionReader: { _, _ in .text("selected source text") },
+      screenCaptureAccess: { false }
     )
 
     #expect(capture.prepareNaturalPointingCapture())
-    let result = try await capture.capture(.naturalPointing)
-
-    #expect(
-      result
-        == .text(
-          appBundleId: source.bundleIdentifier,
-          text: "selected word"
-        ))
+    await #expect(throws: ContextCaptureError.screenRecordingPermissionDenied) {
+      try await capture.capture(.naturalPointing)
+    }
   }
 
   @Test
   @MainActor
-  func naturalPointingReadsStaticTextAtTheFrozenPointerBeforeTakingAScreenshot() async throws {
+  func naturalPointingUsesAScreenshotEvenWhenAXHasShortText() async {
+    let source = ContextApplicationTarget(
+      bundleIdentifier: "com.apple.Preview",
+      processIdentifier: 303
+    )
+    var pointedTextRead = false
+    let capture = SystemContextCapture(
+      excludedBundleIds: [],
+      currentProcessIdentifier: 404,
+      activeApplication: { source },
+      accessibilityAccess: { true },
+      focusedElementReader: { _ in AXUIElementCreateSystemWide() },
+      selectionReader: { _, _ in .text("North ") },
+      pointedTextReader: { _, _ in
+        pointedTextRead = true
+        return .text("North")
+      },
+      screenCaptureAccess: { false }
+    )
+
+    #expect(capture.prepareNaturalPointingCapture())
+    await #expect(throws: ContextCaptureError.screenRecordingPermissionDenied) {
+      try await capture.capture(.naturalPointing)
+    }
+    #expect(pointedTextRead)
+  }
+
+  @Test
+  @MainActor
+  func naturalPointingAlwaysUsesAScreenshotEvenWhenAXHasPointedText() async {
     let source = ContextApplicationTarget(
       bundleIdentifier: "com.apple.Preview",
       processIdentifier: 405
@@ -150,20 +175,17 @@ struct ContextCaptureTests {
           "The Aurora team will inspect Beacon Ridge on Thursday at 09:30."
         )
       },
-      mouseLocation: { frozenPoint }
+      mouseLocation: { frozenPoint },
+      screenCaptureAccess: { false }
     )
 
     #expect(capture.prepareNaturalPointingCapture())
-    let result = try await capture.capture(.naturalPointing)
+    await #expect(throws: ContextCaptureError.screenRecordingPermissionDenied) {
+      try await capture.capture(.naturalPointing)
+    }
 
     #expect(receivedProcessIdentifier == source.processIdentifier)
     #expect(receivedPoint == frozenPoint)
-    #expect(
-      result
-        == .text(
-          appBundleId: source.bundleIdentifier,
-          text: "The Aurora team will inspect Beacon Ridge on Thursday at 09:30."
-        ))
   }
 
   @Test
@@ -191,7 +213,7 @@ struct ContextCaptureTests {
 
   @Test
   @MainActor
-  func naturalPointingUsesTheApplicationPreparedAtSpeechStop() async throws {
+  func naturalPointingUsesTheApplicationPreparedAtSpeechStop() async {
     let source = ContextApplicationTarget(
       bundleIdentifier: "com.example.Source",
       processIdentifier: 505
@@ -214,23 +236,20 @@ struct ContextCaptureTests {
       },
       selectionReader: { processIdentifier, _ in
         requestedProcessIdentifier = processIdentifier
-        return .text("anchored selection")
-      }
+        return .text("anchored source selection")
+      },
+      screenCaptureAccess: { false }
     )
 
     capture.prepareSelectedTextCapture()
     #expect(capture.prepareNaturalPointingCapture())
     activeApplication = laterApplication
-    let result = try await capture.capture(.naturalPointing)
+    await #expect(throws: ContextCaptureError.screenRecordingPermissionDenied) {
+      try await capture.capture(.naturalPointing)
+    }
 
     #expect(focusedElementReadCount == 2)
     #expect(requestedProcessIdentifier == source.processIdentifier)
-    #expect(
-      result
-        == .text(
-          appBundleId: source.bundleIdentifier,
-          text: "anchored selection"
-        ))
   }
 
   @Test

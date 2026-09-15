@@ -75,7 +75,7 @@ private func imageContext() -> FilteredContext {
     appBundleId: nil, completeness: 1, confidence: 1,
     payload: .image(
       data: data, focusPoint: .init(x: 0.1, y: 0.9), height: 100,
-      localText: "do not record OCR", mediaType: "image/jpeg", region: nil,
+      mediaType: "image/jpeg", region: nil,
       sha256: contextImageHash(data), width: 200
     ),
     redactions: [], sensitivity: "public"

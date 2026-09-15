@@ -3,39 +3,24 @@ import { describe, expect, it } from "vitest";
 import { evaluateReplay, validateFixture } from "./replay-natural-pointing.mjs";
 
 describe("natural pointing replay", () => {
-  const bounds = { x: 0.03, y: 0.9, width: 0.4, height: 0.06 };
-  const text = "  pnpm --filter @violet/core test \\\n  -- realtime-session.test.ts";
-  const expected = { bounds, text };
+  const expected = { includes: ["EMBER"] };
 
-  it("requires exact selected characters, a contained box, and a ready gate together", () => {
-    const result = { target: { bounds, text } };
+  it("requires the expected answer content and a ready confidence gate", () => {
+    const result = { answer: "The red triangle is labelled EMBER." };
+    const ready = { answer: result.answer, confidence: 0.86, status: "ready" };
+
+    expect(evaluateReplay(result, ready, expected).passed).toBe(true);
     expect(evaluateReplay(result, { status: "ready" }, expected).passed).toBe(true);
     expect(
-      evaluateReplay({ target: { bounds, text: text.trim() } }, { status: "ready" }, expected)
-        .passed,
-    ).toBe(false);
-    expect(
       evaluateReplay(
-        { target: { bounds, text: `printf '%s\\n' '${text}'` } },
-        { status: "ready" },
+        { answer: "The red triangle has no visible label." },
+        { answer: "The red triangle has no visible label.", status: "ready" },
         expected,
       ).passed,
     ).toBe(false);
     expect(
-      evaluateReplay(
-        { target: { text, bounds: { ...bounds, width: 0.52 } } },
-        { status: "ready" },
-        expected,
-      ).passed,
+      evaluateReplay(result, { answer: result.answer, status: "unavailable" }, expected).passed,
     ).toBe(false);
-    expect(
-      evaluateReplay(
-        { target: { text, bounds: { x: 0.2, y: 0.92, width: 0.05, height: 0.01 } } },
-        { status: "ready" },
-        expected,
-      ).passed,
-    ).toBe(false);
-    expect(evaluateReplay(result, { status: "unavailable" }, expected).passed).toBe(false);
   });
 
   it("rejects corrupted or expired input before any model call", () => {
@@ -53,6 +38,7 @@ describe("natural pointing replay", () => {
       },
     };
     expect(validateFixture(fixture).bytes).toEqual(bytes);
+    expect(validateFixture({ ...fixture, focusPoint: { x: 0, y: 0 } }).bytes).toEqual(bytes);
     expect(() =>
       validateFixture({ ...fixture, image: { ...fixture.image, data: "broken" } }),
     ).toThrow();

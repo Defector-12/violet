@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { mkdtempSync, rmSync } from "node:fs";
+import { resolve } from "node:path";
 import type {
   ModelGateway,
   RealtimeConversationInput,
@@ -19,6 +21,7 @@ import { ChatService } from "../conversation/chat-service.js";
 import { InMemoryConversationLedger } from "../conversation/in-memory-conversation-ledger.js";
 import { DeterministicModelGateway } from "../model/deterministic-model-gateway.js";
 import { DeterministicRealtimeConversationPort } from "../realtime/deterministic-realtime-conversation.js";
+import { TestTraceStore } from "../realtime/test-trace.js";
 import { buildCoreApp } from "./app.js";
 
 const deviceToken = "test-device-token-that-is-at-least-32-characters";
@@ -29,6 +32,115 @@ afterEach(async () => {
 });
 
 describe("Core HTTP API", () => {
+  it("records realtime interactions only with an explicitly authorized run", async () => {
+    const root = mkdtempSync(resolve(".local-acceptance/debug-http-"));
+    const store = new TestTraceStore(root);
+    const { app } = await startCore(false, undefined, undefined, store);
+    try {
+      const headers = { authorization: `Bearer ${deviceToken}` };
+      expect((await app.inject({ url: "/v1/debug-trace", headers })).statusCode).toBe(404);
+      const runId = randomUUID();
+      const activeUntil = new Date(Date.now() + 60_000).toISOString();
+      expect(
+        (
+          await app.inject({
+            method: "POST",
+            url: "/v1/test-traces",
+            headers,
+            payload: { runId, activeUntil },
+          })
+        ).json(),
+      ).toMatchObject({
+        status: "ready",
+      });
+      const tracedHeaders = {
+        ...headers,
+        "x-violet-test-run": runId,
+        "x-violet-test-until": activeUntil,
+      };
+      expect(
+        (
+          await app.inject({
+            method: "POST",
+            url: "/v1/context/envelopes",
+            headers: tracedHeaders,
+            payload: contextEnvelope(randomUUID(), new Date()),
+          })
+        ).statusCode,
+      ).toBe(200);
+      expect(
+        (
+          await app.inject({
+            method: "POST",
+            url: "/v1/chat/stream",
+            headers: tracedHeaders,
+            payload: { message: "Trace bounded text", requestId: randomUUID() },
+          })
+        ).statusCode,
+      ).toBe(200);
+      const socket = await app.injectWS("/v1/realtime", {
+        headers: tracedHeaders,
+      });
+      const sessionId = randomUUID();
+      const ready = receiveEvents(socket, 1);
+      socket.send(
+        JSON.stringify({
+          configuration: {
+            inputModalities: ["text"],
+            outputModalities: ["text"],
+            protocolVersion: "1",
+          },
+          eventId: randomUUID(),
+          sequence: 1,
+          sessionId,
+          type: "session.configure",
+        }),
+      );
+      await ready;
+      const received = receiveEvents(socket, 3);
+      socket.send(
+        JSON.stringify({
+          eventId: randomUUID(),
+          sequence: 2,
+          sessionId,
+          turnId: randomUUID(),
+          type: "input.text",
+          text: "Trace ordinary realtime",
+        }),
+      );
+      await received;
+      const closed = new Promise<void>((resolve) => {
+        socket.once("close", () => resolve());
+      });
+      socket.send(
+        JSON.stringify({
+          eventId: randomUUID(),
+          sequence: 3,
+          sessionId,
+          type: "session.close",
+        }),
+      );
+      await closed;
+      const snapshot = (await app.inject({ url: `/v1/test-traces/${runId}`, headers })).body;
+      for (const text of [
+        "context.access",
+        "Trace bounded text",
+        "chat.completed",
+        "core.receive",
+        "core.send",
+        "Trace ordinary realtime",
+        "trace.closed",
+      ])
+        expect(snapshot).toContain(text);
+      expect(snapshot).not.toContain(deviceToken);
+      expect((await app.inject({ url: `/v1/test-traces/${runId}` })).statusCode).toBe(403);
+    } finally {
+      await app.close();
+      openApps.splice(openApps.indexOf(app), 1);
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("exposes liveness without authentication", async () => {
     const { client } = await startCore(false);
 
@@ -432,6 +544,7 @@ async function startCore(
     generateId: randomUUID,
   }),
   modelGateway: ModelGateway = new DeterministicModelGateway(),
+  testTraces?: TestTraceStore,
 ): Promise<{
   readonly app: ReturnType<typeof buildCoreApp>;
   readonly baseUrl: string;
@@ -462,6 +575,7 @@ async function startCore(
     realtimeLedger: ledger,
     sealed,
     version: "test",
+    ...(testTraces ? { testTraces } : {}),
   });
   openApps.push(app);
   const baseUrl = await app.listen({ host: "127.0.0.1", port: 0 });

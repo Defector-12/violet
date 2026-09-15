@@ -1,6 +1,6 @@
 # Violet macOS
 
-Release 1B 已交付、Release 1C 正在验收的原生 Mac 身体。它负责菜单栏、全局快捷键、Keychain、连接状态、设备音频、本地唤醒和受控视觉感知，不承载 Violet 的身份、记忆或固定模型供应商。Qwen 是当前默认实时运行时，Pipeline 可由 Core 显式配置启用，Mac 状态机不随运行时改变。
+Release 1B/1C 已完成产品验收的原生 Mac 身体。它负责菜单栏、全局快捷键、Keychain、连接状态、设备音频、本地唤醒和受控视觉感知，不承载 Violet 的身份、记忆或固定模型供应商。Qwen 是当前默认实时运行时，Pipeline 可由 Core 显式配置启用，Mac 状态机不随运行时改变。
 
 ## 验证
 
@@ -92,8 +92,8 @@ swift run --package-path apps/macos violet-context-replay-capture \
 ```
 
 开发者为样本标注 `expected.json`，格式为
-`{"text":"逐字选区","bounds":{"x":0.1,"y":0.7,"width":0.4,"height":0.1}}`。
-坐标相对完整截图，范围必须包含真实选区但排除邻接命令。用真实 Core Adapter 与门禁回放：
+`{"includes":["EMBER"]}`。回放只验证高置信视觉答案包含预期内容，不要求回答文字框
+包含指针。用真实 Core Adapter 与门禁回放：
 
 ```bash
 pnpm --filter @violet/core build
@@ -102,5 +102,5 @@ VIOLET_MODEL_API_KEY_FILE=/run/violet-secrets/deepseek_api_key \
 ```
 
 最后一条在已有供应商凭证的受控 Core 环境运行；不要把凭证复制到样本或命令参数。
-回放不占用麦克风、不写对话账本，必须逐字和框位置同时通过，记录全部尝试。
+回放不占用麦克风、不写对话账本，记录全部尝试。
 它不替代 Qwen 最终输出和真实设备生命周期验证。问题关闭后删除样本与远端诊断副本。

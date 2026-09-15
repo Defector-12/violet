@@ -3,7 +3,6 @@ export type {
   ContextImage,
   ContextPayload,
   ContextSessionRepository,
-  ContextTargetEvidence,
   ContextUnderstandingPort,
   ContextUnderstandingRequest,
   ContextUnderstandingResult,

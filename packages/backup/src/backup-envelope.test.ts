@@ -104,6 +104,27 @@ describe("backup envelope", () => {
     ).rejects.toThrow();
     await expect(readFile(restoredPath)).rejects.toMatchObject({ code: "ENOENT" });
   });
+
+  it("never deletes an existing restore destination", async () => {
+    const directory = await temporaryDirectory();
+    const encryptedPath = join(directory, "backup.vltbk");
+    const restoredPath = join(directory, "restored.dump");
+    const keyPair = generateBackupKeyPair();
+    await encryptBackupToFile(Readable.from([Buffer.from("valid dump")]), {
+      outputPath: encryptedPath,
+      publicKey: keyPair.publicKey,
+    });
+    await writeFile(restoredPath, "existing data");
+
+    await expect(
+      decryptBackupToFile({
+        inputPath: encryptedPath,
+        outputPath: restoredPath,
+        privateKey: keyPair.privateKey,
+      }),
+    ).rejects.toMatchObject({ code: "EEXIST" });
+    expect(await readFile(restoredPath, "utf8")).toBe("existing data");
+  });
 });
 
 async function temporaryDirectory(): Promise<string> {
