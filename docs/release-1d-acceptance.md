@@ -1,7 +1,7 @@
 # Release 1D：验收清单
 
-> 状态：Phase 1 第二轮审查修复已在本地完成并通过回归，尚未提交、合并或重新部署；
-> Phase 2/3 未开始。本文记录 Release 1D 的实际版本、失败、证据和剩余门禁。规格见
+> 状态：Phase 1 第二轮审查修复已提交、合入主线并重新部署；Phase 2/3 未开始。
+> 本文记录 Release 1D 的实际版本、失败、证据和剩余门禁。规格见
 > [最终规格](./release-1d-spec.md)，实施顺序见 [任务拆分](./release-1d-tasks.md)。
 
 ## 1. 证据规则
@@ -185,8 +185,30 @@
   `1a4b7689-a8be-48d1-8866-1f2e45559d84`，测试子 run
   `2c8497e4-dc8f-4ad6-a477-5596c38eace5`。Mac 95/95 回归通过，run
   `505684ad-104f-4ff3-99b8-30dfc668f234`。
-- 当前工作树尚未提交；线上仍运行 `1b352ad-release-1d-phase1-hardening`。Phase 2
-  在本轮修复提交、合入 `main` 并重新部署前保持阻塞。
+- 修复提交为 `e094e546520d8f145925d62d52a72a79face9f41`；Codebase MR
+  [!23](https://code.byted.org/user/violet/merge_requests/23) 合入
+  `main@d311e1a35b5d74cfe185c0667729b9a087ba8c85`，GitHub PR
+  [#6](https://github.com/Defector-12/violet/pull/6) 合入
+  `main@ab3eb1e39c4f7a7c3e6e67eb592010c1e90bca03`；两个主线 tree 均为
+  `a1698cec200affe1dce63165f1a33ef6e33e6e7f`。
+- exact-main Core 构建通过，run `40299e19-a55d-44ad-bd65-36f1de57082e`。本机
+  Kerberos 票据过期导致 bytedcli SSH 预检未执行，失败记录
+  `e36d68b4-c349-42e2-aa25-5c0216b1ffac` 保留；随后使用已认证 Devbox Web Terminal
+  完成同一发布流程。
+- 部署前加密备份为
+  `20260917T150941Z-89182922-3b66-4f4e-ad13-d416776d72b2.vltbk`，密文 SHA-256
+  `bd6e451cebdaf0583440f37ebcfbbcae5da0435c7a650bc5b1e8d1a704c77592`。GitHub
+  主线源码归档 SHA-256 为
+  `3b900de11529395e14c283a9f7a5f10ae0d7867e1e60eedb244b0c79270439ae`。
+- 运行镜像为
+  `sha256:87fd738274f0869ab23508273d77cc6a415825c5140749df016e15577273a6a0`，
+  版本 `d311e1a-release-1d-phase1-final`，零重启且健康。远端与本地 `dist` 清单
+  SHA-256 均为 `0c5c7647c3ec937afad11776ed85fb32201296001f0cd70135b41021c4f738d6`；
+  `0002b_context_turn_failures.sql` 已应用，checkpoint 开启，模型仍为
+  `deepseek-flash`，旧镜像保留为回滚标签。Web Terminal 原始字段记录在 run
+  `791eec0a-8c45-4180-8cfe-d0ba9f0a63a2`。
+- Mac SSH 隧道下健康和认证状态 `ready`，run
+  `86a6ce25-23c5-4c95-8fdd-46af7a6a2733`。Phase 1 第二轮修复已重新放行。
 
 ## 3. P0：事实与来源
 
@@ -363,7 +385,8 @@ docker compose -f infra/compose/compose.yaml config
 - [ ] 真实供应商评估达到门槛，真实 Mac 完成最终故事。
 - [ ] 旧备份恢复被拒绝，新备份恢复不复活。
 - [ ] 实际 commit、构建、部署、失败和 run ID 已写回本文。
-- [x] Phase 1 审查加固已提交、同步并重新部署，运行版本不再是旧的 `8f34049`。
+- [x] Phase 1 两轮审查加固已提交、合入主线并重新部署，运行版本为
+  `d311e1a-release-1d-phase1-final`。
 - [ ] 用户明确批准后，生产自动记忆才开启。
 
 关闭自动提取、记忆注入或 checkpoint 可以回滚能力；任何回滚都不得降低
