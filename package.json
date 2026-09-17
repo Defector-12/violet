@@ -19,6 +19,7 @@
     "env:init": "node scripts/init-local-env.mjs",
     "env:inject-devbox": "node scripts/inject-devbox-secrets.mjs",
     "env:inject-devbox-qwen": "node scripts/inject-devbox-secrets.mjs --qwen-only",
+    "eval:phase1-checkpoints": "pnpm --filter @violet/core build && node scripts/eval-phase1-checkpoints.mjs",
     "format": "biome check --write .",
     "generate": "pnpm --filter @violet/protocol generate",
     "macos:app": "./scripts/build-macos-app.sh debug",

@@ -82,9 +82,9 @@ services:
       DASHSCOPE_API_KEY_FILE: /run/violet-secrets/qwen_realtime_api_key
       DASHSCOPE_WORKSPACE_ID: ws-jvh4fvlcktrjvtbj
       DEEPSEEK_BASE_URL: https://api.deepseek.com
-      DEEPSEEK_MODEL: deepseek-v4-flash
+      DEEPSEEK_MODEL: deepseek-flash
       DEEPSEEK_VISION_BASE_URL: https://api.deepseek.com
-      DEEPSEEK_VISION_MODEL: deepseek-v4-flash-vision-exp
+      DEEPSEEK_VISION_MODEL: deepseek-flash
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
       OTEL_SERVICE_NAME: violet-core
       PIPELINE_ASR_MODEL: ${PIPELINE_ASR_MODEL:-paraformer-realtime-v2}
@@ -96,6 +96,7 @@ services:
       QWEN_REALTIME_WORKSPACE_ID: ws-jvh4fvlcktrjvtbj
       VIOLET_CONTENT_KEY_FILE: /run/violet-secrets/content_key
       VIOLET_CONTENT_KEY_VERSION: content-v1
+      VIOLET_CONTEXT_CHECKPOINT_ENABLED: ${VIOLET_CONTEXT_CHECKPOINT_ENABLED:-true}
       VIOLET_CONTEXT_STORAGE_PROVIDER: ${VIOLET_CONTEXT_STORAGE_PROVIDER:-tos}
       VIOLET_CONTEXT_TOS_PREFIX: violet/tmp/context
       VIOLET_DATABASE_URL_FILE: /run/violet-secrets/database_url

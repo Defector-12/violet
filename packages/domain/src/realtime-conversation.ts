@@ -1,3 +1,5 @@
+import type { ModelContextProfile } from "./model-gateway.js";
+
 export type RealtimeModality = "audio" | "text";
 export type RealtimeRuntimeKind = "deterministic" | "integrated" | "pipeline";
 export type RealtimeTurnDetection = "manual" | "server_vad" | "smart_turn";
@@ -11,8 +13,10 @@ export interface RealtimeAudioFormat {
 
 export interface RealtimeSessionConfiguration {
   readonly contextEvidence?: string;
+  readonly contextEvidenceIncludedInInstructions?: boolean;
   readonly contextLookupAvailable?: boolean;
   readonly history?: readonly RealtimeHistoryMessage[];
+  readonly instructions?: string;
   readonly inputAudio?: RealtimeAudioFormat;
   readonly inputModalities: readonly RealtimeModality[];
   readonly language?: string;
@@ -129,6 +133,8 @@ export interface RealtimeConversation {
 }
 
 export interface RealtimeConversationPort {
+  readonly contextProfile?: ModelContextProfile;
+  readonly maximumHistoryTurns?: number;
   readonly supportsContextLookup?: boolean;
   open(
     configuration: RealtimeSessionConfiguration,

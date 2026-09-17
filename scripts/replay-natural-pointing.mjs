@@ -89,7 +89,7 @@ async function main() {
   const adapter = new DeepSeekVisionUnderstandingPort({
     apiKey: (await readFile(keyFile, "utf8")).trim(),
     baseUrl: process.env.DEEPSEEK_VISION_BASE_URL ?? "https://api.deepseek.com",
-    model: process.env.DEEPSEEK_VISION_MODEL ?? "deepseek-v4-flash-vision-exp",
+    model: process.env.DEEPSEEK_VISION_MODEL ?? "deepseek-flash",
   });
   const outcomes = [];
   // Reserve a private result file before spending model calls; never overwrite prior evidence.

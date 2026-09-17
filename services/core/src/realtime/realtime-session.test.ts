@@ -5,7 +5,9 @@ import { ContextService } from "../context/context-service.js";
 import { DeterministicContextUnderstandingPort } from "../context/deterministic-context-understanding.js";
 import { InMemoryContextArtifactStore } from "../context/in-memory-context-artifact-store.js";
 import { InMemoryContextSessionRepository } from "../context/in-memory-context-session-repository.js";
+import { ContextEpochManager } from "../conversation/context-epoch-manager.js";
 import { InMemoryConversationLedger } from "../conversation/in-memory-conversation-ledger.js";
+import { AsyncQueue } from "./async-queue.js";
 import type { ConversationEndIntentPort } from "./conversation-end-intent.js";
 import { DeterministicRealtimeConversationPort } from "./deterministic-realtime-conversation.js";
 import { RealtimeSession } from "./realtime-session.js";
@@ -318,18 +320,24 @@ describe("RealtimeSession", () => {
   it("seeds a new realtime runtime with recent ledger history", async () => {
     const sessionId = randomUUID();
     const ledger = new InMemoryConversationLedger();
+    const now = new Date("2026-08-22T00:00:02.000Z");
+    const epochManager = new ContextEpochManager({ generateId: randomUUID });
+    const contextEpoch = epochManager.acceptUserInput(new Date("2026-08-22T00:00:00.000Z"));
+    const previousRequestId = randomUUID();
     await ledger.append({
       content: "Earlier question",
+      contextEpoch,
       id: randomUUID(),
       occurredAt: new Date("2026-08-22T00:00:00.000Z"),
-      requestId: randomUUID(),
+      requestId: previousRequestId,
       role: "user",
     });
     await ledger.append({
       content: "Earlier answer",
+      contextEpoch,
       id: randomUUID(),
       occurredAt: new Date("2026-08-22T00:00:01.000Z"),
-      requestId: randomUUID(),
+      requestId: previousRequestId,
       role: "assistant",
     });
     let observedConfiguration: Parameters<DeterministicRealtimeConversationPort["open"]>[0] | null =
@@ -346,8 +354,10 @@ describe("RealtimeSession", () => {
         },
       },
       contextService: createContextService(),
+      epochManager,
       generateId: randomUUID,
       ledger,
+      now: () => now,
     });
 
     await collect(
@@ -372,6 +382,449 @@ describe("RealtimeSession", () => {
       ],
       turnDetection: "smart_turn",
     });
+  });
+
+  it("closes a realtime connection before stale provider history crosses an epoch boundary", async () => {
+    const sessionId = randomUUID();
+    let now = new Date("2026-09-16T00:00:00.000Z");
+    const ledger = new InMemoryConversationLedger();
+    const session = new RealtimeSession({
+      conversationEndIntent: neverEndsConversation,
+      conversationPort: new DeterministicRealtimeConversationPort({ generateId: randomUUID }),
+      contextService: createContextService(),
+      epochManager: new ContextEpochManager({ generateId: randomUUID }),
+      generateId: randomUUID,
+      ledger,
+      now: () => now,
+    });
+    await collect(
+      session.handle({
+        configuration: {
+          inputModalities: ["text"],
+          outputModalities: ["text"],
+          protocolVersion: "1",
+        },
+        eventId: randomUUID(),
+        sequence: 1,
+        sessionId,
+        type: "session.configure",
+      }),
+    );
+    await collect(
+      session.handle({
+        eventId: randomUUID(),
+        sequence: 2,
+        sessionId,
+        text: "First turn",
+        turnId: randomUUID(),
+        type: "input.text",
+      }),
+    );
+    now = new Date(now.getTime() + 30 * 60_000);
+
+    const expired = await collect(
+      session.handle({
+        eventId: randomUUID(),
+        sequence: 3,
+        sessionId,
+        text: "Must not reach the old provider context",
+        turnId: randomUUID(),
+        type: "input.text",
+      }),
+    );
+
+    expect(expired).toMatchObject([
+      {
+        code: "CONTEXT_EPOCH_EXPIRED",
+        type: "error",
+      },
+    ]);
+    expect(session.closed).toBe(true);
+    await expect(ledger.list()).resolves.toHaveLength(1);
+  });
+
+  it("closes an integrated session when another entry point advances the same epoch", async () => {
+    const sessionId = randomUUID();
+    const epochManager = new ContextEpochManager({ generateId: randomUUID });
+    const now = new Date("2026-09-16T00:00:00.000Z");
+    const epoch = epochManager.acceptUserInput(now);
+    const ledger = new InMemoryConversationLedger();
+    const earlierRequestId = randomUUID();
+    await ledger.append({
+      content: "Earlier question",
+      contextEpoch: epoch,
+      id: randomUUID(),
+      occurredAt: now,
+      requestId: earlierRequestId,
+      role: "user",
+    });
+    await ledger.append({
+      content: "Earlier answer",
+      contextEpoch: epoch,
+      id: randomUUID(),
+      occurredAt: now,
+      requestId: earlierRequestId,
+      role: "assistant",
+    });
+    const sent: RealtimeConversationInput[] = [];
+    const session = new RealtimeSession({
+      conversationEndIntent: neverEndsConversation,
+      conversationPort: {
+        async open() {
+          return {
+            capabilities: {
+              inputModalities: ["text"],
+              interruption: true,
+              outputModalities: ["text"],
+              runtimeKind: "integrated",
+              transcription: true,
+              turnDetection: "manual",
+              voiceKind: "preset",
+            } as const,
+            async close() {},
+            async *outputs() {},
+            async send(input) {
+              sent.push(input);
+            },
+          };
+        },
+      },
+      contextService: createContextService(),
+      epochManager,
+      generateId: randomUUID,
+      ledger,
+      now: () => now,
+    });
+    await collect(
+      session.handle({
+        configuration: {
+          inputModalities: ["text"],
+          outputModalities: ["text"],
+          protocolVersion: "1",
+        },
+        eventId: randomUUID(),
+        sequence: 1,
+        sessionId,
+        type: "session.configure",
+      }),
+    );
+    const latestSequence = ledger.latestSequence.bind(ledger);
+    let injected = false;
+    vi.spyOn(ledger, "latestSequence").mockImplementation(async (contextEpochId) => {
+      const latest = await latestSequence(contextEpochId);
+      if (!injected) {
+        injected = true;
+        const externalRequestId = randomUUID();
+        epochManager.acceptUserInput(now);
+        await ledger.append({
+          content: "External text question",
+          contextEpoch: epoch,
+          id: randomUUID(),
+          occurredAt: now,
+          requestId: externalRequestId,
+          role: "user",
+        });
+        await ledger.append({
+          content: "External text answer",
+          contextEpoch: epoch,
+          id: randomUUID(),
+          occurredAt: now,
+          requestId: externalRequestId,
+          role: "assistant",
+        });
+      }
+      return latest;
+    });
+
+    const output = await collect(
+      session.handle({
+        eventId: randomUUID(),
+        sequence: 2,
+        sessionId,
+        text: "Must reconnect first",
+        turnId: randomUUID(),
+        type: "input.text",
+      }),
+    );
+
+    expect(output).toMatchObject([
+      {
+        code: "CONTEXT_SNAPSHOT_STALE",
+        type: "error",
+      },
+    ]);
+    expect(sent).toEqual([]);
+    expect(session.closed).toBe(true);
+  });
+
+  it("suppresses an automatic VAD response when another entry point advances the epoch", async () => {
+    const sessionId = randomUUID();
+    const turnId = randomUUID();
+    const responseId = randomUUID();
+    const now = new Date("2026-09-16T00:00:00.000Z");
+    const epochManager = new ContextEpochManager({ generateId: randomUUID });
+    const epoch = epochManager.acceptUserInput(now);
+    const ledger = new InMemoryConversationLedger();
+    const earlierRequestId = randomUUID();
+    await ledger.append({
+      content: "Earlier question",
+      contextEpoch: epoch,
+      id: randomUUID(),
+      occurredAt: now,
+      requestId: earlierRequestId,
+      role: "user",
+    });
+    await ledger.append({
+      content: "Earlier answer",
+      contextEpoch: epoch,
+      id: randomUUID(),
+      occurredAt: now,
+      requestId: earlierRequestId,
+      role: "assistant",
+    });
+    const session = new RealtimeSession({
+      conversationEndIntent: neverEndsConversation,
+      conversationPort: {
+        async open() {
+          return {
+            capabilities: {
+              inputModalities: ["audio"],
+              interruption: true,
+              outputModalities: ["text"],
+              runtimeKind: "integrated",
+              transcription: true,
+              turnDetection: "server_vad",
+              voiceKind: "preset",
+            } as const,
+            async close() {},
+            async *outputs() {
+              yield { responseId, turnId, type: "response-started" } as const;
+              yield { responseId, text: "Stale answer", turnId, type: "response-text" } as const;
+              yield {
+                inputTokens: 1,
+                outputTokens: 1,
+                responseId,
+                turnId,
+                type: "response-completed",
+              } as const;
+              yield {
+                final: true,
+                text: "Final transcript",
+                turnId,
+                type: "transcript",
+              } as const;
+            },
+            async send() {},
+          };
+        },
+      },
+      contextService: createContextService(),
+      epochManager,
+      generateId: randomUUID,
+      ledger,
+      now: () => now,
+    });
+    await collect(
+      session.handle({
+        configuration: {
+          inputModalities: ["audio"],
+          outputModalities: ["text"],
+          protocolVersion: "1",
+          turnDetection: "server_vad",
+        },
+        eventId: randomUUID(),
+        sequence: 1,
+        sessionId,
+        type: "session.configure",
+      }),
+    );
+    await collect(
+      session.handle({
+        audio: Buffer.from([1, 2]).toString("base64"),
+        eventId: randomUUID(),
+        sequence: 2,
+        sessionId,
+        turnId,
+        type: "input.audio",
+      }),
+    );
+    const externalRequestId = randomUUID();
+    await ledger.append({
+      content: "External question",
+      contextEpoch: epoch,
+      id: randomUUID(),
+      occurredAt: now,
+      requestId: externalRequestId,
+      role: "user",
+    });
+    await ledger.append({
+      content: "External answer",
+      contextEpoch: epoch,
+      id: randomUUID(),
+      occurredAt: now,
+      requestId: externalRequestId,
+      role: "assistant",
+    });
+
+    const output = await collect(session.outputs());
+
+    expect(output).toMatchObject([{ code: "CONTEXT_SNAPSHOT_STALE", type: "error" }]);
+    expect(output.some((event) => event.type === "response.text")).toBe(false);
+    expect(session.closed).toBe(true);
+  });
+
+  it("checks epoch expiry again before committing buffered audio", async () => {
+    const sessionId = randomUUID();
+    const turnId = randomUUID();
+    let now = new Date("2026-09-16T00:00:00.000Z");
+    const epochManager = new ContextEpochManager({ generateId: randomUUID });
+    epochManager.acceptUserInput(now);
+    const sent: RealtimeConversationInput[] = [];
+    const session = new RealtimeSession({
+      conversationEndIntent: neverEndsConversation,
+      conversationPort: {
+        async open() {
+          return {
+            capabilities: {
+              inputModalities: ["audio"],
+              interruption: false,
+              outputModalities: ["audio", "text"],
+              runtimeKind: "integrated",
+              transcription: true,
+              turnDetection: "manual",
+              voiceKind: "preset",
+            } as const,
+            async close() {},
+            async *outputs() {},
+            async send(input) {
+              sent.push(input);
+            },
+          };
+        },
+      },
+      contextService: createContextService(),
+      epochManager,
+      generateId: randomUUID,
+      ledger: new InMemoryConversationLedger(),
+      now: () => now,
+    });
+    await collect(
+      session.handle({
+        configuration: {
+          inputModalities: ["audio"],
+          outputModalities: ["audio", "text"],
+          protocolVersion: "1",
+          turnDetection: "manual",
+        },
+        eventId: randomUUID(),
+        sequence: 1,
+        sessionId,
+        type: "session.configure",
+      }),
+    );
+    now = new Date(now.getTime() + 29 * 60_000 + 59_000);
+    await collect(
+      session.handle({
+        audio: Buffer.from([1, 2]).toString("base64"),
+        eventId: randomUUID(),
+        sequence: 2,
+        sessionId,
+        turnId,
+        type: "input.audio",
+      }),
+    );
+    now = new Date(now.getTime() + 2_000);
+
+    const output = await collect(
+      session.handle({
+        eventId: randomUUID(),
+        sequence: 3,
+        sessionId,
+        turnId,
+        type: "input.commit",
+      }),
+    );
+
+    expect(output).toMatchObject([
+      {
+        code: "CONTEXT_EPOCH_EXPIRED",
+        type: "error",
+      },
+    ]);
+    expect(sent.map((input) => input.type)).toEqual(["audio"]);
+  });
+
+  it("suppresses a final audio turn that crosses the epoch boundary before transcription", async () => {
+    const sessionId = randomUUID();
+    const turnId = randomUUID();
+    let now = new Date("2026-09-16T00:00:00.000Z");
+    const ledger = new InMemoryConversationLedger();
+    const epochManager = new ContextEpochManager({ generateId: randomUUID });
+    epochManager.acceptUserInput(now);
+    const session = new RealtimeSession({
+      conversationEndIntent: neverEndsConversation,
+      conversationPort: {
+        async open() {
+          return {
+            capabilities: {
+              inputModalities: ["audio"],
+              interruption: true,
+              outputModalities: ["audio", "text"],
+              runtimeKind: "integrated",
+              transcription: true,
+              turnDetection: "smart_turn",
+              voiceKind: "preset",
+            } as const,
+            async close() {},
+            async *outputs() {
+              yield {
+                final: true,
+                text: "Late final transcript",
+                turnId,
+                type: "transcript",
+              } as const;
+            },
+            async send() {},
+          };
+        },
+      },
+      contextService: createContextService(),
+      epochManager,
+      generateId: randomUUID,
+      ledger,
+      now: () => now,
+    });
+    await collect(
+      session.handle({
+        configuration: {
+          inputModalities: ["audio"],
+          outputModalities: ["audio", "text"],
+          protocolVersion: "1",
+          turnDetection: "smart_turn",
+        },
+        eventId: randomUUID(),
+        sequence: 1,
+        sessionId,
+        type: "session.configure",
+      }),
+    );
+    now = new Date(now.getTime() + 30 * 60_000);
+
+    const outputs = await collect(session.outputs());
+
+    expect(outputs).toMatchObject([
+      {
+        code: "CONTEXT_EPOCH_EXPIRED",
+        type: "error",
+      },
+    ]);
+    expect(session.closed).toBe(true);
+    await expect(ledger.list()).resolves.toMatchObject([
+      {
+        content: "Late final transcript",
+        role: "user",
+      },
+    ]);
   });
 
   it("resolves an active context before opening the realtime provider", async () => {
@@ -441,8 +894,8 @@ describe("RealtimeSession", () => {
     );
 
     expect(observedConfiguration).toMatchObject({
-      contextEvidence: expect.stringContaining("Current selected evidence"),
       contextLookupAvailable: true,
+      instructions: expect.stringContaining("Current selected evidence"),
     });
   });
 
@@ -504,7 +957,7 @@ describe("RealtimeSession", () => {
     );
 
     expect(observedConfiguration).toMatchObject({
-      contextEvidence: expect.stringContaining('"status":"unavailable"'),
+      instructions: expect.stringContaining('"status":"unavailable"'),
     });
     expect(JSON.stringify(observedConfiguration)).not.toContain("Maybe the label is EMBER.");
   });
@@ -912,6 +1365,104 @@ describe("RealtimeSession", () => {
     expect(receivedInputs).toEqual([]);
   });
 
+  it("waits for a late final transcript before persisting the assistant turn", async () => {
+    const sessionId = randomUUID();
+    const turnId = randomUUID();
+    const responseId = randomUUID();
+    const ledger = new InMemoryConversationLedger();
+    const session = new RealtimeSession({
+      conversationEndIntent: neverEndsConversation,
+      contextService: createContextService(),
+      conversationPort: {
+        async open() {
+          return {
+            capabilities: {
+              inputModalities: ["audio"],
+              interruption: true,
+              outputModalities: ["audio", "text"],
+              runtimeKind: "integrated",
+              transcription: true,
+              turnDetection: "smart_turn",
+              voiceKind: "preset",
+            },
+            async close() {},
+            async *outputs() {
+              yield { responseId, turnId, type: "response-started" } as const;
+              yield {
+                responseId,
+                text: "Short answer",
+                turnId,
+                type: "response-text",
+              } as const;
+              yield {
+                inputTokens: 1,
+                outputTokens: 1,
+                responseId,
+                turnId,
+                type: "response-completed",
+              } as const;
+              yield {
+                final: true,
+                text: "Late final transcript",
+                turnId,
+                type: "transcript",
+              } as const;
+            },
+            async send() {},
+          };
+        },
+      },
+      generateId: randomUUID,
+      ledger,
+    });
+    await collect(
+      session.handle({
+        configuration: {
+          inputModalities: ["audio"],
+          outputModalities: ["audio", "text"],
+          protocolVersion: "1",
+          turnDetection: "smart_turn",
+        },
+        eventId: randomUUID(),
+        sequence: 1,
+        sessionId,
+        type: "session.configure",
+      }),
+    );
+
+    const output = await collect(session.outputs());
+    const messages = await ledger.list();
+    const contextEpochId = messages[0]?.contextEpochId;
+
+    expect(contextEpochId).toBeDefined();
+    expect(output.map((event) => event.type)).toEqual([
+      "response.started",
+      "response.text",
+      "response.completed",
+      "input.transcript",
+    ]);
+    expect(messages).toMatchObject([
+      {
+        content: "Late final transcript",
+        contextEpochId,
+        requestId: turnId,
+        role: "user",
+      },
+      {
+        content: "Short answer",
+        contextEpochId,
+        requestId: turnId,
+        role: "assistant",
+      },
+    ]);
+    await expect(
+      ledger.listTurns({
+        completeOnly: true,
+        contextEpochId: contextEpochId ?? "",
+      }),
+    ).resolves.toHaveLength(1);
+  });
+
   it("ignores a stale capture result after a newer speech turn starts", async () => {
     const sessionId = randomUUID();
     const oldTurnId = randomUUID();
@@ -1097,6 +1648,152 @@ describe("RealtimeSession", () => {
         }
       },
     );
+
+    it("persists the grounded replacement after cancelling the pre-tool response", async () => {
+      const sessionId = randomUUID();
+      const turnId = randomUUID();
+      const initialResponseId = randomUUID();
+      const groundedResponseId = randomUUID();
+      const outputs = new AsyncQueue<RealtimeConversationOutput>();
+      const receivedInputs: RealtimeConversationInput[] = [];
+      const ledger = new InMemoryConversationLedger();
+      const session = new RealtimeSession({
+        conversationEndIntent: neverEndsConversation,
+        conversationPort: {
+          supportsContextLookup: true,
+          async open() {
+            return {
+              capabilities: {
+                inputModalities: ["text"],
+                interruption: true,
+                outputModalities: ["text"],
+                runtimeKind: "integrated",
+                transcription: true,
+                turnDetection: "server_vad",
+                voiceKind: "preset",
+              } as const,
+              async close() {
+                outputs.close();
+              },
+              async *outputs(signal) {
+                while (true) {
+                  const output = await outputs.next(signal);
+                  if (!output) return;
+                  yield output;
+                }
+              },
+              async send(input) {
+                receivedInputs.push(input);
+                if (input.type === "context-result") {
+                  outputs.push({
+                    responseId: groundedResponseId,
+                    turnId,
+                    type: "response-started",
+                  });
+                  outputs.push({
+                    responseId: groundedResponseId,
+                    text: "The selected word means continuity.",
+                    turnId,
+                    type: "response-text",
+                  });
+                  outputs.push({
+                    inputTokens: 1,
+                    outputTokens: 1,
+                    responseId: groundedResponseId,
+                    turnId,
+                    type: "response-completed",
+                  });
+                }
+              },
+            };
+          },
+        },
+        contextService: createContextService(),
+        generateId: randomUUID,
+        ledger,
+      });
+      await collect(
+        session.handle({
+          configuration: {
+            inputModalities: ["text"],
+            onDemandContext: true,
+            outputModalities: ["text"],
+            protocolVersion: "1",
+          },
+          eventId: randomUUID(),
+          sequence: 1,
+          sessionId,
+          type: "session.configure",
+        }),
+      );
+      await collect(
+        session.handle({
+          eventId: randomUUID(),
+          sequence: 2,
+          sessionId,
+          text: "What does this word mean?",
+          turnId,
+          type: "input.text",
+        }),
+      );
+      outputs.push({
+        responseId: initialResponseId,
+        turnId,
+        type: "response-started",
+      });
+      outputs.push({
+        callId: "inspect-word",
+        query: "What does this word mean?",
+        responseId: initialResponseId,
+        turnId,
+        type: "context-request",
+      });
+
+      const initial = await take(session.outputs(), 3);
+      const request = initial[2];
+      if (request?.type !== "context.capture.requested") {
+        throw new Error("Expected a context capture request");
+      }
+      await collect(
+        session.handle({
+          context: contextEnvelope("continuity", request.requestId, new Date()),
+          eventId: randomUUID(),
+          requestId: request.requestId,
+          sequence: 3,
+          sessionId,
+          turnId,
+          type: "context.capture.succeeded",
+        }),
+      );
+      await waitUntil(() => receivedInputs.some((input) => input.type === "context-result"));
+      const grounded = await take(session.outputs(), 3);
+
+      expect(initial.map((event) => event.type)).toEqual([
+        "response.started",
+        "response.cancelled",
+        "context.capture.requested",
+      ]);
+      expect(grounded.map((event) => event.type)).toEqual([
+        "response.started",
+        "response.text",
+        "response.completed",
+      ]);
+      const messages = await ledger.list();
+      expect(messages).toMatchObject([
+        {
+          content: "What does this word mean?",
+          requestId: turnId,
+          role: "user",
+        },
+        {
+          content: "The selected word means continuity.",
+          requestId: turnId,
+          role: "assistant",
+        },
+      ]);
+      expect(messages[0]?.contextEpochId).toBe(messages[1]?.contextEpochId);
+      await session.close();
+    });
 
     it.each([true, false])(
       "does not infer visual routing from transcript keywords (Look=%s)",

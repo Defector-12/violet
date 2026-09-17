@@ -5,15 +5,17 @@ import type {
   ChatCompletionMessageParam,
 } from "openai/resources/chat/completions";
 import { recordTestTrace } from "../realtime/test-trace.js";
+import { deepSeekV41ContextProfile } from "./model-context.js";
 
 interface DeepSeekStreamingRequest extends ChatCompletionCreateParamsStreaming {
   readonly thinking?: {
-    readonly type: "enabled";
+    readonly type: "disabled" | "enabled";
   };
   readonly user_id: string;
 }
 
 export class DeepSeekModelGateway implements ModelGateway {
+  readonly contextProfile = deepSeekV41ContextProfile;
   readonly #client: OpenAI;
   readonly #model: string;
   readonly #thinking: boolean;
@@ -22,6 +24,7 @@ export class DeepSeekModelGateway implements ModelGateway {
   constructor(input: {
     readonly apiKey: string;
     readonly baseUrl: string;
+    readonly fetch?: typeof fetch;
     readonly model: string;
     readonly thinking?: boolean;
     readonly userId: string;
@@ -29,6 +32,7 @@ export class DeepSeekModelGateway implements ModelGateway {
     this.#client = new OpenAI({
       apiKey: input.apiKey,
       baseURL: input.baseUrl,
+      ...(input.fetch ? { fetch: input.fetch } : {}),
       maxRetries: 2,
       timeout: 120_000,
     });
@@ -38,6 +42,7 @@ export class DeepSeekModelGateway implements ModelGateway {
   }
 
   async *stream(request: ModelRequest, signal?: AbortSignal): AsyncIterable<ModelStreamEvent> {
+    const thinking = request.thinking ?? this.#thinking;
     const parameters: DeepSeekStreamingRequest = {
       messages: request.messages.map(
         (message): ChatCompletionMessageParam => ({
@@ -46,9 +51,10 @@ export class DeepSeekModelGateway implements ModelGateway {
         }),
       ),
       model: this.#model,
+      ...(request.maximumOutputTokens ? { max_tokens: request.maximumOutputTokens } : {}),
       stream: true,
       stream_options: { include_usage: true },
-      ...(this.#thinking ? { thinking: { type: "enabled" as const } } : {}),
+      thinking: { type: thinking ? "enabled" : "disabled" },
       user_id: this.#userId,
     };
     recordTestTrace("model.send", {
@@ -57,25 +63,36 @@ export class DeepSeekModelGateway implements ModelGateway {
       system: parameters.messages.filter((message) => message.role === "system"),
       currentMessage: parameters.messages.at(-1),
       preexistingMessages: Math.max(0, parameters.messages.length - 1),
-      thinking: this.#thinking,
+      thinking,
+      maximumOutputTokens: request.maximumOutputTokens,
     });
     let inputTokens = 0;
     let outputTokens = 0;
     let answer = "";
+    let finishReason: string | null = null;
     try {
       const stream = await this.#client.chat.completions.create(parameters, {
         ...(signal ? { signal } : {}),
       });
       for await (const chunk of stream) {
-        const content = chunk.choices[0]?.delta.content;
+        const choice = chunk.choices[0];
+        const content = choice?.delta.content;
         if (content) {
           answer += content;
           yield { content, type: "delta" };
+        }
+        if (choice?.finish_reason) {
+          finishReason = choice.finish_reason;
         }
         if (chunk.usage) {
           inputTokens = chunk.usage.prompt_tokens;
           outputTokens = chunk.usage.completion_tokens;
         }
+      }
+      if (finishReason !== "stop") {
+        throw new Error(
+          `DeepSeek response did not complete normally (finish_reason=${finishReason ?? "missing"})`,
+        );
       }
     } catch (error) {
       recordTestTrace("model.failed", {

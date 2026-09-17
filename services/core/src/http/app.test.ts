@@ -19,6 +19,9 @@ import { DeterministicContextUnderstandingPort } from "../context/deterministic-
 import { InMemoryContextArtifactStore } from "../context/in-memory-context-artifact-store.js";
 import { InMemoryContextSessionRepository } from "../context/in-memory-context-session-repository.js";
 import { ChatService } from "../conversation/chat-service.js";
+import { ContextAssembler } from "../conversation/context-assembler.js";
+import { ContextEpochManager } from "../conversation/context-epoch-manager.js";
+import { InMemoryContextCheckpointRepository } from "../conversation/in-memory-context-checkpoint-repository.js";
 import { InMemoryConversationLedger } from "../conversation/in-memory-conversation-ledger.js";
 import { DeterministicModelGateway } from "../model/deterministic-model-gateway.js";
 import { DeterministicRealtimeConversationPort } from "../realtime/deterministic-realtime-conversation.js";
@@ -247,7 +250,7 @@ describe("Core HTTP API", () => {
     expect(model.lastMessages[0]).toMatchObject({
       role: "system",
     });
-    expect(model.lastMessages[0]?.content).toContain("untrusted quoted data");
+    expect(model.lastMessages[1]?.content).toContain("untrusted quoted data");
     const current = model.lastMessages.at(-1);
     expect(current?.role).toBe("user");
     expect(JSON.parse(current?.content ?? "{}")).toMatchObject({
@@ -406,6 +409,53 @@ describe("Core HTTP API", () => {
       turnId,
       type: "response.text",
     });
+    socket.terminate();
+  });
+
+  it("keeps text history when switching to realtime within the same epoch", async () => {
+    let observedHistory: readonly { readonly content: string; readonly role: string }[] = [];
+    const deterministic = new DeterministicRealtimeConversationPort({
+      generateId: randomUUID,
+    });
+    const realtimeConversationPort: RealtimeConversationPort = {
+      async open(configuration, signal) {
+        observedHistory = configuration.history ?? [];
+        return deterministic.open(configuration, signal);
+      },
+    };
+    const { app, client } = await startCore(false, realtimeConversationPort);
+    for await (const _event of client.streamChat({
+      message: "Remember this turn in the current context.",
+      requestId: randomUUID(),
+    })) {
+      // Consume the response before opening realtime.
+    }
+    const socket = await app.injectWS("/v1/realtime", {
+      headers: { authorization: `Bearer ${deviceToken}` },
+    });
+    const ready = receiveEvents(socket, 1);
+    socket.send(
+      JSON.stringify({
+        configuration: {
+          inputModalities: ["text"],
+          outputModalities: ["text"],
+          protocolVersion: "1",
+        },
+        eventId: randomUUID(),
+        sequence: 1,
+        sessionId: randomUUID(),
+        type: "session.configure",
+      }),
+    );
+    await ready;
+
+    expect(observedHistory).toMatchObject([
+      { content: "Remember this turn in the current context.", role: "user" },
+      {
+        content: "Violet test response: Remember this turn in the current context.",
+        role: "assistant",
+      },
+    ]);
     socket.terminate();
   });
 
@@ -612,12 +662,20 @@ async function startCore(
   readonly client: VioletClient;
 }> {
   const ledger = new InMemoryConversationLedger();
+  const contextAssembler = new ContextAssembler({
+    checkpoints: new InMemoryContextCheckpointRepository(),
+    ledger,
+    model: modelGateway,
+  });
+  const contextEpochManager = new ContextEpochManager({ generateId: randomUUID });
   const app = buildCoreApp({
     authenticator: new DeviceAuthenticator({
       expectedHashHex: hashDeviceToken(deviceToken),
       expiresAt: new Date("2100-01-01T00:00:00.000Z"),
     }),
     chatService: new ChatService({
+      contextAssembler,
+      epochManager: contextEpochManager,
       generateId: randomUUID,
       ledger,
       modelGateway,
@@ -627,6 +685,8 @@ async function startCore(
         return false;
       },
     },
+    contextAssembler,
+    contextEpochManager,
     contextService: new ContextService({
       artifactStore: new InMemoryContextArtifactStore(),
       repository: new InMemoryContextSessionRepository(),

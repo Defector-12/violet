@@ -12,7 +12,11 @@ import { InMemoryContextArtifactStore } from "./context/in-memory-context-artifa
 import { InMemoryContextSessionRepository } from "./context/in-memory-context-session-repository.js";
 import { TosContextArtifactStore } from "./context/tos-context-artifact-store.js";
 import { ChatService } from "./conversation/chat-service.js";
+import { ContextAssembler } from "./conversation/context-assembler.js";
+import { ContextEpochManager } from "./conversation/context-epoch-manager.js";
+import { InMemoryContextCheckpointRepository } from "./conversation/in-memory-context-checkpoint-repository.js";
 import { InMemoryConversationLedger } from "./conversation/in-memory-conversation-ledger.js";
+import { createPipelineContextAssembler } from "./conversation/pipeline-context.js";
 import { buildCoreApp } from "./http/app.js";
 import { DeepSeekModelGateway } from "./model/deepseek-model-gateway.js";
 import { DeterministicModelGateway } from "./model/deterministic-model-gateway.js";
@@ -21,6 +25,7 @@ import { DeterministicRealtimeConversationPort } from "./realtime/deterministic-
 import { PipelineRealtimeConversationPort } from "./realtime/pipeline-realtime-conversation.js";
 import { QwenAudioRealtimeConversationPort } from "./realtime/qwen-audio-realtime-conversation.js";
 import { TestTraceStore } from "./realtime/test-trace.js";
+import { PostgresContextCheckpointRepository } from "./storage/postgres-context-checkpoint-repository.js";
 import { PostgresConversationLedger } from "./storage/postgres-conversation-ledger.js";
 
 const config = loadCoreRuntimeConfig(process.env);
@@ -35,13 +40,16 @@ const pool =
         max: 10,
       })
     : null;
+const cipher = config.contentKey
+  ? new EnvelopeCipher({
+      key: config.contentKey,
+      keyVersion: config.contentKeyVersion,
+    })
+  : null;
 const ledger =
-  pool && config.contentKey
+  pool && cipher
     ? new PostgresConversationLedger({
-        cipher: new EnvelopeCipher({
-          key: config.contentKey,
-          keyVersion: config.contentKeyVersion,
-        }),
+        cipher,
         constitutionVersion: "2026-08-18",
         instanceId: randomUUID(),
         pool,
@@ -66,6 +74,17 @@ const realtimeModelGateway: ModelGateway =
         userId: `${config.model.userId}-realtime`,
       })
     : modelGateway;
+const checkpoints =
+  pool && cipher
+    ? new PostgresContextCheckpointRepository({ cipher, pool })
+    : new InMemoryContextCheckpointRepository();
+const contextEpochManager = new ContextEpochManager({ generateId: randomUUID });
+const contextAssembler = new ContextAssembler({
+  checkpointEnabled: config.contextCheckpointEnabled,
+  checkpoints,
+  ledger,
+  model: modelGateway,
+});
 const realtimeConversationPort: RealtimeConversationPort =
   config.realtime.provider === "qwen-audio"
     ? new QwenAudioRealtimeConversationPort({
@@ -79,6 +98,12 @@ const realtimeConversationPort: RealtimeConversationPort =
       ? new PipelineRealtimeConversationPort({
           apiKey: config.realtime.apiKey,
           asrModel: config.realtime.asrModel,
+          assembleContext: createPipelineContextAssembler({
+            contextAssembler,
+            epochManager: contextEpochManager,
+            generateId: randomUUID,
+            ledger,
+          }),
           generateId: randomUUID,
           modelGateway: realtimeModelGateway,
           ttsModel: config.realtime.ttsModel,
@@ -122,11 +147,15 @@ const app = buildCoreApp({
     expiresAt: config.deviceTokenExpiresAt,
   }),
   chatService: new ChatService({
+    contextAssembler,
+    epochManager: contextEpochManager,
     generateId: randomUUID,
     ledger,
     modelGateway,
   }),
   conversationEndIntent: new ModelConversationEndIntent(modelGateway),
+  contextAssembler,
+  contextEpochManager,
   contextService,
   realtimeConversationPort,
   realtimeLedger: ledger,
