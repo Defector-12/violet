@@ -1,7 +1,6 @@
 # Release 1D：任务拆分
 
-> 状态：方案已批准；Phase 1 代码已在本地实现并通过自动化合并门，尚未提交或部署。
-> Phase 2/3 未开始。
+> 状态：方案已批准；Phase 1 已实现、审查、提交并部署。Phase 2/3 未开始。
 > 产品合同见 [最终规格](./release-1d-spec.md)，放行条件见
 > [验收清单](./release-1d-acceptance.md)。
 

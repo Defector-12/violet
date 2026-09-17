@@ -1,7 +1,7 @@
 # Release 1D：验收清单
 
-> 状态：Phase 1 的 1D-01 至 1D-03 已在本地分支实现并通过自动化合并门，尚未提交或
-> 部署；Phase 2/3 未开始。本文记录 Release 1D 的实际版本、失败、证据和剩余门禁。规格见
+> 状态：Phase 1 的 1D-01 至 1D-03 已提交、同步并部署；Phase 2/3 未开始。本文记录
+> Release 1D 的实际版本、失败、证据和剩余门禁。规格见
 > [最终规格](./release-1d-spec.md)，实施顺序见 [任务拆分](./release-1d-tasks.md)。
 
 ## 1. 证据规则
@@ -17,7 +17,7 @@
 ## 2. 验收前置
 
 - [x] 用户已批准 1D 规格和任务拆分（2026-09-16）；Phase 1 本地实现已开始。
-- [ ] 验收 commit、工作树指纹、Core 版本和 Mac 二进制 hash 已记录。
+- [x] Phase 1 验收 commit、工作树指纹、Core 版本和 Mac 二进制 hash 已记录。
 - [ ] Mac/Core recorder 在真人测试前均为 ready。
 - [x] 当前 Phase 1 自动化测试数据全部为合成数据。
 - [x] 本机 Xcode license 已接受；检查 run `8dd35fde-dede-40ec-bd50-c75d1e71f1af`。
@@ -25,8 +25,8 @@
 
 ### 2.1 Phase 1 本地实现证据（2026-09-16—17）
 
-- 分支 `feat/1d-phase1-context` 基于已批准规划提交 `c23fd44`；当前改动未提交、未推送、
-  未部署。
+- Phase 1 提交为 `8f34049efcbe2a418e5d1e31c809ab30e7381d1c`，已同步到
+  `bits/feat/1d-phase1-context` 与 `origin/feat/1d-phase1-context`。
 - 隔离 PostgreSQL 环境下 `pnpm check:ci` 通过：生成一致、Biome、全仓构建与类型检查
   通过，179/179 测试通过且无跳过。最终 run
   `8ac31b7c-a8b8-4844-9d7d-0941aba29674`，测试子 run
@@ -84,6 +84,25 @@
   `7a87bd50-2844-4c8f-8604-28e03221685a` 为 182 通过、1 跳过，记录保留。
 - 既有三组真实 DeepSeek checkpoint 结果经更新后的离线规则复核仍为 3/3 通过，run
   `cefb0441-4da9-46cc-b7f7-a8d3a04e5577`；本次未新增付费模型调用。
+- exact-commit Core 构建 run `66cf4658-cf65-47b0-9ef4-578d9ea611ad`；部署前生成并
+  校验了本地加密 PostgreSQL 备份
+  `20260917T093041Z-982b38bf-57d4-4e52-bebe-8b17f67ec321.vltbk`，SHA-256
+  `fd801ace3c1d0e8ba38b10afe652932740ad86703ab907e80780045f1b889a9b`，run
+  `5c07c2ca-fa6d-4555-b825-e8aca57ffd4a`。
+- Core 部署 run `f2088e43-8fbc-44d5-becb-ebd2e0de9998`：发布归档 SHA-256
+  `5cb01862972090a43ba002f084e0c2e65143ba880e3bc00046325cf7736abfc7`，
+  `0002_context_checkpoints.sql` 已应用，运行镜像
+  `sha256:6f2acf2f1962fc81663d1eb3065860822e8f5458baf4c590bfca1db2f1dbc3d0`。
+  远端 `dist` 清单 SHA-256 与本地一致，均为
+  `42497d64dacb4db2ad935b4e52d118c9cd8956c2031cb92602ad584898a50622`；健康、迁移、
+  checkpoint 开关和回滚镜像验证 run `297d71f7-85a9-464b-b7cb-dbd0f3738467`。
+- Mac exact-commit 构建与签名 run `9f79b25a-7a24-41af-b8de-eebad317ba18`，启动验证
+  run `e39de01b-b42d-4725-ace9-2b9c474b7f1d`，二进制 SHA-256
+  `6e4094325a89788a4d956e8e32ad299ef7703411678aefb8e1aefa230ee1c1ef`。通过 Mac SSH
+  隧道验证 Core 健康及认证状态 `ready`，run `d2cb84e7-8f8c-418c-8f6f-f4a73a615e75`。
+  两次启动前检查失败 `e28c4226-4610-4156-ac9a-fddc120b9623`、
+  `db07764e-14f7-4f9e-b226-0828157d2308` 已保留；原因分别是旧脚本依赖已移除的
+  Info.plist 键，以及受限进程查询与 shell 转义，不影响最终运行状态。
 
 ## 3. P0：事实与来源
 
