@@ -557,6 +557,122 @@ describe("RealtimeSession", () => {
     expect(session.closed).toBe(true);
   });
 
+  it("suppresses an automatic VAD response when another entry point advances the epoch", async () => {
+    const sessionId = randomUUID();
+    const turnId = randomUUID();
+    const responseId = randomUUID();
+    const now = new Date("2026-09-16T00:00:00.000Z");
+    const epochManager = new ContextEpochManager({ generateId: randomUUID });
+    const epoch = epochManager.acceptUserInput(now);
+    const ledger = new InMemoryConversationLedger();
+    const earlierRequestId = randomUUID();
+    await ledger.append({
+      content: "Earlier question",
+      contextEpoch: epoch,
+      id: randomUUID(),
+      occurredAt: now,
+      requestId: earlierRequestId,
+      role: "user",
+    });
+    await ledger.append({
+      content: "Earlier answer",
+      contextEpoch: epoch,
+      id: randomUUID(),
+      occurredAt: now,
+      requestId: earlierRequestId,
+      role: "assistant",
+    });
+    const session = new RealtimeSession({
+      conversationEndIntent: neverEndsConversation,
+      conversationPort: {
+        async open() {
+          return {
+            capabilities: {
+              inputModalities: ["audio"],
+              interruption: true,
+              outputModalities: ["text"],
+              runtimeKind: "integrated",
+              transcription: true,
+              turnDetection: "server_vad",
+              voiceKind: "preset",
+            } as const,
+            async close() {},
+            async *outputs() {
+              yield { responseId, turnId, type: "response-started" } as const;
+              yield { responseId, text: "Stale answer", turnId, type: "response-text" } as const;
+              yield {
+                inputTokens: 1,
+                outputTokens: 1,
+                responseId,
+                turnId,
+                type: "response-completed",
+              } as const;
+              yield {
+                final: true,
+                text: "Final transcript",
+                turnId,
+                type: "transcript",
+              } as const;
+            },
+            async send() {},
+          };
+        },
+      },
+      contextService: createContextService(),
+      epochManager,
+      generateId: randomUUID,
+      ledger,
+      now: () => now,
+    });
+    await collect(
+      session.handle({
+        configuration: {
+          inputModalities: ["audio"],
+          outputModalities: ["text"],
+          protocolVersion: "1",
+          turnDetection: "server_vad",
+        },
+        eventId: randomUUID(),
+        sequence: 1,
+        sessionId,
+        type: "session.configure",
+      }),
+    );
+    await collect(
+      session.handle({
+        audio: Buffer.from([1, 2]).toString("base64"),
+        eventId: randomUUID(),
+        sequence: 2,
+        sessionId,
+        turnId,
+        type: "input.audio",
+      }),
+    );
+    const externalRequestId = randomUUID();
+    await ledger.append({
+      content: "External question",
+      contextEpoch: epoch,
+      id: randomUUID(),
+      occurredAt: now,
+      requestId: externalRequestId,
+      role: "user",
+    });
+    await ledger.append({
+      content: "External answer",
+      contextEpoch: epoch,
+      id: randomUUID(),
+      occurredAt: now,
+      requestId: externalRequestId,
+      role: "assistant",
+    });
+
+    const output = await collect(session.outputs());
+
+    expect(output).toMatchObject([{ code: "CONTEXT_SNAPSHOT_STALE", type: "error" }]);
+    expect(output.some((event) => event.type === "response.text")).toBe(false);
+    expect(session.closed).toBe(true);
+  });
+
   it("checks epoch expiry again before committing buffered audio", async () => {
     const sessionId = randomUUID();
     const turnId = randomUUID();

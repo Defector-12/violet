@@ -26,6 +26,7 @@ export interface AppendLedgerMessage {
 
 export interface ConversationTurn {
   readonly completed: boolean;
+  readonly failed: boolean;
   readonly messages: readonly LedgerMessage[];
   readonly requestId: string;
   readonly startSequence: number;
@@ -41,9 +42,11 @@ export interface ListConversationTurns {
 
 export interface ConversationLedger {
   append(message: AppendLedgerMessage): Promise<LedgerMessage>;
+  clearRequestFailure(requestId: string): Promise<void>;
   findByRequest(requestId: string, role: ConversationRole): Promise<LedgerMessage | null>;
   isCompletePrefix(contextEpochId: string, throughSequence: number): Promise<boolean>;
   latestSequence(contextEpochId: string): Promise<number>;
   list(): Promise<readonly LedgerMessage[]>;
   listTurns(options: ListConversationTurns): Promise<readonly ConversationTurn[]>;
+  markRequestFailed(requestId: string, contextEpochId: string, occurredAt: Date): Promise<void>;
 }

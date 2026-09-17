@@ -23,7 +23,11 @@ integration("PostgreSQL conversation context", () => {
       max: 4,
       options: `-c search_path=${schema},public`,
     });
-    for (const migration of ["0001_violet_seed.sql", "0002_context_checkpoints.sql"]) {
+    for (const migration of [
+      "0001_violet_seed.sql",
+      "0002_context_checkpoints.sql",
+      "0002b_context_turn_failures.sql",
+    ]) {
       await pool.query(
         await readFile(
           new URL(`../../../../infra/migrations/${migration}`, import.meta.url),
@@ -164,6 +168,29 @@ integration("PostgreSQL conversation context", () => {
         updatedAt: new Date("2026-09-16T00:04:00.000Z"),
       }),
     ).resolves.toBe(false);
+    await ledger.markRequestFailed(
+      pendingRequest,
+      concurrentEpoch.id,
+      new Date("2026-09-16T00:04:30.000Z"),
+    );
+    await expect(ledger.listTurns({ contextEpochId: concurrentEpoch.id })).resolves.toMatchObject([
+      { completed: false, failed: true, requestId: pendingRequest },
+      { completed: true, failed: false, requestId: laterRequest },
+    ]);
+    await expect(
+      checkpoints.save({
+        content: "Complete prefix with a terminal failure",
+        contextEpochId: concurrentEpoch.id,
+        deletionRevision: 0,
+        fromSequence: pendingUser.sequence,
+        throughSequence: laterAssistant.sequence,
+        updatedAt: new Date("2026-09-16T00:04:31.000Z"),
+      }),
+    ).resolves.toBe(true);
+    await ledger.clearRequestFailure(pendingRequest);
+    await expect(
+      ledger.isCompletePrefix(concurrentEpoch.id, laterAssistant.sequence),
+    ).resolves.toBe(false);
     const pendingAssistant = await ledger.append({
       content: "Pending answer",
       contextEpoch: concurrentEpoch,
@@ -195,5 +222,96 @@ integration("PostgreSQL conversation context", () => {
         updatedAt: new Date("2026-09-16T00:02:00.000Z"),
       }),
     ).resolves.toBe(false);
+  });
+
+  it("backfills existing user-only turns as terminal failures during upgrade", async () => {
+    const upgradeSchema = `violet_upgrade_${randomUUID().replaceAll("-", "")}`;
+    await admin.query(`CREATE SCHEMA "${upgradeSchema}"`);
+    const upgradePool = new Pool({
+      connectionString: databaseUrl,
+      max: 1,
+      options: `-c search_path=${upgradeSchema},public`,
+    });
+    try {
+      for (const migration of ["0001_violet_seed.sql", "0002_context_checkpoints.sql"]) {
+        await upgradePool.query(
+          await readFile(
+            new URL(`../../../../infra/migrations/${migration}`, import.meta.url),
+            "utf8",
+          ),
+        );
+      }
+      const cipher = new EnvelopeCipher({
+        key: randomBytes(32),
+        keyVersion: "test-content-v1",
+      });
+      const instanceId = randomUUID();
+      const epochId = randomUUID();
+      const requestId = randomUUID();
+      const envelope = cipher.encrypt(Buffer.from("Interrupted request", "utf8"));
+      await upgradePool.query(
+        `
+          INSERT INTO violet_instances (
+            singleton, id, name, constitution_version, next_event_sequence, created_at
+          )
+          VALUES (true, $1, 'Violet', 'test', 2, $2)
+        `,
+        [instanceId, new Date("2026-09-16T00:00:00.000Z")],
+      );
+      await upgradePool.query(
+        `
+          INSERT INTO context_epochs (
+            instance_id, id, started_at, last_user_input_at
+          )
+          VALUES ($1, $2, $3, $3)
+        `,
+        [instanceId, epochId, new Date("2026-09-16T00:00:00.000Z")],
+      );
+      await upgradePool.query(
+        `
+          INSERT INTO conversation_events (
+            id, instance_id, request_id, sequence, role, context_epoch_id,
+            algorithm, key_version, ciphertext, content_nonce, content_tag,
+            wrapped_key, key_nonce, key_tag, occurred_at
+          )
+          VALUES (
+            $1, $2, $3, 1, 'user', $4,
+            $5, $6, $7, $8, $9,
+            $10, $11, $12, $13
+          )
+        `,
+        [
+          randomUUID(),
+          instanceId,
+          requestId,
+          epochId,
+          envelope.algorithm,
+          envelope.keyVersion,
+          envelope.ciphertext,
+          envelope.contentNonce,
+          envelope.contentTag,
+          envelope.wrappedKey,
+          envelope.keyNonce,
+          envelope.keyTag,
+          new Date("2026-09-16T00:00:00.000Z"),
+        ],
+      );
+
+      await upgradePool.query(
+        await readFile(
+          new URL("../../../../infra/migrations/0002b_context_turn_failures.sql", import.meta.url),
+          "utf8",
+        ),
+      );
+
+      await expect(
+        upgradePool.query<{ request_id: string }>(
+          "SELECT request_id FROM conversation_turn_failures",
+        ),
+      ).resolves.toMatchObject({ rows: [{ request_id: requestId }] });
+    } finally {
+      await upgradePool.end();
+      await admin.query(`DROP SCHEMA IF EXISTS "${upgradeSchema}" CASCADE`);
+    }
   });
 });

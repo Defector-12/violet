@@ -13,17 +13,21 @@ export class ContextEpochManager {
   }
 
   acceptUserInput(at: Date): ContextEpoch {
-    const current = this.current(at);
+    const acceptedAt =
+      this.#active && at.getTime() < this.#active.lastUserInputAt.getTime()
+        ? this.#active.lastUserInputAt
+        : at;
+    const current = this.current(acceptedAt);
     if (current) {
-      this.#active = { epoch: current, lastUserInputAt: new Date(at) };
+      this.#active = { epoch: current, lastUserInputAt: new Date(acceptedAt) };
       return current;
     }
 
     const epoch = {
       id: this.#generateId(),
-      startedAt: new Date(at),
+      startedAt: new Date(acceptedAt),
     };
-    this.#active = { epoch, lastUserInputAt: new Date(at) };
+    this.#active = { epoch, lastUserInputAt: new Date(acceptedAt) };
     return epoch;
   }
 

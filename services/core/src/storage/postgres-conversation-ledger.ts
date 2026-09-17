@@ -25,6 +25,10 @@ interface EventRow {
   readonly wrapped_key: Buffer;
 }
 
+interface TurnEventRow extends EventRow {
+  readonly request_failed: boolean;
+}
+
 export class PostgresConversationLedger implements ConversationLedger {
   readonly #cipher: EnvelopeCipher;
   readonly #constitutionVersion: string;
@@ -55,6 +59,9 @@ export class PostgresConversationLedger implements ConversationLedger {
         input.role,
       );
       if (existing) {
+        if (input.role === "assistant") {
+          await this.#clearRequestFailureInTransaction(client, instanceId, input.requestId);
+        }
         await client.query("COMMIT");
         return this.#toMessage(existing);
       }
@@ -130,6 +137,9 @@ export class PostgresConversationLedger implements ConversationLedger {
           input.occurredAt,
         ],
       );
+      if (input.role === "assistant") {
+        await this.#clearRequestFailureInTransaction(client, instanceId, input.requestId);
+      }
       await client.query("COMMIT");
       const row = result.rows[0];
       if (!row) {
@@ -142,6 +152,19 @@ export class PostgresConversationLedger implements ConversationLedger {
     } finally {
       client.release();
     }
+  }
+
+  async clearRequestFailure(requestId: string): Promise<void> {
+    await this.#pool.query(
+      `
+        DELETE FROM conversation_turn_failures AS failure
+        USING violet_instances AS instance
+        WHERE instance.singleton = true
+          AND failure.instance_id = instance.id
+          AND failure.request_id = $1
+      `,
+      [requestId],
+    );
   }
 
   async list(): Promise<readonly LedgerMessage[]> {
@@ -189,12 +212,23 @@ export class PostgresConversationLedger implements ConversationLedger {
           FROM conversation_events AS events
           JOIN current_instance AS instance ON instance.id = events.instance_id
           WHERE events.context_epoch_id = $1
-          GROUP BY events.request_id
+          GROUP BY events.instance_id, events.request_id
           HAVING MIN(events.sequence) <= $2
             AND (
-              COUNT(*) FILTER (WHERE events.role = 'user') = 0
-              OR COUNT(*) FILTER (WHERE events.role = 'assistant') = 0
-              OR MAX(events.sequence) > $2
+              MAX(events.sequence) > $2
+              OR (
+                (
+                  COUNT(*) FILTER (WHERE events.role = 'user') = 0
+                  OR COUNT(*) FILTER (WHERE events.role = 'assistant') = 0
+                )
+                AND NOT EXISTS (
+                  SELECT 1
+                  FROM conversation_turn_failures AS failure
+                  WHERE failure.instance_id = events.instance_id
+                    AND failure.context_epoch_id = $1
+                    AND failure.request_id = events.request_id
+                )
+              )
             )
           LIMIT 1
         )
@@ -228,9 +262,16 @@ export class PostgresConversationLedger implements ConversationLedger {
   }
 
   async listTurns(options: ListConversationTurns): Promise<readonly ConversationTurn[]> {
-    const result = await this.#pool.query<EventRow>(
+    const result = await this.#pool.query<TurnEventRow>(
       `
-        SELECT events.*
+        SELECT events.*,
+          EXISTS (
+            SELECT 1
+            FROM conversation_turn_failures AS failure
+            WHERE failure.instance_id = events.instance_id
+              AND failure.context_epoch_id = events.context_epoch_id
+              AND failure.request_id = events.request_id
+          ) AS request_failed
         FROM conversation_events AS events
         JOIN violet_instances AS instance ON instance.id = events.instance_id
         WHERE instance.singleton = true
@@ -241,9 +282,56 @@ export class PostgresConversationLedger implements ConversationLedger {
       `,
       [options.contextEpochId, options.afterSequence ?? null, options.beforeSequence ?? null],
     );
+    const failedRequests = new Set(
+      result.rows.filter((row) => row.request_failed).map((row) => row.request_id),
+    );
     return groupTurns(
       result.rows.map((row) => this.#toMessage(row)),
       options.completeOnly ?? false,
+      failedRequests,
+    );
+  }
+
+  async markRequestFailed(
+    requestId: string,
+    contextEpochId: string,
+    occurredAt: Date,
+  ): Promise<void> {
+    const result = await this.#pool.query(
+      `
+        INSERT INTO conversation_turn_failures (
+          instance_id, request_id, context_epoch_id, occurred_at
+        )
+        SELECT events.instance_id, events.request_id, events.context_epoch_id, $3
+        FROM conversation_events AS events
+        JOIN violet_instances AS instance ON instance.id = events.instance_id
+        WHERE instance.singleton = true
+          AND events.request_id = $1
+          AND events.role = 'user'
+          AND events.context_epoch_id = $2
+        ON CONFLICT (instance_id, request_id) DO UPDATE SET
+          context_epoch_id = EXCLUDED.context_epoch_id,
+          occurred_at = EXCLUDED.occurred_at
+        RETURNING request_id
+      `,
+      [requestId, contextEpochId, occurredAt],
+    );
+    if (result.rowCount !== 1) {
+      throw new Error("Cannot fail a request without its persisted user event");
+    }
+  }
+
+  async #clearRequestFailureInTransaction(
+    client: PoolClient,
+    instanceId: string,
+    requestId: string,
+  ): Promise<void> {
+    await client.query(
+      `
+        DELETE FROM conversation_turn_failures
+        WHERE instance_id = $1 AND request_id = $2
+      `,
+      [instanceId, requestId],
     );
   }
 
@@ -311,6 +399,7 @@ export class PostgresConversationLedger implements ConversationLedger {
 function groupTurns(
   messages: readonly LedgerMessage[],
   completeOnly: boolean,
+  failedRequests: ReadonlySet<string>,
 ): readonly ConversationTurn[] {
   const grouped = new Map<string, LedgerMessage[]>();
   for (const message of messages) {
@@ -320,16 +409,18 @@ function groupTurns(
   }
 
   return [...grouped.entries()]
-    .map(
-      ([requestId, turnMessages]): ConversationTurn => ({
-        completed:
-          turnMessages.some((message) => message.role === "user") &&
-          turnMessages.some((message) => message.role === "assistant"),
+    .map(([requestId, turnMessages]): ConversationTurn => {
+      const completed =
+        turnMessages.some((message) => message.role === "user") &&
+        turnMessages.some((message) => message.role === "assistant");
+      return {
+        completed,
+        failed: !completed && failedRequests.has(requestId),
         messages: turnMessages,
         requestId,
         startSequence: turnMessages[0]?.sequence ?? 0,
         throughSequence: turnMessages.at(-1)?.sequence ?? 0,
-      }),
-    )
+      };
+    })
     .filter((turn) => !completeOnly || turn.completed);
 }

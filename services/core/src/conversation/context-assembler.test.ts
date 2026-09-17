@@ -192,6 +192,38 @@ describe("ContextAssembler", () => {
     });
   });
 
+  it("checkpoints past a terminally failed turn without injecting it into history", async () => {
+    const ledger = new InMemoryConversationLedger();
+    await ledger.append({
+      content: "Question that failed",
+      contextEpoch: epoch,
+      id: "failed-user",
+      occurredAt: epoch.startedAt,
+      requestId: "failed-request",
+      role: "user",
+    });
+    await ledger.markRequestFailed("failed-request", epoch.id, epoch.startedAt);
+    for (let index = 1; index <= 21; index += 1) {
+      await appendTurn(ledger, index, `Question ${index}`, `Answer ${index}`);
+    }
+    const assembler = new ContextAssembler({
+      checkpoints: new InMemoryContextCheckpointRepository(),
+      ledger,
+      model: new CheckpointModel(),
+    });
+
+    const context = await assembler.assemble({
+      contextEpochId: epoch.id,
+      maximumHistoryTurns: 20,
+    });
+
+    expect(context.checkpoint).toMatchObject({ throughSequence: 3 });
+    expect(context.history.some((message) => message.content === "Question that failed")).toBe(
+      false,
+    );
+    expect(context.history.at(-1)?.content).toBe("Answer 21");
+  });
+
   it("rejects a persisted checkpoint whose watermark splits a logical turn", async () => {
     const ledger = new InMemoryConversationLedger();
     for (const [id, requestId, role, content] of [

@@ -1,7 +1,7 @@
 # Release 1D：验收清单
 
-> 状态：Phase 1 的 1D-01 至 1D-03 及审查后加固已完成完整回归、提交、双远端同步
-> 和重新部署。Phase 2/3 未开始。本文记录 Release 1D 的实际版本、失败、证据和剩余门禁。规格见
+> 状态：Phase 1 第二轮审查修复已在本地完成并通过回归，尚未提交、合并或重新部署；
+> Phase 2/3 未开始。本文记录 Release 1D 的实际版本、失败、证据和剩余门禁。规格见
 > [最终规格](./release-1d-spec.md)，实施顺序见 [任务拆分](./release-1d-tasks.md)。
 
 ## 1. 证据规则
@@ -160,6 +160,34 @@
   `b9e7555086761c18c79a93c7c6502c965acb343595288568aaef7d4886299ead`。Mac SSH
   隧道下健康及认证状态 `ready`，run `8e268aea-744b-441f-bb02-f64b78328cdb`。
 
+### 2.3 Phase 1 第二轮审查修复（2026-09-17）
+
+- 对 43 个 Phase 1 源码/测试文件再次分组和跨组审查，确认五个 P1：失败文字轮次永久
+  阻塞 checkpoint、Pipeline 缺少 point-in-time sequence 上界、Integrated Realtime
+  自动 VAD 使用陈旧快照、checkpoint 语义评估可能假通过、并发文字请求回拨 epoch 时间。
+- 新增 `0002b_context_turn_failures.sql`：失败或取消的文字请求保留原始用户事件，并用
+  不含正文的终止标记解除 checkpoint 阻塞；相同 request 重试及成功助手事件会清除标记。
+- 文字 epoch admission 现串行执行，`ContextEpochManager` 的时间水位只允许单调前进。
+- Pipeline 在装配前保证当前最终用户事件已落账，并传入 `beforeSequence`；Integrated
+  Realtime 对已接收音频的自动 VAD 轮次缓存响应，最终转写落账并复核快照后才释放。
+- checkpoint 离线评估改为逐语义单元验证当前值、历史值和拒绝注入的关系，并新增三个
+  正反例。首次严格复核因分号分句过严失败，run
+  `546565f2-7fdc-4547-9791-1db0adbd55ab`；修正规则后既有真实样本 3/3 通过，run
+  `f267b6b0-889a-4c2b-ab0d-bbbc11dbad43`，没有新增付费调用。
+- 首轮聚焦回归因 Integrated 工具响应被过度缓存而 66/67，run
+  `7e34e40b-bafc-46b3-9934-f7e820aa06da`；限定为已接收客户端音频的 turn 后 67/67
+  通过，run `a2827213-cc1c-43ed-a0ac-86d590372090`。
+- PostgreSQL 终止状态与连续前缀集成测试通过，run
+  `903347f1-5e69-4955-b656-66b2cabc5c1c`；已有 `0001 + 0002` 数据库中 user-only
+  轮次的 `0002b` 回填升级通过，run `071d0286-149c-43cb-b165-d5b5ef6cf8d4`。
+- 最终隔离 PostgreSQL `pnpm check:ci` 通过：生成一致、Biome、全仓构建和类型检查
+  通过，205/205 测试通过且无跳过。run
+  `1a4b7689-a8be-48d1-8866-1f2e45559d84`，测试子 run
+  `2c8497e4-dc8f-4ad6-a477-5596c38eace5`。Mac 95/95 回归通过，run
+  `505684ad-104f-4ff3-99b8-30dfc668f234`。
+- 当前工作树尚未提交；线上仍运行 `1b352ad-release-1d-phase1-hardening`。Phase 2
+  在本轮修复提交、合入 `main` 并重新部署前保持阻塞。
+
 ## 3. P0：事实与来源
 
 - [ ] PostgreSQL `conversation_events` 仍是唯一原始事实源。
@@ -192,6 +220,10 @@
 - [x] Qwen `max_history_turns` 保持 20。
 - [x] Qwen 和其他 Realtime adapter 使用自己的输入预算，不借用 checkpoint 模型预算。
 - [x] Integrated Realtime 的账本快照变旧时，新输入不会到达旧供应商会话。
+- [x] Integrated Realtime 自动 VAD 回答在最终转写落账并复核快照前不会对客户端可见。
+- [x] Pipeline 每轮按当前用户事件 sequence 读取 point-in-time 历史。
+- [x] 失败文字轮次不进入模型历史，也不会永久阻塞 checkpoint 水位。
+- [x] 并发文字请求不会回拨 epoch 的最后用户输入时间。
 - [x] 视觉工具的中间取消不会阻止 grounded 最终回答落账。
 - [x] 关闭 checkpoint 后不读取或写入此前持久化的 checkpoint。
 - [x] Release 1C 的视觉新鲜度、取消和隐私行为无回归。

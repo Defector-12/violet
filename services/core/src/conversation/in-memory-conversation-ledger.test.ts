@@ -131,4 +131,48 @@ describe("InMemoryConversationLedger", () => {
     await expect(ledger.isCompletePrefix(contextEpoch.id, 4)).resolves.toBe(true);
     await expect(ledger.latestSequence(contextEpoch.id)).resolves.toBe(4);
   });
+
+  it("allows a terminally failed request in a complete prefix without returning it as history", async () => {
+    const ledger = new InMemoryConversationLedger();
+    const contextEpoch = {
+      id: "00000000-0000-4000-8000-000000000001",
+      startedAt: new Date("2026-09-16T00:00:00.000Z"),
+    };
+    await ledger.append({
+      content: "Failed question",
+      contextEpoch,
+      id: "user-failed",
+      occurredAt: contextEpoch.startedAt,
+      requestId: "request-failed",
+      role: "user",
+    });
+    await ledger.markRequestFailed("request-failed", contextEpoch.id, contextEpoch.startedAt);
+    await ledger.append({
+      content: "Later question",
+      contextEpoch,
+      id: "user-later",
+      occurredAt: contextEpoch.startedAt,
+      requestId: "request-later",
+      role: "user",
+    });
+    const laterAssistant = await ledger.append({
+      content: "Later answer",
+      contextEpoch,
+      id: "assistant-later",
+      occurredAt: contextEpoch.startedAt,
+      requestId: "request-later",
+      role: "assistant",
+    });
+
+    await expect(ledger.isCompletePrefix(contextEpoch.id, laterAssistant.sequence)).resolves.toBe(
+      true,
+    );
+    await expect(
+      ledger.listTurns({ completeOnly: true, contextEpochId: contextEpoch.id }),
+    ).resolves.toMatchObject([{ requestId: "request-later" }]);
+    await expect(ledger.listTurns({ contextEpochId: contextEpoch.id })).resolves.toMatchObject([
+      { completed: false, failed: true, requestId: "request-failed" },
+      { completed: true, failed: false, requestId: "request-later" },
+    ]);
+  });
 });

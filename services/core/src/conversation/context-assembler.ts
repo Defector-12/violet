@@ -393,7 +393,8 @@ function checkpointablePrefixLength(
   completeTurns: readonly ConversationTurn[],
 ): number {
   const incompleteStart = snapshotTurns.reduce(
-    (earliest, turn) => (!turn.completed ? Math.min(earliest, turn.startSequence) : earliest),
+    (earliest, turn) =>
+      !turn.completed && !turn.failed ? Math.min(earliest, turn.startSequence) : earliest,
     Number.POSITIVE_INFINITY,
   );
   if (!Number.isFinite(incompleteStart)) {

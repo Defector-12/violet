@@ -1,7 +1,7 @@
 # Release 1D：Violet Continuity 最终规格
 
-> 状态：方案已批准；Phase 1 审查后加固已提交、同步并部署，Phase 2/3 未开始。本文是
-> Release 1D 的产品与技术事实源。
+> 状态：方案已批准；Phase 1 第二轮审查修复已在本地完成并通过回归，尚未提交、合并或
+> 重新部署；Phase 2/3 未开始。本文是 Release 1D 的产品与技术事实源。
 > 实施顺序见 [任务拆分](./release-1d-tasks.md)，放行条件见
 > [验收清单](./release-1d-acceptance.md)。
 
@@ -135,9 +135,15 @@ checkpoint 水位必须是连续的完整逻辑轮次前缀：任何更早但尚
 `VIOLET_CONTEXT_CHECKPOINT_ENABLED` 后不得读取或写入已有 checkpoint，只能使用有界
 完整轮次。
 
+文字请求在用户事件落账后失败或取消时，Core 写入不含正文的终止标记。终止轮次不进入
+模型历史，但不再永久阻塞后续完整前缀；相同 `request_id` 重试时先清除标记。并发文字
+请求的 epoch 分配按输入到达顺序串行化，时间水位只能单调前进。
+
 Integrated Realtime 会话除了绑定 epoch，也绑定建立连接时的账本水位。同一 epoch
 若被文字入口或其他连接写入新轮次，下一次输入在到达持有旧历史的供应商前必须失败并
-关闭，重连后重新装配。视觉工具调用产生的中间取消不结束逻辑轮次，最终 grounded
+关闭，重连后重新装配。Pipeline 每轮必须先持久化最终用户输入，并以该事件 sequence
+作为装配上界。Integrated Realtime 的自动 VAD 轮次在最终转写前缓存供应商回答，复核
+账本快照后才可对客户端可见。视觉工具调用产生的中间取消不结束逻辑轮次，最终 grounded
 回答仍须与用户输入使用同一 epoch 落账。
 
 ## 5. 长期记忆

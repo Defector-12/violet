@@ -7,6 +7,7 @@ import type {
 } from "@violet/domain";
 
 export class InMemoryConversationLedger implements ConversationLedger {
+  readonly #failedRequests = new Map<string, string>();
   readonly #messages: LedgerMessage[] = [];
 
   async append(input: AppendLedgerMessage): Promise<LedgerMessage> {
@@ -27,7 +28,14 @@ export class InMemoryConversationLedger implements ConversationLedger {
       sequence: this.#messages.length + 1,
     };
     this.#messages.push(message);
+    if (input.role === "assistant") {
+      this.#failedRequests.delete(input.requestId);
+    }
     return message;
+  }
+
+  async clearRequestFailure(requestId: string): Promise<void> {
+    this.#failedRequests.delete(requestId);
   }
 
   async findByRequest(
@@ -55,7 +63,8 @@ export class InMemoryConversationLedger implements ConversationLedger {
       if (
         turn.some((message) => message.sequence > throughSequence) ||
         !turn.some((message) => message.role === "user") ||
-        !turn.some((message) => message.role === "assistant")
+        (!turn.some((message) => message.role === "assistant") &&
+          this.#failedRequests.get(requestId) !== contextEpochId)
       ) {
         return false;
       }
@@ -87,13 +96,36 @@ export class InMemoryConversationLedger implements ConversationLedger {
           (options.beforeSequence === undefined || message.sequence < options.beforeSequence),
       ),
       options.completeOnly ?? false,
+      new Set(
+        [...this.#failedRequests]
+          .filter(([, contextEpochId]) => contextEpochId === options.contextEpochId)
+          .map(([requestId]) => requestId),
+      ),
     );
+  }
+
+  async markRequestFailed(
+    requestId: string,
+    contextEpochId: string,
+    _occurredAt: Date,
+  ): Promise<void> {
+    const user = this.#messages.find(
+      (message) =>
+        message.requestId === requestId &&
+        message.role === "user" &&
+        message.contextEpochId === contextEpochId,
+    );
+    if (!user) {
+      throw new Error("Cannot fail a request without its persisted user event");
+    }
+    this.#failedRequests.set(requestId, contextEpochId);
   }
 }
 
 function groupTurns(
   messages: readonly LedgerMessage[],
   completeOnly: boolean,
+  failedRequests: ReadonlySet<string>,
 ): readonly ConversationTurn[] {
   const grouped = new Map<string, LedgerMessage[]>();
   for (const message of messages) {
@@ -105,10 +137,12 @@ function groupTurns(
   return [...grouped.entries()]
     .map(([requestId, turnMessages]): ConversationTurn => {
       turnMessages.sort((left, right) => left.sequence - right.sequence);
+      const completed =
+        turnMessages.some((message) => message.role === "user") &&
+        turnMessages.some((message) => message.role === "assistant");
       return {
-        completed:
-          turnMessages.some((message) => message.role === "user") &&
-          turnMessages.some((message) => message.role === "assistant"),
+        completed,
+        failed: !completed && failedRequests.has(requestId),
         messages: turnMessages,
         requestId,
         startSequence: turnMessages[0]?.sequence ?? 0,

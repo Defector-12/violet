@@ -1,7 +1,7 @@
 # Release 1D：任务拆分
 
-> 状态：方案已批准；Phase 1 审查后加固已完成完整回归、提交、双远端同步和重新部署。
-> Phase 2/3 未开始。
+> 状态：方案已批准；Phase 1 第二轮审查修复已在本地完成并通过回归，尚未提交、合并或
+> 重新部署。Phase 2/3 未开始。
 > 产品合同见 [最终规格](./release-1d-spec.md)，放行条件见
 > [验收清单](./release-1d-acceptance.md)。
 
@@ -30,6 +30,7 @@
 - `packages/domain/src/context-checkpoint.ts`
 - `packages/domain/src/index.ts`
 - `infra/migrations/0002_context_checkpoints.sql`
+- `infra/migrations/0002b_context_turn_failures.sql`
 - `services/core/src/conversation/context-epoch-manager.ts`
 
 新增最小合同：
@@ -45,6 +46,9 @@
 - 并发写入顺序稳定，同一 `request_id` 的用户/助手轮次不被拆开。
 - checkpoint 正文使用现有加密信封。
 - checkpoint 水位不能跨过更早的未完成 request；读取和事务保存都验证连续完整前缀。
+- 文字请求失败或取消后写入无正文终止标记；终止轮次不进入历史，也不再阻塞水位。
+- 相同 request 重试会清除终止标记，成功助手事件也会原子清除标记。
+- 并发文字请求按输入到达顺序分配 epoch，时间水位不能回拨。
 
 ### 1D-02 ContextAssembler
 
@@ -86,6 +90,8 @@
   失败并关闭；重连后进入新 epoch，不沿用旧供应商历史。
 - 已打开的 Integrated Realtime 连接若发现同一 epoch 被其他入口推进，在新输入到达
   供应商前明确失败并关闭；重连后读取最新统一上下文。
+- Pipeline 在模型装配前保证当前最终用户事件已落账，并使用其 sequence 作为读取上界。
+- Integrated Realtime 自动 VAD 回答在最终转写落账和快照复核前不得对客户端可见。
 - 视觉工具调用的中间取消不清除 turn epoch，grounded 最终回答必须与用户输入一起落账。
 - 不改变 Natural Pointing 的当前轮、新鲜度、取消和隐私门禁。
 

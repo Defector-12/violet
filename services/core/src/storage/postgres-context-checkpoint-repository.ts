@@ -79,12 +79,23 @@ export class PostgresContextCheckpointRepository implements ContextCheckpointRep
             FROM conversation_events
             WHERE instance_id = $1
               AND context_epoch_id = $2
-            GROUP BY request_id
+            GROUP BY instance_id, request_id
             HAVING MIN(sequence) <= $3
               AND (
-                COUNT(*) FILTER (WHERE role = 'user') = 0
-                OR COUNT(*) FILTER (WHERE role = 'assistant') = 0
-                OR MAX(sequence) > $3
+                MAX(sequence) > $3
+                OR (
+                  (
+                    COUNT(*) FILTER (WHERE role = 'user') = 0
+                    OR COUNT(*) FILTER (WHERE role = 'assistant') = 0
+                  )
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM conversation_turn_failures AS failure
+                    WHERE failure.instance_id = conversation_events.instance_id
+                      AND failure.context_epoch_id = $2
+                      AND failure.request_id = conversation_events.request_id
+                  )
+                )
               )
             LIMIT 1
           )

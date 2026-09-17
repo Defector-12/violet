@@ -447,7 +447,14 @@ export class RealtimeSession {
         this.#responseTurnIds.set(canonicalId(receivedOutput.responseId), receivedOutput.turnId);
       }
       const deferredTurnId = responseTurnIdForDeferral(receivedOutput);
-      if (this.#onDemandContext && deferredTurnId && !this.#finalTranscripts.has(deferredTurnId)) {
+      if (
+        (this.#onDemandContext ||
+          (this.#requiresStableContextSnapshot &&
+            deferredTurnId !== undefined &&
+            this.#acceptedInputTurns.has(canonicalId(deferredTurnId)))) &&
+        deferredTurnId &&
+        !this.#finalTranscripts.has(deferredTurnId)
+      ) {
         const deferred = this.#deferredResponseOutputs.get(deferredTurnId) ?? [];
         deferred.push(receivedOutput);
         this.#deferredResponseOutputs.set(deferredTurnId, deferred);
@@ -533,6 +540,14 @@ export class RealtimeSession {
             return;
           }
           throw error;
+        }
+        if (output.type === "transcript" && output.final) {
+          const contextError = await this.#contextAdmissionError();
+          if (contextError && this.#sessionId) {
+            yield this.#error(this.#sessionId, contextError.code, contextError.message);
+            await this.close();
+            return;
+          }
         }
         if (output.type === "response-started") {
           this.#visibleResponseIds.add(output.responseId);

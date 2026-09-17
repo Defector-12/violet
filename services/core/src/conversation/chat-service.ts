@@ -24,6 +24,7 @@ export class ChatService {
   readonly #ledger: ConversationLedger;
   readonly #modelGateway: ModelGateway;
   readonly #now: () => Date;
+  #userAdmissionTail: Promise<void> = Promise.resolve();
 
   constructor(options: ChatServiceOptions) {
     this.#contextAssembler = options.contextAssembler;
@@ -39,24 +40,13 @@ export class ChatService {
     signal?: AbortSignal,
     contextEvidence?: { readonly content: string; readonly sourceId: string },
   ): AsyncIterable<ChatStreamEvent> {
+    let assistantPersisted = false;
+    let userMessage: LedgerMessage | null = null;
     try {
       const occurredAt = this.#now();
-      let requestedEpoch: ContextEpoch | null = null;
-      let userMessage: LedgerMessage | null = await this.#ledger.findByRequest(
-        request.requestId,
-        "user",
-      );
-      if (!userMessage) {
-        requestedEpoch = this.#epochManager.acceptUserInput(occurredAt);
-        userMessage = await this.#ledger.append({
-          content: request.message,
-          contextEpoch: requestedEpoch,
-          id: this.#generateId(),
-          occurredAt,
-          requestId: request.requestId,
-          role: "user",
-        });
-      }
+      const admitted = await this.#admitUser(request, occurredAt);
+      userMessage = admitted.message;
+      const requestedEpoch = admitted.requestedEpoch;
       const contextEpoch = userMessage.contextEpochId
         ? {
             id: userMessage.contextEpochId,
@@ -127,6 +117,7 @@ export class ChatService {
           requestId: request.requestId,
           role: "assistant",
         });
+        assistantPersisted = true;
         yield {
           eventId: this.#generateId(),
           messageId: assistantMessage.id,
@@ -139,6 +130,20 @@ export class ChatService {
         };
       }
     } catch (error) {
+      if (!assistantPersisted && userMessage?.contextEpochId) {
+        try {
+          await this.#ledger.markRequestFailed(
+            request.requestId,
+            userMessage.contextEpochId,
+            this.#now(),
+          );
+        } catch (terminalError) {
+          recordTestTrace("chat.failure_state.failed", {
+            requestId: request.requestId,
+            error: terminalError instanceof Error ? terminalError.message : "unknown",
+          });
+        }
+      }
       recordTestTrace("chat.failed", {
         requestId: request.requestId,
         error: error instanceof Error ? error.message : "unknown",
@@ -160,6 +165,37 @@ export class ChatService {
         requestId: request.requestId,
         type: "error",
       };
+    }
+  }
+
+  async #admitUser(
+    request: ChatRequest,
+    occurredAt: Date,
+  ): Promise<{ readonly message: LedgerMessage; readonly requestedEpoch: ContextEpoch | null }> {
+    const previous = this.#userAdmissionTail;
+    let release = () => {};
+    this.#userAdmissionTail = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await previous;
+    try {
+      let requestedEpoch: ContextEpoch | null = null;
+      let message = await this.#ledger.findByRequest(request.requestId, "user");
+      if (!message) {
+        requestedEpoch = this.#epochManager.acceptUserInput(occurredAt);
+        message = await this.#ledger.append({
+          content: request.message,
+          contextEpoch: requestedEpoch,
+          id: this.#generateId(),
+          occurredAt,
+          requestId: request.requestId,
+          role: "user",
+        });
+      }
+      await this.#ledger.clearRequestFailure(request.requestId);
+      return { message, requestedEpoch };
+    } finally {
+      release();
     }
   }
 }

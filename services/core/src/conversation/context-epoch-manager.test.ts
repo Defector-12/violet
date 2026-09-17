@@ -32,4 +32,19 @@ describe("ContextEpochManager", () => {
     expect(manager.current(new Date(startedAt.getTime() + 30 * 60_000))).toBeNull();
     expect(id).toBe(1);
   });
+
+  it("never moves the user-input watermark backward", () => {
+    let id = 0;
+    const manager = new ContextEpochManager({
+      generateId: () => `epoch-${++id}`,
+    });
+    const startedAt = new Date("2026-09-16T00:00:00.000Z");
+    manager.acceptUserInput(startedAt);
+    const current = manager.acceptUserInput(new Date(startedAt.getTime() + 30 * 60_000 + 1_000));
+
+    expect(manager.acceptUserInput(new Date(startedAt.getTime() + 29 * 60_000 + 59_000))).toEqual(
+      current,
+    );
+    expect(manager.current(new Date(startedAt.getTime() + 60 * 60_000))).toEqual(current);
+  });
 });

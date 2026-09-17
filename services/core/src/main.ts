@@ -16,6 +16,7 @@ import { ContextAssembler } from "./conversation/context-assembler.js";
 import { ContextEpochManager } from "./conversation/context-epoch-manager.js";
 import { InMemoryContextCheckpointRepository } from "./conversation/in-memory-context-checkpoint-repository.js";
 import { InMemoryConversationLedger } from "./conversation/in-memory-conversation-ledger.js";
+import { createPipelineContextAssembler } from "./conversation/pipeline-context.js";
 import { buildCoreApp } from "./http/app.js";
 import { DeepSeekModelGateway } from "./model/deepseek-model-gateway.js";
 import { DeterministicModelGateway } from "./model/deterministic-model-gateway.js";
@@ -97,20 +98,12 @@ const realtimeConversationPort: RealtimeConversationPort =
       ? new PipelineRealtimeConversationPort({
           apiKey: config.realtime.apiKey,
           asrModel: config.realtime.asrModel,
-          assembleContext: async (input, signal) => {
-            const existing = await ledger.findByRequest(input.requestId, "user");
-            const contextEpochId =
-              existing?.contextEpochId ??
-              (existing ? undefined : contextEpochManager.acceptUserInput(new Date()).id);
-            return (
-              await contextAssembler.assemble({
-                additionalSystemInstructions: input.additionalSystemInstructions,
-                ...(contextEpochId ? { contextEpochId } : {}),
-                currentMessage: input.currentMessage,
-                ...(signal ? { signal } : {}),
-              })
-            ).messages;
-          },
+          assembleContext: createPipelineContextAssembler({
+            contextAssembler,
+            epochManager: contextEpochManager,
+            generateId: randomUUID,
+            ledger,
+          }),
           generateId: randomUUID,
           modelGateway: realtimeModelGateway,
           ttsModel: config.realtime.ttsModel,
