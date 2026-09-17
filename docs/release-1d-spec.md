@@ -1,7 +1,7 @@
 # Release 1D：Violet Continuity 最终规格
 
-> 状态：方案已批准；Phase 1 已部署，Phase 2/3 未开始。本文是 Release 1D 的产品与
-> 技术事实源。
+> 状态：方案已批准；Phase 1 初始版本已部署，审查后加固已在本地实现并通过完整回归，
+> 尚待提交和重新部署；Phase 2/3 未开始。本文是 Release 1D 的产品与技术事实源。
 > 实施顺序见 [任务拆分](./release-1d-tasks.md)，放行条件见
 > [验收清单](./release-1d-acceptance.md)。
 
@@ -109,10 +109,16 @@ PostgreSQL
 预算规则：
 
 - 每个模型 adapter 声明 context window。
+- 供应商只声明轮次或时长限制而不声明 token window 时，adapter 还必须声明 Violet
+  自己执行的保守文本预算，不能借用 checkpoint 模型的预算。
 - 优先预留供应商声明的最大输出；缺失时预留 16,384 tokens。
 - 再预留 4,096 tokens 安全余量。
 - 压缩后尽量保留最近 20,000 tokens 的完整轮次。
 - Qwen 保留 `max_history_turns = 20`。
+- Qwen 当前额外使用 Violet 侧 131,072-token context envelope、16,384-token 输出预留
+  和相同的保守 UTF-8 估算；这是产品安全上界，不冒充供应商只按
+  [轮次和音频时长](https://help.aliyun.com/zh/model-studio/qwen-audio-realtime-user-guides)
+  公布的容量规格。
 
 超限只允许：
 
@@ -123,6 +129,16 @@ PostgreSQL
 
 checkpoint 由当前配置的文字模型生成，不新增模型、供应商或第二套摘要运行时。Core 只在
 来源范围和 deletion revision 仍匹配时加密保存。
+
+checkpoint 水位必须是连续的完整逻辑轮次前缀：任何更早但尚未完成的 request 都会阻止
+水位越过它；读取已有 checkpoint 和事务保存时都要重新验证。关闭
+`VIOLET_CONTEXT_CHECKPOINT_ENABLED` 后不得读取或写入已有 checkpoint，只能使用有界
+完整轮次。
+
+Integrated Realtime 会话除了绑定 epoch，也绑定建立连接时的账本水位。同一 epoch
+若被文字入口或其他连接写入新轮次，下一次输入在到达持有旧历史的供应商前必须失败并
+关闭，重连后重新装配。视觉工具调用产生的中间取消不结束逻辑轮次，最终 grounded
+回答仍须与用户输入使用同一 epoch 落账。
 
 ## 5. 长期记忆
 

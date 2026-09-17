@@ -316,7 +316,11 @@ try {
   assert.ok(answers[0].includes("eastern gate"));
   assert.ok(answers.slice(1).every((answer) => answer.includes("unavailable")));
   assert.ok(!snapshot.body.includes(token));
+  const persisted = await ledger.list();
+  assert.equal(persisted.filter((message) => message.role === "user").length, 3);
+  assert.equal(persisted.filter((message) => message.role === "assistant").length, 3);
   const result = {
+    persistedMessages: persisted.length,
     scope: "controlled transport integration, NOT visual acceptance",
     visionCalls,
     answers,

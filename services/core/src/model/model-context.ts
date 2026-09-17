@@ -14,6 +14,13 @@ export const deterministicContextProfile: ModelContextProfile = {
   maximumOutputTokens: 16_384,
 };
 
+// Qwen publishes turn/audio limits, so Violet applies a conservative text-history envelope.
+export const qwenAudioRealtimeContextProfile: ModelContextProfile = {
+  contextWindowTokens: 131_072,
+  estimateTokens: estimateConservativeTokens,
+  maximumOutputTokens: 16_384,
+};
+
 export function estimateConservativeTokens(messages: readonly ModelMessage[]): number {
   return messages.reduce(
     (total, message) =>

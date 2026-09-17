@@ -1,7 +1,8 @@
 # Release 1D：验收清单
 
-> 状态：Phase 1 的 1D-01 至 1D-03 已提交、同步并部署；Phase 2/3 未开始。本文记录
-> Release 1D 的实际版本、失败、证据和剩余门禁。规格见
+> 状态：Phase 1 的初始 1D-01 至 1D-03 已提交、同步并部署；后续审查加固已在本地
+> 实现并通过完整回归，尚待提交和重新部署。Phase 2/3 未开始，Phase 2 在
+> 加固重新放行前保持阻塞。本文记录 Release 1D 的实际版本、失败、证据和剩余门禁。规格见
 > [最终规格](./release-1d-spec.md)，实施顺序见 [任务拆分](./release-1d-tasks.md)。
 
 ## 1. 证据规则
@@ -106,6 +107,45 @@
   首次隧道状态检查 `b12c7aca-eebb-46a9-93b9-6b4d5db34caa` 因本地 `.env` 未定义
   `VIOLET_CORE_URL` 失败；改用客户端固定地址后的上述 `d2cb84e7-...` 已通过。
 
+### 2.2 Phase 1 部署后审查加固（2026-09-17）
+
+- 对 `origin/main...feat/1d-phase1-context` 的 41 个源码/测试文件执行分组与跨组审查，
+  发现 checkpoint 连续前缀、关闭开关、Integrated Realtime 快照、视觉工具回答落账和
+  adapter 预算五类 P1；Phase 2 因此未启动。
+- checkpoint 现只允许越过连续完整逻辑轮次；读取旧 checkpoint、生成前后和 PostgreSQL
+  事务保存都会验证水位。关闭 `VIOLET_CONTEXT_CHECKPOINT_ENABLED` 后不再读取旧
+  checkpoint。内存账本并发幂等同时修复。
+- Integrated Realtime 会话记录建立连接时的账本水位；同 epoch 被其他入口推进后，
+  下一次输入会以 `CONTEXT_SNAPSHOT_STALE` 失败并关闭。手动音频 commit 会再次检查
+  30 分钟边界。
+- Natural Pointing 的工具前中间取消保留 turn epoch，grounded 最终回答重新与用户输入
+  一起落账。
+- ContextAssembler 分离目标 adapter 与 checkpoint 模型预算。Qwen 保留
+  `max_history_turns = 20`，并声明 Violet 侧 131,072-token context envelope 和
+  16,384-token 输出预留。
+- checkpoint/账本聚焦回归 20/20 通过，run
+  `3d8f12c6-69ce-4397-941a-0cfe8cdfd7fc`；Realtime/model 聚焦回归 51/51 通过，run
+  `29c1a385-219b-491f-b96a-ff15e86c2cd5`；隔离 PostgreSQL 集成回归 1/1 通过，run
+  `caea3cf7-73d3-4d5c-a4cc-37625f519bbf`。连续 sequence 竞态自检后的 Realtime
+  最终聚焦 31/31 通过，run `0a53d1e3-5efc-4232-a664-82c1e26e50ce`。
+- checkpoint 真实模型评估脚本现在逐试验立即输出结果和 usage，离线复核拒绝缺失或
+  重复场景；脚本回归 1/1 通过，run `178c8fb1-1505-4340-b8ef-bcd07a988c9c`。
+- Core 类型检查最终通过，run `00f9910d-929f-4789-804e-0e4c8fed55fd`。此前
+  `72ae233b-aaf2-4efb-ad66-427f2582ac97` 因 domain 声明尚未重建而失败，重新构建
+  `@violet/domain` 后通过；失败证据保留。
+- 隔离 PostgreSQL 下完整 `pnpm check:ci` 通过：生成一致、Biome、全仓构建和类型检查
+  通过，193/193 测试通过且无跳过。run
+  `c04ca110-5599-4051-8493-2274a4d6f709`，测试子 run
+  `bb2dd236-7b33-474a-a0aa-011cd597b074`。此前仅有四处格式差异的失败 run
+  `1020aa9b-644e-40dc-8141-1955346cc9f8` 已保留，Biome 修复后未再出现。
+- 受控 Qwen/视觉工具 trace 验证三轮用户输入和三轮 grounded/不可用回答全部落账，
+  `persistedMessages = 6`，run `cbb3ef9f-10e4-4563-8e34-993e2a728162`。
+- 既有三组真实 DeepSeek checkpoint 结果经新的完整场景校验离线复核仍为 3/3，
+  run `cdb3aaad-f5ba-40bf-b97c-6c441e9168b3`；本轮没有新增付费模型调用。
+- Mac 95/95 回归通过，run `73528ca9-2eb2-4653-ba70-28bc4f180e9d`。
+- 提交、双远端同步和重新部署仍待用户另行授权；部署中的
+  `8f34049-release-1d-phase1` 尚不包含本节修复，因此 Phase 2 继续阻塞。
+
 ## 3. P0：事实与来源
 
 - [ ] PostgreSQL `conversation_events` 仍是唯一原始事实源。
@@ -131,10 +171,15 @@
 - [x] 未声明最大输出时按 16,384 tokens 预留。
 - [x] 压缩保留最近 20,000 tokens 的完整轮次。
 - [x] 每个 epoch 只有一个有效 checkpoint。
+- [x] checkpoint 水位不会跨过更早的未完成 request，读取和保存均验证连续完整前缀。
 - [x] 来源删除后旧 checkpoint 使用次数为 0。
 - [x] 第二次压缩仍失败时明确报错，没有半轮截断。
 - [x] checkpoint 只使用当前文字模型，来源或 deletion revision 变化时不提交。
 - [x] Qwen `max_history_turns` 保持 20。
+- [x] Qwen 和其他 Realtime adapter 使用自己的输入预算，不借用 checkpoint 模型预算。
+- [x] Integrated Realtime 的账本快照变旧时，新输入不会到达旧供应商会话。
+- [x] 视觉工具的中间取消不会阻止 grounded 最终回答落账。
+- [x] 关闭 checkpoint 后不读取或写入此前持久化的 checkpoint。
 - [x] Release 1C 的视觉新鲜度、取消和隐私行为无回归。
 
 ## 5. P0：写入和隐私
@@ -272,6 +317,7 @@ docker compose -f infra/compose/compose.yaml config
 - [ ] 真实供应商评估达到门槛，真实 Mac 完成最终故事。
 - [ ] 旧备份恢复被拒绝，新备份恢复不复活。
 - [ ] 实际 commit、构建、部署、失败和 run ID 已写回本文。
+- [ ] Phase 1 审查加固已提交、同步并重新部署，运行版本不再是旧的 `8f34049`。
 - [ ] 用户明确批准后，生产自动记忆才开启。
 
 关闭自动提取、记忆注入或 checkpoint 可以回滚能力；任何回滚都不得降低

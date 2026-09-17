@@ -3,6 +3,21 @@ import { describe, expect, it } from "vitest";
 import { InMemoryConversationLedger } from "./in-memory-conversation-ledger.js";
 
 describe("InMemoryConversationLedger", () => {
+  it("keeps concurrent retries idempotent", async () => {
+    const ledger = new InMemoryConversationLedger();
+    const message = {
+      content: "Question",
+      id: "user-a",
+      occurredAt: new Date(),
+      requestId: "request-a",
+      role: "user" as const,
+    };
+
+    await Promise.all([ledger.append(message), ledger.append(message)]);
+
+    await expect(ledger.list()).resolves.toHaveLength(1);
+  });
+
   it("returns interleaved events as complete logical turns without splitting requests", async () => {
     const ledger = new InMemoryConversationLedger();
     const contextEpoch = {
@@ -88,5 +103,32 @@ describe("InMemoryConversationLedger", () => {
         throughSequence: 4,
       },
     ]);
+  });
+
+  it("reports only boundaries that contain a complete logical prefix", async () => {
+    const ledger = new InMemoryConversationLedger();
+    const contextEpoch = {
+      id: "00000000-0000-4000-8000-000000000001",
+      startedAt: new Date("2026-09-16T00:00:00.000Z"),
+    };
+    for (const [id, requestId, role] of [
+      ["user-a", "request-a", "user"],
+      ["user-b", "request-b", "user"],
+      ["assistant-b", "request-b", "assistant"],
+      ["assistant-a", "request-a", "assistant"],
+    ] as const) {
+      await ledger.append({
+        content: id,
+        contextEpoch,
+        id,
+        occurredAt: new Date(),
+        requestId,
+        role,
+      });
+    }
+
+    await expect(ledger.isCompletePrefix(contextEpoch.id, 3)).resolves.toBe(false);
+    await expect(ledger.isCompletePrefix(contextEpoch.id, 4)).resolves.toBe(true);
+    await expect(ledger.latestSequence(contextEpoch.id)).resolves.toBe(4);
   });
 });

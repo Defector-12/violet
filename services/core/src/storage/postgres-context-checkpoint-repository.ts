@@ -72,6 +72,38 @@ export class PostgresContextCheckpointRepository implements ContextCheckpointRep
         await client.query("ROLLBACK");
         return false;
       }
+      const source = await client.query<{ valid: boolean }>(
+        `
+          WITH invalid_turn AS (
+            SELECT request_id
+            FROM conversation_events
+            WHERE instance_id = $1
+              AND context_epoch_id = $2
+            GROUP BY request_id
+            HAVING MIN(sequence) <= $3
+              AND (
+                COUNT(*) FILTER (WHERE role = 'user') = 0
+                OR COUNT(*) FILTER (WHERE role = 'assistant') = 0
+                OR MAX(sequence) > $3
+              )
+            LIMIT 1
+          )
+          SELECT
+            EXISTS (
+              SELECT 1
+              FROM conversation_events
+              WHERE instance_id = $1
+                AND context_epoch_id = $2
+                AND sequence = $3
+            )
+            AND NOT EXISTS (SELECT 1 FROM invalid_turn) AS valid
+        `,
+        [current.id, checkpoint.contextEpochId, checkpoint.throughSequence],
+      );
+      if (!source.rows[0]?.valid) {
+        await client.query("ROLLBACK");
+        return false;
+      }
 
       const result = await client.query(
         `

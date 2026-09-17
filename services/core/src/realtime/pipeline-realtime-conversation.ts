@@ -1,4 +1,5 @@
 import type {
+  ModelContextProfile,
   ModelGateway,
   ModelMessage,
   RealtimeCapabilities,
@@ -70,6 +71,7 @@ export type PipelineContextAssembler = (
 ) => Promise<readonly ModelMessage[]>;
 
 export class PipelineRealtimeConversationPort implements RealtimeConversationPort {
+  readonly contextProfile?: ModelContextProfile;
   readonly #apiKey: string;
   readonly #assembleContext: PipelineContextAssembler | undefined;
   readonly #asrModel: string;
@@ -83,6 +85,9 @@ export class PipelineRealtimeConversationPort implements RealtimeConversationPor
   readonly #workspaceId: string;
 
   constructor(options: PipelineRealtimeConversationPortOptions) {
+    if (options.modelGateway.contextProfile) {
+      this.contextProfile = options.modelGateway.contextProfile;
+    }
     this.#apiKey = required(options.apiKey, "DashScope API key");
     this.#assembleContext = options.assembleContext;
     this.#asrModel = required(options.asrModel, "Pipeline ASR model");

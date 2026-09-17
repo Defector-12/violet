@@ -4,6 +4,7 @@ import {
   deepSeekV41ContextProfile,
   deterministicContextProfile,
   estimateConservativeTokens,
+  qwenAudioRealtimeContextProfile,
 } from "./model-context.js";
 
 describe("model context profiles", () => {
@@ -22,6 +23,9 @@ describe("model context profiles", () => {
 
     expect(estimateConservativeTokens(messages)).toBeGreaterThanOrEqual(3 + 6);
     expect(deterministicContextProfile.estimateTokens(messages)).toBe(
+      estimateConservativeTokens(messages),
+    );
+    expect(qwenAudioRealtimeContextProfile.estimateTokens(messages)).toBe(
       estimateConservativeTokens(messages),
     );
   });

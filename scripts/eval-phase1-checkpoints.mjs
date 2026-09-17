@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import { pathToFileURL } from "node:url";
 
 import { ContextAssembler } from "../services/core/dist/conversation/context-assembler.js";
 import { InMemoryContextCheckpointRepository } from "../services/core/dist/conversation/in-memory-context-checkpoint-repository.js";
@@ -402,7 +403,16 @@ async function main() {
   const metered = new MeteredGateway(delegate);
   const results = [];
   for (const scenario of scenarios()) {
-    results.push(await runScenario(scenario, metered));
+    const result = await runScenario(scenario, metered);
+    results.push(result);
+    console.log(
+      JSON.stringify({
+        result,
+        schemaVersion: 1,
+        type: "checkpoint-trial",
+        usage: metered.usage.at(-1),
+      }),
+    );
   }
 
   const balanceAfter = await balance(apiKey, baseUrl);
@@ -446,6 +456,21 @@ async function main() {
   }
 }
 
+export function assertCompleteRecordedScenarios(recorded) {
+  if (!Array.isArray(recorded)) {
+    throw new Error("Recorded checkpoint results must be an array");
+  }
+  const expectedIds = scenarios().map((scenario) => scenario.id);
+  const actualIds = recorded.map((result) => result?.id);
+  if (
+    actualIds.length !== expectedIds.length ||
+    new Set(actualIds).size !== expectedIds.length ||
+    expectedIds.some((id) => !actualIds.includes(id))
+  ) {
+    throw new Error("Recorded checkpoint results are incomplete or duplicated");
+  }
+}
+
 async function recheck(path) {
   const source = await readFile(path, "utf8");
   const marker = '"results": ';
@@ -455,6 +480,7 @@ async function recheck(path) {
     throw new Error("Could not locate recorded checkpoint results");
   }
   const recorded = JSON.parse(source.slice(start + marker.length, end + 4));
+  assertCompleteRecordedScenarios(recorded);
   const scenarioById = new Map(scenarios().map((scenario) => [scenario.id, scenario]));
   const results = recorded.map((result) => {
     const scenario = scenarioById.get(result.id);
@@ -486,10 +512,12 @@ async function recheck(path) {
   }
 }
 
-if (process.argv[2] === "--recheck") {
-  await recheck(requiredArgument(3));
-} else {
-  await main();
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  if (process.argv[2] === "--recheck") {
+    await recheck(requiredArgument(3));
+  } else {
+    await main();
+  }
 }
 
 function requiredArgument(index) {

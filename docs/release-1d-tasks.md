@@ -1,6 +1,7 @@
 # Release 1D：任务拆分
 
-> 状态：方案已批准；Phase 1 已实现、审查、提交并部署。Phase 2/3 未开始。
+> 状态：方案已批准；Phase 1 初始版本已提交并部署，审查后加固已在本地实现并通过
+> 完整回归，尚待提交和重新部署。Phase 2/3 未开始。
 > 产品合同见 [最终规格](./release-1d-spec.md)，放行条件见
 > [验收清单](./release-1d-acceptance.md)。
 
@@ -43,6 +44,7 @@
 - 空库和 `0001` 数据库都可升级。
 - 并发写入顺序稳定，同一 `request_id` 的用户/助手轮次不被拆开。
 - checkpoint 正文使用现有加密信封。
+- checkpoint 水位不能跨过更早的未完成 request；读取和事务保存都验证连续完整前缀。
 
 ### 1D-02 ContextAssembler
 
@@ -61,6 +63,8 @@
 - 二次压缩仍失败时明确报错；
 - 大型工具/视觉文本在入口截断并保留引用。
 - checkpoint 复用当前文字模型；保存前校验覆盖范围和 deletion revision 未变化。
+- adapter 的输入预算与 checkpoint 生成预算分离；Qwen 使用自己的保守文本预算和
+  `max_history_turns = 20`。
 
 ### 1D-03 接入文字和语音
 
@@ -80,6 +84,9 @@
 - Qwen 保留 `max_history_turns = 20`。
 - 已绑定 epoch 的 Realtime 连接跨过 30 分钟空闲边界时，在新输入到达供应商前明确
   失败并关闭；重连后进入新 epoch，不沿用旧供应商历史。
+- 已打开的 Integrated Realtime 连接若发现同一 epoch 被其他入口推进，在新输入到达
+  供应商前明确失败并关闭；重连后读取最新统一上下文。
+- 视觉工具调用的中间取消不清除 turn epoch，grounded 最终回答必须与用户输入一起落账。
 - 不改变 Natural Pointing 的当前轮、新鲜度、取消和隐私门禁。
 
 **Phase 1 合并门**
@@ -88,6 +95,7 @@
 - 文字、Pipeline、Qwen 使用同一装配顺序和预算。
 - Release 1C 的视觉、取消、结束意图和隐私回归通过。
 - 可以关闭 checkpoint 回到有界完整轮次，不回滚数据库迁移。
+- 关闭 checkpoint 后既不创建也不读取此前持久化的 checkpoint。
 
 ## 3. Phase 2：明确记忆和治理闭环
 

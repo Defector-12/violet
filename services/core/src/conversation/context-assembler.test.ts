@@ -135,6 +135,138 @@ describe("ContextAssembler", () => {
     ]);
   });
 
+  it("does not checkpoint past an older incomplete turn", async () => {
+    const ledger = new InMemoryConversationLedger();
+    await ledger.append({
+      content: "Question A",
+      contextEpoch: epoch,
+      id: "user-a",
+      occurredAt: new Date(),
+      requestId: "request-a",
+      role: "user",
+    });
+    await ledger.append({
+      content: "Question B",
+      contextEpoch: epoch,
+      id: "user-b",
+      occurredAt: new Date(),
+      requestId: "request-b",
+      role: "user",
+    });
+    await ledger.append({
+      content: "Answer B",
+      contextEpoch: epoch,
+      id: "assistant-b",
+      occurredAt: new Date(),
+      requestId: "request-b",
+      role: "assistant",
+    });
+    const checkpoints = new InMemoryContextCheckpointRepository();
+    const model = new CheckpointModel();
+    const assembler = new ContextAssembler({ checkpoints, ledger, model });
+
+    await expect(
+      assembler.assemble({
+        contextEpochId: epoch.id,
+        maximumHistoryTurns: 0,
+      }),
+    ).rejects.toBeInstanceOf(ContextAssemblyError);
+    await expect(checkpoints.get(epoch.id)).resolves.toBeNull();
+    expect(model.requests).toHaveLength(0);
+
+    await ledger.append({
+      content: "Answer A",
+      contextEpoch: epoch,
+      id: "assistant-a",
+      occurredAt: new Date(),
+      requestId: "request-a",
+      role: "assistant",
+    });
+    const context = await assembler.assemble({
+      contextEpochId: epoch.id,
+      maximumHistoryTurns: 0,
+    });
+    expect(context.checkpoint).toMatchObject({
+      fromSequence: 1,
+      throughSequence: 4,
+    });
+  });
+
+  it("rejects a persisted checkpoint whose watermark splits a logical turn", async () => {
+    const ledger = new InMemoryConversationLedger();
+    for (const [id, requestId, role, content] of [
+      ["user-a", "request-a", "user", "Question A"],
+      ["user-b", "request-b", "user", "Question B"],
+      ["assistant-b", "request-b", "assistant", "Answer B"],
+      ["assistant-a", "request-a", "assistant", "Answer A"],
+    ] as const) {
+      await ledger.append({
+        content,
+        contextEpoch: epoch,
+        id,
+        occurredAt: new Date(),
+        requestId,
+        role,
+      });
+    }
+    const checkpoints = new InMemoryContextCheckpointRepository();
+    await checkpoints.save({
+      content: "Unsafe checkpoint",
+      contextEpochId: epoch.id,
+      deletionRevision: 0,
+      fromSequence: 2,
+      throughSequence: 3,
+      updatedAt: new Date(),
+    });
+    const assembler = new ContextAssembler({
+      checkpoints,
+      ledger,
+      model: new CheckpointModel(),
+    });
+
+    const context = await assembler.assemble({ contextEpochId: epoch.id });
+
+    expect(context.checkpoint).toBeNull();
+    expect(context.history.map((message) => message.content)).toEqual([
+      "Question A",
+      "Answer A",
+      "Question B",
+      "Answer B",
+    ]);
+  });
+
+  it("does not reuse a checkpoint newer than a historical request boundary", async () => {
+    const ledger = new InMemoryConversationLedger();
+    await appendTurn(ledger, 1, "Question one", "Answer one");
+    await appendTurn(ledger, 2, "Question two", "Answer two");
+    const checkpoints = new InMemoryContextCheckpointRepository();
+    await checkpoints.save({
+      content: "Future checkpoint",
+      contextEpochId: epoch.id,
+      deletionRevision: 0,
+      fromSequence: 1,
+      throughSequence: 4,
+      updatedAt: new Date(),
+    });
+    const assembler = new ContextAssembler({
+      checkpoints,
+      ledger,
+      model: new CheckpointModel(),
+    });
+
+    const context = await assembler.assemble({
+      beforeSequence: 3,
+      contextEpochId: epoch.id,
+      currentMessage: { content: "Question two", role: "user" },
+    });
+
+    expect(context.checkpoint).toBeNull();
+    expect(context.history.map((message) => message.content)).toEqual([
+      "Question one",
+      "Answer one",
+    ]);
+  });
+
   it("keeps the largest recent complete suffix within twenty thousand tokens after compression", async () => {
     const ledger = new InMemoryConversationLedger();
     for (let index = 1; index <= 7; index += 1) {
@@ -246,6 +378,14 @@ describe("ContextAssembler", () => {
     await appendTurn(ledger, 1, "Question one", "Answer one");
     await appendTurn(ledger, 2, "Question two", "Answer two");
     const checkpoints = new InMemoryContextCheckpointRepository();
+    await checkpoints.save({
+      content: "Previously persisted checkpoint",
+      contextEpochId: epoch.id,
+      deletionRevision: 0,
+      fromSequence: 1,
+      throughSequence: 2,
+      updatedAt: new Date(),
+    });
     const model = new CheckpointModel();
     const assembler = new ContextAssembler({
       checkpointEnabled: false,
@@ -265,6 +405,27 @@ describe("ContextAssembler", () => {
       "Answer two",
     ]);
     expect(model.requests).toHaveLength(0);
+  });
+
+  it("uses the target adapter profile without shrinking checkpoint model batches", async () => {
+    const assembler = new ContextAssembler({
+      checkpoints: new InMemoryContextCheckpointRepository(),
+      ledger: new InMemoryConversationLedger(),
+      model: new CheckpointModel(),
+    });
+
+    await expect(
+      assembler.assemble({
+        contextProfile: {
+          contextWindowTokens: 6_000,
+          estimateTokens(messages) {
+            return messages.reduce((total, message) => total + message.content.length, 0);
+          },
+          maximumOutputTokens: 1_000,
+        },
+        currentMessage: { content: "x".repeat(2_000), role: "user" },
+      }),
+    ).rejects.toBeInstanceOf(ContextAssemblyError);
   });
 
   it("fails explicitly instead of truncating an oversized current message", async () => {

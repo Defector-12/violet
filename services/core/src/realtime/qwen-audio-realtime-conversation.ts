@@ -8,6 +8,7 @@ import type {
 } from "@violet/domain";
 import WebSocket from "ws";
 import { defaultConversationInstructions } from "../conversation/context-assembler.js";
+import { qwenAudioRealtimeContextProfile } from "../model/model-context.js";
 import { AsyncQueue, abortReason, timeoutSignal } from "./async-queue.js";
 import { recordTestTrace, testTraceEnabled } from "./test-trace.js";
 
@@ -67,6 +68,7 @@ export type QwenRealtimeTransportFactory = (
 ) => QwenRealtimeTransport;
 
 export class QwenAudioRealtimeConversationPort implements RealtimeConversationPort {
+  readonly contextProfile = qwenAudioRealtimeContextProfile;
   readonly maximumHistoryTurns = 20;
   readonly supportsContextLookup = true;
   readonly #apiKey: string;

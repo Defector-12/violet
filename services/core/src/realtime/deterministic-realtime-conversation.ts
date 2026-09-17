@@ -5,6 +5,7 @@ import type {
   RealtimeConversationPort,
   RealtimeSessionConfiguration,
 } from "@violet/domain";
+import { deterministicContextProfile } from "../model/model-context.js";
 import { AsyncQueue } from "./async-queue.js";
 
 export interface DeterministicRealtimeConversationPortOptions {
@@ -12,6 +13,7 @@ export interface DeterministicRealtimeConversationPortOptions {
 }
 
 export class DeterministicRealtimeConversationPort implements RealtimeConversationPort {
+  readonly contextProfile = deterministicContextProfile;
   readonly #generateId: () => string;
 
   constructor(options: DeterministicRealtimeConversationPortOptions) {

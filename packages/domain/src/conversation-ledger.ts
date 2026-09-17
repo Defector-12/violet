@@ -42,6 +42,8 @@ export interface ListConversationTurns {
 export interface ConversationLedger {
   append(message: AppendLedgerMessage): Promise<LedgerMessage>;
   findByRequest(requestId: string, role: ConversationRole): Promise<LedgerMessage | null>;
+  isCompletePrefix(contextEpochId: string, throughSequence: number): Promise<boolean>;
+  latestSequence(contextEpochId: string): Promise<number>;
   list(): Promise<readonly LedgerMessage[]>;
   listTurns(options: ListConversationTurns): Promise<readonly ConversationTurn[]>;
 }

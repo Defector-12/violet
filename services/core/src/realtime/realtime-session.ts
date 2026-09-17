@@ -91,11 +91,14 @@ export class RealtimeSession {
   #closed = false;
   #activeTurnId: string | null = null;
   #conversation: RealtimeConversation | null = null;
+  #contextSnapshotStale = false;
   #contextSessionId: string | null = null;
   #onDemandContext = false;
   #expectedClientSequence = 1;
+  #requiresStableContextSnapshot = false;
   #serverSequence = 1;
   #sessionEpochId: string | null = null;
+  #sessionLedgerSequence: number | null = null;
   #sessionId: string | null = null;
 
   constructor(options: RealtimeSessionOptions) {
@@ -155,8 +158,11 @@ export class RealtimeSession {
     this.#turnEpochs.clear();
     this.#visibleResponseIds.clear();
     this.#visualRequestedTurns.clear();
+    this.#contextSnapshotStale = false;
     this.#contextSessionId = null;
+    this.#requiresStableContextSnapshot = false;
     this.#sessionEpochId = null;
+    this.#sessionLedgerSequence = null;
     await this.#conversation?.close();
   }
 
@@ -243,6 +249,9 @@ export class RealtimeSession {
               }
             : {}),
           ...(epoch ? { contextEpochId: epoch.id } : {}),
+          ...(this.#conversationPort.contextProfile
+            ? { contextProfile: this.#conversationPort.contextProfile }
+            : {}),
           ...(this.#conversationPort.maximumHistoryTurns !== undefined
             ? { maximumHistoryTurns: this.#conversationPort.maximumHistoryTurns }
             : {}),
@@ -282,6 +291,9 @@ export class RealtimeSession {
         },
         signal,
       );
+      this.#requiresStableContextSnapshot =
+        this.#conversation.capabilities.runtimeKind === "integrated";
+      this.#sessionLedgerSequence = epoch ? assembled.sourceThroughSequence : null;
       this.#onDemandContext =
         event.configuration.onDemandContext === true &&
         this.#conversationPort.supportsContextLookup === true;
@@ -321,20 +333,18 @@ export class RealtimeSession {
       return;
     }
 
-    if (
+    const isNewInputTurn =
       (event.type === "input.audio" || event.type === "input.text") &&
-      !this.#acceptedInputTurns.has(canonicalId(event.turnId))
-    ) {
-      const currentEpochId = this.#epochManager.current(this.#now())?.id;
-      if (this.#sessionEpochId && currentEpochId !== this.#sessionEpochId) {
-        yield this.#error(
-          event.sessionId,
-          "CONTEXT_EPOCH_EXPIRED",
-          "The realtime context expired after thirty minutes of inactivity",
-        );
+      !this.#acceptedInputTurns.has(canonicalId(event.turnId));
+    if (isNewInputTurn || event.type === "input.commit") {
+      const contextError = await this.#contextAdmissionError();
+      if (contextError) {
+        yield this.#error(event.sessionId, contextError.code, contextError.message);
         await this.close();
         return;
       }
+    }
+    if (isNewInputTurn && (event.type === "input.audio" || event.type === "input.text")) {
       this.#acceptedInputTurns.add(canonicalId(event.turnId));
     }
 
@@ -403,6 +413,12 @@ export class RealtimeSession {
         await this.close();
         return;
       }
+      const contextError = await this.#contextAdmissionError();
+      if (contextError) {
+        yield this.#error(event.sessionId, contextError.code, contextError.message);
+        await this.close();
+        return;
+      }
     }
     if (event.type === "response.cancel") {
       const turnId = this.#responseTurnIds.get(canonicalId(event.responseId));
@@ -460,7 +476,7 @@ export class RealtimeSession {
                 responseId: output.responseId,
                 type: "response-cancelled",
               } as const;
-              await this.#persistOutput(cancelled);
+              await this.#persistOutput(cancelled, { preserveTurnEpoch: true });
               yield this.#mapOutput(this.#sessionId, cancelled);
             }
             if (this.#activeTurnId !== null && this.#activeTurnId !== output.turnId) {
@@ -798,7 +814,10 @@ export class RealtimeSession {
     );
   }
 
-  async #persistOutput(output: RealtimeConversationOutput): Promise<void> {
+  async #persistOutput(
+    output: RealtimeConversationOutput,
+    options: { readonly preserveTurnEpoch?: boolean } = {},
+  ): Promise<void> {
     switch (output.type) {
       case "speech-started":
       case "speech-stopped":
@@ -852,7 +871,7 @@ export class RealtimeSession {
         this.#assistantContent.delete(output.responseId);
         {
           const turnId = this.#responseTurnIds.get(canonicalId(output.responseId));
-          if (turnId) {
+          if (turnId && !options.preserveTurnEpoch) {
             this.#pendingAssistantTurns.delete(turnId);
             this.#turnEpochs.delete(turnId);
           }
@@ -879,6 +898,7 @@ export class RealtimeSession {
           startedAt: existing.occurredAt,
         });
         this.#sessionEpochId ??= existing.contextEpochId;
+        this.#trackSessionSequence(existing.contextEpochId, existing.sequence);
       }
       this.#persistedTurns.add(turnId);
       return matchesSession;
@@ -898,6 +918,7 @@ export class RealtimeSession {
       startedAt: contextEpoch.startedAt,
     });
     this.#sessionEpochId ??= message.contextEpochId ?? contextEpoch.id;
+    this.#trackSessionSequence(message.contextEpochId ?? contextEpoch.id, message.sequence);
     this.#persistedTurns.add(turnId);
     return this.#sessionEpochId === (message.contextEpochId ?? contextEpoch.id);
   }
@@ -919,7 +940,7 @@ export class RealtimeSession {
     contextEpoch: ContextEpoch,
     occurredAt: Date,
   ): Promise<void> {
-    await this.#ledger.append({
+    const message = await this.#ledger.append({
       content,
       contextEpoch,
       id: this.#generateId(),
@@ -927,6 +948,64 @@ export class RealtimeSession {
       requestId: turnId,
       role: "assistant",
     });
+    if (message.contextEpochId) {
+      this.#trackSessionSequence(message.contextEpochId, message.sequence);
+    }
+  }
+
+  async #contextAdmissionError(): Promise<{
+    readonly code: string;
+    readonly message: string;
+  } | null> {
+    const currentEpochId = this.#epochManager.current(this.#now())?.id;
+    if (this.#sessionEpochId && currentEpochId !== this.#sessionEpochId) {
+      return {
+        code: "CONTEXT_EPOCH_EXPIRED",
+        message: "The realtime context expired after thirty minutes of inactivity",
+      };
+    }
+    if (this.#requiresStableContextSnapshot && this.#contextSnapshotStale) {
+      return {
+        code: "CONTEXT_SNAPSHOT_STALE",
+        message: "The realtime context changed and requires a fresh session",
+      };
+    }
+    if (
+      this.#requiresStableContextSnapshot &&
+      this.#sessionEpochId === null &&
+      currentEpochId !== undefined
+    ) {
+      return {
+        code: "CONTEXT_SNAPSHOT_STALE",
+        message: "The realtime context changed and requires a fresh session",
+      };
+    }
+    if (
+      this.#requiresStableContextSnapshot &&
+      this.#sessionEpochId &&
+      this.#sessionLedgerSequence !== null &&
+      (await this.#ledger.latestSequence(this.#sessionEpochId)) !== this.#sessionLedgerSequence
+    ) {
+      return {
+        code: "CONTEXT_SNAPSHOT_STALE",
+        message: "The realtime context changed and requires a fresh session",
+      };
+    }
+    return null;
+  }
+
+  #trackSessionSequence(contextEpochId: string, sequence: number): void {
+    if (this.#sessionEpochId !== contextEpochId) {
+      return;
+    }
+    if (
+      this.#requiresStableContextSnapshot &&
+      this.#sessionLedgerSequence !== null &&
+      sequence > this.#sessionLedgerSequence + 1
+    ) {
+      this.#contextSnapshotStale = true;
+    }
+    this.#sessionLedgerSequence = Math.max(this.#sessionLedgerSequence ?? 0, sequence);
   }
 
   #baseEvent(sessionId: string): {

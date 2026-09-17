@@ -33,6 +33,7 @@ export class ContextAssemblyError extends Error {
 export interface AssembleContextInput {
   readonly additionalSystemInstructions?: readonly string[];
   readonly beforeSequence?: number;
+  readonly contextProfile?: ModelContextProfile;
   readonly contextEpochId?: string;
   readonly currentMessage?: ModelMessage;
   readonly maximumHistoryTurns?: number;
@@ -43,6 +44,7 @@ export interface AssembledContext {
   readonly checkpoint: ContextCheckpoint | null;
   readonly history: readonly RealtimeHistoryMessage[];
   readonly messages: readonly ModelMessage[];
+  readonly sourceThroughSequence: number;
   readonly systemInstructions: string;
 }
 
@@ -75,19 +77,31 @@ export class ContextAssembler {
     input: AssembleContextInput,
     consistencyAttempt: number,
   ): Promise<AssembledContext> {
-    const profile = this.#model.contextProfile ?? deterministicContextProfile;
-    const inputBudget = inputBudgetTokens(profile);
+    const checkpointProfile = this.#model.contextProfile ?? deterministicContextProfile;
+    const targetProfile = input.contextProfile ?? checkpointProfile;
+    const inputBudget = inputBudgetTokens(targetProfile);
     const baseSystem = [
       defaultConversationInstructions,
       ...(input.additionalSystemInstructions ?? []),
     ];
     const deletionRevision = await this.#checkpoints.deletionRevision();
     let checkpoint =
-      input.contextEpochId === undefined ? null : await this.#checkpoints.get(input.contextEpochId);
-    if (checkpoint?.deletionRevision !== deletionRevision) {
+      !this.#checkpointEnabled || input.contextEpochId === undefined
+        ? null
+        : await this.#checkpoints.get(input.contextEpochId);
+    if (
+      checkpoint &&
+      (checkpoint.deletionRevision !== deletionRevision ||
+        (input.beforeSequence !== undefined &&
+          checkpoint.throughSequence >= input.beforeSequence) ||
+        !(await this.#ledger.isCompletePrefix(
+          checkpoint.contextEpochId,
+          checkpoint.throughSequence,
+        )))
+    ) {
       checkpoint = null;
     }
-    let turns =
+    let snapshotTurns =
       input.contextEpochId === undefined
         ? []
         : [
@@ -96,22 +110,33 @@ export class ContextAssembler {
               ...(input.beforeSequence !== undefined
                 ? { beforeSequence: input.beforeSequence }
                 : {}),
-              completeOnly: true,
+              completeOnly: false,
               contextEpochId: input.contextEpochId,
             })),
           ];
+    let turns = snapshotTurns.filter((turn) => turn.completed);
+    let sourceThroughSequence = snapshotThroughSequence(checkpoint, snapshotTurns);
+    let checkpointableTurns = checkpointablePrefixLength(snapshotTurns, turns);
 
     let checkpointAttempts = 0;
     while (true) {
       const assembled = assembleMessages(baseSystem, checkpoint, turns, input.currentMessage);
-      if (fits(assembled.messages, turns.length, inputBudget, profile, input.maximumHistoryTurns)) {
+      if (
+        fits(
+          assembled.messages,
+          turns.length,
+          inputBudget,
+          targetProfile,
+          input.maximumHistoryTurns,
+        )
+      ) {
         if ((await this.#checkpoints.deletionRevision()) !== deletionRevision) {
           if (consistencyAttempt >= 1) {
             throw new ContextAssemblyError("Conversation changed repeatedly during assembly");
           }
           return this.#assembleAtRevision(input, consistencyAttempt + 1);
         }
-        return assembled;
+        return { ...assembled, sourceThroughSequence };
       }
 
       const desiredPrefixLength = prefixToCompress(
@@ -120,8 +145,9 @@ export class ContextAssembler {
         turns,
         input.currentMessage,
         inputBudget,
-        profile,
+        targetProfile,
         input.maximumHistoryTurns,
+        this.#checkpointEnabled ? checkpointableTurns : turns.length,
       );
       if (!this.#checkpointEnabled) {
         if (desiredPrefixLength === 0) {
@@ -140,37 +166,43 @@ export class ContextAssembler {
       const prefixLength =
         desiredPrefixLength === 0
           ? 0
-          : checkpointPrefixLength(checkpoint, turns, desiredPrefixLength, profile);
+          : checkpointPrefixLength(checkpoint, turns, desiredPrefixLength, checkpointProfile);
       if (desiredPrefixLength > 0 && prefixLength === 0) {
         throw new ContextAssemblyError("Conversation prefix exceeds the checkpoint model budget");
       }
       const prefix = turns.slice(0, prefixLength);
       const generated = await this.#createCheckpoint({
+        ...(input.beforeSequence !== undefined ? { beforeSequence: input.beforeSequence } : {}),
         contextEpochId: input.contextEpochId,
         deletionRevision,
         existing: checkpoint,
         prefix,
-        profile,
+        profile: checkpointProfile,
         ...(input.signal ? { signal: input.signal } : {}),
       });
       checkpointAttempts += 1;
       checkpoint = generated.checkpoint;
-      turns = generated.concurrent
-        ? [
-            ...(await this.#ledger.listTurns({
-              afterSequence: checkpoint.throughSequence,
-              ...(input.beforeSequence !== undefined
-                ? { beforeSequence: input.beforeSequence }
-                : {}),
-              completeOnly: true,
-              contextEpochId: input.contextEpochId,
-            })),
-          ]
-        : turns.slice(prefixLength);
+      if (generated.concurrent) {
+        snapshotTurns = [
+          ...(await this.#ledger.listTurns({
+            afterSequence: checkpoint.throughSequence,
+            ...(input.beforeSequence !== undefined ? { beforeSequence: input.beforeSequence } : {}),
+            completeOnly: false,
+            contextEpochId: input.contextEpochId,
+          })),
+        ];
+        turns = snapshotTurns.filter((turn) => turn.completed);
+        sourceThroughSequence = snapshotThroughSequence(checkpoint, snapshotTurns);
+        checkpointableTurns = checkpointablePrefixLength(snapshotTurns, turns);
+      } else {
+        turns = turns.slice(prefixLength);
+        checkpointableTurns = Math.max(0, checkpointableTurns - prefixLength);
+      }
     }
   }
 
   async #createCheckpoint(input: {
+    readonly beforeSequence?: number;
     readonly contextEpochId: string;
     readonly deletionRevision: number;
     readonly existing: ContextCheckpoint | null;
@@ -185,6 +217,9 @@ export class ContextAssembler {
     );
     if (firstSequence === undefined) {
       throw new ContextAssemblyError("Conversation context has no complete prefix to compress");
+    }
+    if (!(await this.#ledger.isCompletePrefix(input.contextEpochId, throughSequence))) {
+      throw new ContextAssemblyError("Conversation changed before checkpoint generation");
     }
 
     const request = checkpointRequest(input.existing, input.prefix);
@@ -220,6 +255,9 @@ export class ContextAssembler {
     if (!content) {
       throw new ContextAssemblyError("The checkpoint model returned empty content");
     }
+    if (!(await this.#ledger.isCompletePrefix(input.contextEpochId, throughSequence))) {
+      throw new ContextAssemblyError("Conversation changed while the checkpoint was generated");
+    }
 
     const checkpoint: ContextCheckpoint = {
       content,
@@ -235,7 +273,9 @@ export class ContextAssembler {
     const concurrent = await this.#checkpoints.get(input.contextEpochId);
     if (
       concurrent?.deletionRevision === input.deletionRevision &&
-      concurrent.throughSequence >= checkpoint.throughSequence
+      concurrent.throughSequence >= checkpoint.throughSequence &&
+      (input.beforeSequence === undefined || concurrent.throughSequence < input.beforeSequence) &&
+      (await this.#ledger.isCompletePrefix(concurrent.contextEpochId, concurrent.throughSequence))
     ) {
       return { checkpoint: concurrent, concurrent: true };
     }
@@ -276,7 +316,7 @@ function assembleMessages(
   checkpoint: ContextCheckpoint | null,
   turns: readonly ConversationTurn[],
   currentMessage: ModelMessage | undefined,
-): AssembledContext {
+): Omit<AssembledContext, "sourceThroughSequence"> {
   const systemMessages: ModelMessage[] = [
     ...baseSystem.map((content) => ({ content, role: "system" as const })),
     ...(checkpoint ? [{ content: checkpointDataInstructions, role: "system" as const }] : []),
@@ -324,9 +364,10 @@ function prefixToCompress(
   inputBudget: number,
   profile: ModelContextProfile,
   maximumHistoryTurns: number | undefined,
+  maximumPrefixLength: number,
 ): number {
   let previousSafePrefix = 0;
-  for (let requestedPrefix = 1; requestedPrefix <= turns.length; requestedPrefix += 1) {
+  for (let requestedPrefix = 1; requestedPrefix <= maximumPrefixLength; requestedPrefix += 1) {
     const prefixLength = sequenceSafePrefixLength(turns, requestedPrefix);
     if (prefixLength === previousSafePrefix) {
       continue;
@@ -345,6 +386,37 @@ function prefixToCompress(
     }
   }
   return 0;
+}
+
+function checkpointablePrefixLength(
+  snapshotTurns: readonly ConversationTurn[],
+  completeTurns: readonly ConversationTurn[],
+): number {
+  const incompleteStart = snapshotTurns.reduce(
+    (earliest, turn) => (!turn.completed ? Math.min(earliest, turn.startSequence) : earliest),
+    Number.POSITIVE_INFINITY,
+  );
+  if (!Number.isFinite(incompleteStart)) {
+    return completeTurns.length;
+  }
+  let length = 0;
+  for (const turn of completeTurns) {
+    if (turn.throughSequence >= incompleteStart) {
+      break;
+    }
+    length += 1;
+  }
+  return length;
+}
+
+function snapshotThroughSequence(
+  checkpoint: ContextCheckpoint | null,
+  turns: readonly ConversationTurn[],
+): number {
+  return turns.reduce(
+    (maximum, turn) => Math.max(maximum, turn.throughSequence),
+    checkpoint?.throughSequence ?? 0,
+  );
 }
 
 function sequenceSafePrefixLength(

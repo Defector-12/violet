@@ -25,6 +25,10 @@ describe("QwenAudioRealtimeConversationPort", () => {
 
     const conversation = await port.open(configuration());
 
+    expect(port.contextProfile).toMatchObject({
+      contextWindowTokens: 131_072,
+      maximumOutputTokens: 16_384,
+    });
     expect(port.maximumHistoryTurns).toBe(20);
     expect(observedUrl?.toString()).toBe(
       "wss://ws-jvh4fvlcktrjvtbj.cn-beijing.maas.aliyuncs.com/api-ws/v1/realtime?model=qwen-audio-3.0-realtime-plus",

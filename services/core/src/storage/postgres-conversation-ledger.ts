@@ -176,6 +176,57 @@ export class PostgresConversationLedger implements ConversationLedger {
     return row ? this.#toMessage(row) : null;
   }
 
+  async isCompletePrefix(contextEpochId: string, throughSequence: number): Promise<boolean> {
+    const result = await this.#pool.query<{ valid: boolean }>(
+      `
+        WITH current_instance AS (
+          SELECT id
+          FROM violet_instances
+          WHERE singleton = true
+        ),
+        invalid_turn AS (
+          SELECT events.request_id
+          FROM conversation_events AS events
+          JOIN current_instance AS instance ON instance.id = events.instance_id
+          WHERE events.context_epoch_id = $1
+          GROUP BY events.request_id
+          HAVING MIN(events.sequence) <= $2
+            AND (
+              COUNT(*) FILTER (WHERE events.role = 'user') = 0
+              OR COUNT(*) FILTER (WHERE events.role = 'assistant') = 0
+              OR MAX(events.sequence) > $2
+            )
+          LIMIT 1
+        )
+        SELECT
+          EXISTS (
+            SELECT 1
+            FROM conversation_events AS events
+            JOIN current_instance AS instance ON instance.id = events.instance_id
+            WHERE events.context_epoch_id = $1
+              AND events.sequence = $2
+          )
+          AND NOT EXISTS (SELECT 1 FROM invalid_turn) AS valid
+      `,
+      [contextEpochId, throughSequence],
+    );
+    return result.rows[0]?.valid ?? false;
+  }
+
+  async latestSequence(contextEpochId: string): Promise<number> {
+    const result = await this.#pool.query<{ latest_sequence: string }>(
+      `
+        SELECT COALESCE(MAX(events.sequence), 0) AS latest_sequence
+        FROM conversation_events AS events
+        JOIN violet_instances AS instance ON instance.id = events.instance_id
+        WHERE instance.singleton = true
+          AND events.context_epoch_id = $1
+      `,
+      [contextEpochId],
+    );
+    return Number(result.rows[0]?.latest_sequence ?? 0);
+  }
+
   async listTurns(options: ListConversationTurns): Promise<readonly ConversationTurn[]> {
     const result = await this.#pool.query<EventRow>(
       `

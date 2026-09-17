@@ -124,6 +124,65 @@ integration("PostgreSQL conversation context", () => {
     );
     expect(raw.rows[0]?.ciphertext.toString("utf8")).not.toContain("Encrypted checkpoint");
 
+    const concurrentEpoch = {
+      id: randomUUID(),
+      startedAt: new Date("2026-09-16T00:03:00.000Z"),
+    };
+    const pendingRequest = randomUUID();
+    const laterRequest = randomUUID();
+    const pendingUser = await ledger.append({
+      content: "Pending question",
+      contextEpoch: concurrentEpoch,
+      id: randomUUID(),
+      occurredAt: concurrentEpoch.startedAt,
+      requestId: pendingRequest,
+      role: "user",
+    });
+    await ledger.append({
+      content: "Later question",
+      contextEpoch: concurrentEpoch,
+      id: randomUUID(),
+      occurredAt: concurrentEpoch.startedAt,
+      requestId: laterRequest,
+      role: "user",
+    });
+    const laterAssistant = await ledger.append({
+      content: "Later answer",
+      contextEpoch: concurrentEpoch,
+      id: randomUUID(),
+      occurredAt: concurrentEpoch.startedAt,
+      requestId: laterRequest,
+      role: "assistant",
+    });
+    await expect(
+      checkpoints.save({
+        content: "Must not cross an incomplete turn",
+        contextEpochId: concurrentEpoch.id,
+        deletionRevision: 0,
+        fromSequence: pendingUser.sequence,
+        throughSequence: laterAssistant.sequence,
+        updatedAt: new Date("2026-09-16T00:04:00.000Z"),
+      }),
+    ).resolves.toBe(false);
+    const pendingAssistant = await ledger.append({
+      content: "Pending answer",
+      contextEpoch: concurrentEpoch,
+      id: randomUUID(),
+      occurredAt: concurrentEpoch.startedAt,
+      requestId: pendingRequest,
+      role: "assistant",
+    });
+    await expect(
+      checkpoints.save({
+        content: "Complete contiguous prefix",
+        contextEpochId: concurrentEpoch.id,
+        deletionRevision: 0,
+        fromSequence: pendingUser.sequence,
+        throughSequence: pendingAssistant.sequence,
+        updatedAt: new Date("2026-09-16T00:05:00.000Z"),
+      }),
+    ).resolves.toBe(true);
+
     await pool.query("UPDATE violet_instances SET deletion_revision = 1 WHERE singleton = true");
     await expect(checkpoints.get(contextEpoch.id)).resolves.toBeNull();
     await expect(
