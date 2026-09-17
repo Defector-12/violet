@@ -1,6 +1,9 @@
 import type { ModelGateway, ModelRequest, ModelStreamEvent } from "@violet/domain";
+import { deterministicContextProfile } from "./model-context.js";
 
 export class DeterministicModelGateway implements ModelGateway {
+  readonly contextProfile = deterministicContextProfile;
+
   async *stream(request: ModelRequest, signal?: AbortSignal): AsyncIterable<ModelStreamEvent> {
     signal?.throwIfAborted();
     const lastUserMessage = request.messages.findLast((message) => message.role === "user");

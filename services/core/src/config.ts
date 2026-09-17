@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 
 export interface CoreRuntimeConfig {
+  readonly contextCheckpointEnabled: boolean;
   readonly contextStorage:
     | {
         readonly provider: "memory";
@@ -94,6 +95,7 @@ export function loadCoreRuntimeConfig(env: NodeJS.ProcessEnv): CoreRuntimeConfig
   }
 
   return {
+    contextCheckpointEnabled: parseBoolean(env["VIOLET_CONTEXT_CHECKPOINT_ENABLED"] ?? "true"),
     contextStorage,
     contentKey,
     contentKeyVersion: env["VIOLET_CONTENT_KEY_VERSION"] ?? "content-v1",
@@ -154,7 +156,7 @@ function loadModelConfig(env: NodeJS.ProcessEnv, enabled: boolean): CoreRuntimeC
   return {
     apiKey: readSecretFile(keyFile, "model API key"),
     baseUrl: env["DEEPSEEK_BASE_URL"] ?? "https://api.deepseek.com",
-    model: env["DEEPSEEK_MODEL"] ?? "deepseek-v4-flash",
+    model: env["DEEPSEEK_MODEL"] ?? "deepseek-flash",
     provider,
     userId: env["DEEPSEEK_USER_ID"] ?? "violet-instance",
   };
@@ -217,7 +219,7 @@ function loadVisionConfig(env: NodeJS.ProcessEnv, enabled: boolean): CoreRuntime
       "vision API key",
     ),
     baseUrl: env["DEEPSEEK_VISION_BASE_URL"] ?? "https://api.deepseek.com",
-    model: env["DEEPSEEK_VISION_MODEL"] ?? "deepseek-v4-flash-vision-exp",
+    model: env["DEEPSEEK_VISION_MODEL"] ?? "deepseek-flash",
     provider,
   };
 }

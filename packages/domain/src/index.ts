@@ -11,12 +11,21 @@ export type {
   ResolvedContext,
 } from "./context.js";
 export type {
+  ContextCheckpoint,
+  ContextCheckpointRepository,
+  SaveContextCheckpoint,
+} from "./context-checkpoint.js";
+export type {
   AppendLedgerMessage,
+  ContextEpoch,
   ConversationLedger,
   ConversationRole,
+  ConversationTurn,
   LedgerMessage,
+  ListConversationTurns,
 } from "./conversation-ledger.js";
 export type {
+  ModelContextProfile,
   ModelGateway,
   ModelMessage,
   ModelRequest,
