@@ -1,7 +1,7 @@
 # Release 1D：Violet Continuity 最终规格
 
-> 状态：方案已批准；Phase 1 第二轮审查修复已在本地完成并通过回归，尚未提交、合并或
-> 重新部署；Phase 2/3 未开始。本文是 Release 1D 的产品与技术事实源。
+> 状态：方案已批准；Phase 1 第二轮审查修复已提交、合入主线并重新部署；
+> Phase 2/3 未开始。本文是 Release 1D 的产品与技术事实源。
 > 实施顺序见 [任务拆分](./release-1d-tasks.md)，放行条件见
 > [验收清单](./release-1d-acceptance.md)。
 
