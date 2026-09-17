@@ -1,8 +1,7 @@
 # Release 1D：验收清单
 
-> 状态：Phase 1 的初始 1D-01 至 1D-03 已提交、同步并部署；后续审查加固已在本地
-> 实现并通过完整回归，尚待提交和重新部署。Phase 2/3 未开始，Phase 2 在
-> 加固重新放行前保持阻塞。本文记录 Release 1D 的实际版本、失败、证据和剩余门禁。规格见
+> 状态：Phase 1 的 1D-01 至 1D-03 及审查后加固已完成完整回归、提交、双远端同步
+> 和重新部署。Phase 2/3 未开始。本文记录 Release 1D 的实际版本、失败、证据和剩余门禁。规格见
 > [最终规格](./release-1d-spec.md)，实施顺序见 [任务拆分](./release-1d-tasks.md)。
 
 ## 1. 证据规则
@@ -143,8 +142,23 @@
 - 既有三组真实 DeepSeek checkpoint 结果经新的完整场景校验离线复核仍为 3/3，
   run `cdb3aaad-f5ba-40bf-b97c-6c441e9168b3`；本轮没有新增付费模型调用。
 - Mac 95/95 回归通过，run `73528ca9-2eb2-4653-ba70-28bc4f180e9d`。
-- 提交、双远端同步和重新部署仍待用户另行授权；部署中的
-  `8f34049-release-1d-phase1` 尚不包含本节修复，因此 Phase 2 继续阻塞。
+- 加固提交为 `1b352adf3986692cad782da4a21dc81fdd4c9a1c`，精确提交 Core 构建 run
+  `b1c35617-d3e7-44de-ade6-0115d5bed641`；`origin` 与 `bits` 的
+  `feat/1d-phase1-context` 均已只读核对为该提交。GitHub push 在远端更新成功后因
+  沙箱禁止凭据助手写 Keychain 返回非零，未影响远端结果。
+- 部署前检查 run `501aa8b1-4e04-4f71-aa57-7ae2a461dd42` 因远端临时备份脚本已清理
+  而失败；重新上传当前脚本后生成本地加密备份
+  `20260917T125937Z-9556c056-69de-42d7-bc17-62c1172adac7.vltbk`，SHA-256
+  `622c85a7052ac74ddd8bff0849cd5445655b5116081f50a166757a22dcb26682`，run
+  `70c9fd31-f267-417d-b616-497cb83afa9d`。
+- 加固部署 run `f2502732-b934-48da-bd5f-57851fceb8b2`：发布归档 SHA-256
+  `16413ebc07b3571ac81ba7ec3aa94ac43432cad66de4861732d0fb0bab7c652d`，运行镜像
+  `sha256:bcc3867448abab643b4edb9efb92b13786f8387da8496040fd09da802a48771f`，
+  版本为 `1b352ad-release-1d-phase1-hardening`。
+- 部署后健康、零重启、迁移、checkpoint 开关、模型和回滚镜像验证 run
+  `4998801a-e11f-4559-802b-12ee2b987d9d`；远端与本地 `dist` 清单 SHA-256 均为
+  `b9e7555086761c18c79a93c7c6502c965acb343595288568aaef7d4886299ead`。Mac SSH
+  隧道下健康及认证状态 `ready`，run `8e268aea-744b-441f-bb02-f64b78328cdb`。
 
 ## 3. P0：事实与来源
 
@@ -317,7 +331,7 @@ docker compose -f infra/compose/compose.yaml config
 - [ ] 真实供应商评估达到门槛，真实 Mac 完成最终故事。
 - [ ] 旧备份恢复被拒绝，新备份恢复不复活。
 - [ ] 实际 commit、构建、部署、失败和 run ID 已写回本文。
-- [ ] Phase 1 审查加固已提交、同步并重新部署，运行版本不再是旧的 `8f34049`。
+- [x] Phase 1 审查加固已提交、同步并重新部署，运行版本不再是旧的 `8f34049`。
 - [ ] 用户明确批准后，生产自动记忆才开启。
 
 关闭自动提取、记忆注入或 checkpoint 可以回滚能力；任何回滚都不得降低
