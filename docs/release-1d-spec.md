@@ -264,7 +264,8 @@ revision 不一致时完全停用。
 
 ## 11. 依赖、发布与回滚
 
-- 复用现有 PostgreSQL、DeepSeek、Qwen、TOS、Mac Keychain、OpenAPI 和测试记录器。
+- 复用现有 PostgreSQL、DeepSeek `deepseek-flash`（DeepSeek-V4.1-Flash）、Qwen、
+  TOS、Mac Keychain、OpenAPI 和测试记录器。
 - 不新增 npm/Swift 依赖、外部账号或凭证；现有 `pgvector` 扩展不参与 1D 检索。
 - Swift 实现和验收前需由用户接受本机 Xcode license；规格本身不受影响。
 - 发布顺序是：统一上下文 → 明确记忆与治理 → 自动提取。

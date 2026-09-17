@@ -18,6 +18,8 @@ import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
 import type { DeviceAuthenticator } from "../auth/device-authenticator.js";
 import { type ContextService, ContextServiceError } from "../context/context-service.js";
 import type { ChatService } from "../conversation/chat-service.js";
+import type { ContextAssembler } from "../conversation/context-assembler.js";
+import type { ContextEpochManager } from "../conversation/context-epoch-manager.js";
 import type { ConversationEndIntentPort } from "../realtime/conversation-end-intent.js";
 import { handleRealtimeWebSocket } from "../realtime/realtime-websocket.js";
 import {
@@ -37,6 +39,8 @@ export interface CoreAppOptions {
   readonly authenticator: DeviceAuthenticator;
   readonly chatService: ChatService;
   readonly conversationEndIntent: ConversationEndIntentPort;
+  readonly contextAssembler: ContextAssembler;
+  readonly contextEpochManager: ContextEpochManager;
   readonly contextService: ContextService;
   readonly now?: () => Date;
   readonly realtimeConversationPort: RealtimeConversationPort;
@@ -312,7 +316,13 @@ export function buildCoreApp(options: CoreAppOptions): FastifyInstance {
     }
     const stream = Readable.from(
       serializeEvents(
-        options.chatService.stream(request.body, abortController.signal, contextEvidence),
+        options.chatService.stream(
+          request.body,
+          abortController.signal,
+          contextEvidence && request.body.contextSessionId
+            ? { content: contextEvidence, sourceId: request.body.contextSessionId }
+            : undefined,
+        ),
         request.body.requestId,
       ),
     );
@@ -371,7 +381,9 @@ export function buildCoreApp(options: CoreAppOptions): FastifyInstance {
         handleRealtimeWebSocket(socket, {
           conversationEndIntent: options.conversationEndIntent,
           conversationPort: options.realtimeConversationPort,
+          contextAssembler: options.contextAssembler,
           contextService: options.contextService,
+          epochManager: options.contextEpochManager,
           generateId: randomUUID,
           ledger: options.realtimeLedger,
           ...(testTrace ? { testTrace } : {}),

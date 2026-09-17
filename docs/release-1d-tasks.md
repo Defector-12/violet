@@ -1,6 +1,7 @@
 # Release 1D：任务拆分
 
-> 状态：方案已批准，实现未开始。本文只定义实施顺序，不代表任务已经完成。
+> 状态：方案已批准；Phase 1 代码已在本地实现并通过自动化合并门，尚未提交或部署。
+> Phase 2/3 未开始。
 > 产品合同见 [最终规格](./release-1d-spec.md)，放行条件见
 > [验收清单](./release-1d-acceptance.md)。
 
@@ -26,13 +27,16 @@
 
 - `packages/domain/src/model-gateway.ts`
 - `packages/domain/src/conversation-ledger.ts`
+- `packages/domain/src/context-checkpoint.ts`
 - `packages/domain/src/index.ts`
 - `infra/migrations/0002_context_checkpoints.sql`
+- `services/core/src/conversation/context-epoch-manager.ts`
 
 新增最小合同：
 
 - 模型 context window、最大输出和 token 估算；
 - 按 sequence 读取完整逻辑轮次；
+- `context_epochs`、事件的可空 `context_epoch_id` 和 30 分钟边界；
 - 单一滚动 checkpoint 及 deletion revision。
 
 测试：
@@ -75,6 +79,8 @@
 - 删除文字全量 `ledger.list()` 和语音 `.slice(-40)`。
 - 三条路径只使用 ContextAssembler 输出。
 - Qwen 保留 `max_history_turns = 20`。
+- 已绑定 epoch 的 Realtime 连接跨过 30 分钟空闲边界时，在新输入到达供应商前明确
+  失败并关闭；重连后进入新 epoch，不沿用旧供应商历史。
 - 不改变 Natural Pointing 的当前轮、新鲜度、取消和隐私门禁。
 
 **Phase 1 合并门**
@@ -93,7 +99,7 @@
 
 这一阶段横跨 Core、协议、Mac 和备份，不能再拆成“先能写、以后再能删”的生产阶段。
 
-### 1D-04 数据模型和 epoch
+### 1D-04 明确记忆数据模型
 
 修改或新增：
 
@@ -102,19 +108,16 @@
 - `packages/domain/src/conversation-ledger.ts`
 - `packages/domain/src/index.ts`
 - `services/core/src/storage/postgres-memory-repository.ts`
-- `services/core/src/conversation/context-epoch-manager.ts`
 
 迁移包含：
 
-- `context_epochs` 和事件的可空 `context_epoch_id`；
 - 原子 memories、sources、summary；
 - 最小墓碑和 `restore_epoch`。
 
 要求：
 
-- 上线前事件不回填 epoch 或长期记忆。
-- Core 重启或 30 分钟无有效用户输入后开启新 epoch。
-- 文字和语音共享 epoch。
+- 上线前事件不回填长期记忆。
+- 复用 Phase 1 已建立的 epoch，旧事件继续保持无 epoch。
 - 所有语义字段加密，来源指向最终用户事件及原文位置。
 
 ### 1D-05 明确记忆、纠正和 summary

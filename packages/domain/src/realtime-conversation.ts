@@ -11,8 +11,10 @@ export interface RealtimeAudioFormat {
 
 export interface RealtimeSessionConfiguration {
   readonly contextEvidence?: string;
+  readonly contextEvidenceIncludedInInstructions?: boolean;
   readonly contextLookupAvailable?: boolean;
   readonly history?: readonly RealtimeHistoryMessage[];
+  readonly instructions?: string;
   readonly inputAudio?: RealtimeAudioFormat;
   readonly inputModalities: readonly RealtimeModality[];
   readonly language?: string;
@@ -129,6 +131,7 @@ export interface RealtimeConversation {
 }
 
 export interface RealtimeConversationPort {
+  readonly maximumHistoryTurns?: number;
   readonly supportsContextLookup?: boolean;
   open(
     configuration: RealtimeSessionConfiguration,

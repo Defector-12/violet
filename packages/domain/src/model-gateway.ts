@@ -4,8 +4,16 @@ export interface ModelMessage {
 }
 
 export interface ModelRequest {
+  readonly maximumOutputTokens?: number;
   readonly messages: readonly ModelMessage[];
   readonly requestId: string;
+  readonly thinking?: boolean;
+}
+
+export interface ModelContextProfile {
+  readonly contextWindowTokens: number;
+  readonly estimateTokens: (messages: readonly ModelMessage[]) => number;
+  readonly maximumOutputTokens?: number;
 }
 
 export type ModelStreamEvent =
@@ -20,5 +28,6 @@ export type ModelStreamEvent =
     };
 
 export interface ModelGateway {
+  readonly contextProfile?: ModelContextProfile;
   stream(request: ModelRequest, signal?: AbortSignal): AsyncIterable<ModelStreamEvent>;
 }

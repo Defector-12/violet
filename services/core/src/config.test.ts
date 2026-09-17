@@ -65,7 +65,7 @@ describe("loadCoreRuntimeConfig", () => {
     expect(config.contentKey).toHaveLength(32);
     expect(config.model).toMatchObject({
       baseUrl: "https://api.deepseek.com",
-      model: "deepseek-v4-flash",
+      model: "deepseek-flash",
       provider: "deepseek",
     });
   });
@@ -107,9 +107,19 @@ describe("loadCoreRuntimeConfig", () => {
     expect(config.vision).toEqual({
       apiKey: "test-deepseek-key",
       baseUrl: "https://api.deepseek.com",
-      model: "deepseek-v4-flash-vision-exp",
+      model: "deepseek-flash",
       provider: "deepseek",
     });
+  });
+
+  it("allows checkpoint generation to be disabled independently", () => {
+    const config = loadCoreRuntimeConfig({
+      VIOLET_CONTEXT_CHECKPOINT_ENABLED: "false",
+      VIOLET_DEVICE_TOKEN_EXPIRES_AT: tokenExpiresAt,
+      VIOLET_DEVICE_TOKEN_SHA256: tokenHash,
+    });
+
+    expect(config.contextCheckpointEnabled).toBe(false);
   });
 
   it("loads ephemeral TOS context storage only after unsealing", () => {

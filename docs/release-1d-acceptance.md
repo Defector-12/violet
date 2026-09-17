@@ -1,8 +1,8 @@
 # Release 1D：验收清单
 
-> 状态：规格阶段，以下项目均未执行。实施后本文记录 Release 1D 的实际版本、失败、
-> 证据和剩余门禁。规格见 [最终规格](./release-1d-spec.md)，实施顺序见
-> [任务拆分](./release-1d-tasks.md)。
+> 状态：Phase 1 的 1D-01 至 1D-03 已在本地分支实现并通过自动化合并门，尚未提交或
+> 部署；Phase 2/3 未开始。本文记录 Release 1D 的实际版本、失败、证据和剩余门禁。规格见
+> [最终规格](./release-1d-spec.md)，实施顺序见 [任务拆分](./release-1d-tasks.md)。
 
 ## 1. 证据规则
 
@@ -16,12 +16,74 @@
 
 ## 2. 验收前置
 
-- [x] 用户已批准 1D 规格和任务拆分（2026-09-16）；实现尚未开始。
+- [x] 用户已批准 1D 规格和任务拆分（2026-09-16）；Phase 1 本地实现已开始。
 - [ ] 验收 commit、工作树指纹、Core 版本和 Mac 二进制 hash 已记录。
 - [ ] Mac/Core recorder 在真人测试前均为 ready。
-- [ ] 测试数据全部为合成数据。
-- [ ] 本机 Xcode license 已接受；否则 Swift 构建和真人 Mac 验收不得标记通过。
+- [x] 当前 Phase 1 自动化测试数据全部为合成数据。
+- [x] 本机 Xcode license 已接受；检查 run `8dd35fde-dede-40ec-bd50-c75d1e71f1af`。
 - [ ] 恢复测试使用隔离数据库，不覆盖现有个人数据。
+
+### 2.1 Phase 1 本地实现证据（2026-09-16—17）
+
+- 分支 `feat/1d-phase1-context` 基于已批准规划提交 `c23fd44`；当前改动未提交、未推送、
+  未部署。
+- 隔离 PostgreSQL 环境下 `pnpm check:ci` 通过：生成一致、Biome、全仓构建与类型检查
+  通过，179/179 测试通过且无跳过。最终 run
+  `8ac31b7c-a8b8-4844-9d7d-0941aba29674`，测试子 run
+  `f80aed68-1962-44e7-bd5b-13c6d531601f`。
+- Compose 配置通过，确认文字与视觉模型均为 `deepseek-flash`，checkpoint 开关默认开启。
+  run `540d6cd1-e2f2-4a2e-a4b1-37010c438e6a`。
+- 聚焦 run `dbf660c7-8029-4a01-94a9-6cbffe157829` 覆盖统一装配、30 分钟 epoch、
+  完整逻辑轮次、Pipeline 每轮装配、Qwen 20 轮边界、checkpoint revision、并发交错
+  边界和超大 Context 截断；幂等重试回归见
+  `2f3f7246-b76c-49e6-9820-8c29bbe9c45f`。此前夹具错误失败
+  `22fab72b-4762-43cb-bcc4-a8b9be5142b1` 已保留，修复后
+  `03661241-0302-4561-8f8d-9dce946cf750` 通过。
+- PostgreSQL 集成用例覆盖并发轮次、checkpoint 信封加密和 deletion revision，run
+  `c9c65a7d-8625-42d1-a6a0-2a2a38e08ceb`。空库迁移 `0001 → 0002` 为
+  `98307e4a-d5bd-49f6-a3b3-c8999adbb090`；已有 `0001` 数据库升级 `0002` 为
+  `fc8974de-5c87-4d84-a098-6a127d368182`；数据库重启后迁移和 checkpoint 表仍存在，
+  run `f3a854dc-8e77-44c0-a8f3-c6a44613b747`。
+- 迁移命令的失败尝试 `00a75598-5847-4d97-b863-0a7ff6ce13fa`、
+  `43a9fc0d-8987-429e-b268-16b2a5f2beb1`、`0fde83d0-e91e-4872-be5c-6ba2e256d21f`
+  和 `20d7d18f-9b0a-4210-9781-c477afe84d67` 均保留；前两次调用错过 workspace `tsx`，
+  后两次使用了会随 `pnpm --filter` 改变的相对迁移路径，均由上述最终成功记录取代。
+- Xcode license 接受后，普通 Agent 沙箱中的首次 Mac 测试与 App 并行构建
+  `a971e6fd-ae39-469c-a619-540fbf3c8448`、`e141ed63-5969-4371-960d-ad187edc0d0b`
+  因 SwiftPM 插件子沙箱和共享 `.build` 互斥失败；后续使用仓库已有
+  `VIOLET_SWIFTPM_DISABLE_SANDBOX=1` 串行验证。
+- 首次解除 SwiftPM 子沙箱后的 Mac 测试发现 Xcode 27 下已打开证据文件被删除后仍可写
+  inode，run `2fe673d2-0261-4b11-866a-23bb8dded295`。recorder 改为同时核对路径和
+  打开文件的 device/inode 后，Mac 95/95 通过，run
+  `fa30841c-4b85-4165-9d3c-11f74c3875fc`。
+- Mac App 构建和严格签名通过，run `acb92c3d-54db-4918-8513-aaeb937b5ac7`；
+  二进制 SHA-256 为
+  `6e4094325a89788a4d956e8e32ad299ef7703411678aefb8e1aefa230ee1c1ef`，验证 run
+  `df0a152c-d70c-4c99-a28f-023d7dce45a1`。
+- DeepSeek-V4.1-Flash 小型真实模型验收使用 3 组完全合成的 24 轮长对话，每组压缩
+  前 20 个完整轮次、保留最近 4 轮；三份 checkpoint 均保留当前事实、纠正关系、期限、
+  决策、未完成事项和来源 request ID，且只把不可信指令记录为拒绝/未采纳，没有执行
+  注入或补造事实。模型调用 run `2b428248-c615-4f6e-b9ae-c105a5d92432` 首次因规则把
+  “提及并拒绝恶意标记”误判为失败；没有追加付费调用，离线修正规则后 3/3 通过，run
+  `6c75ddef-2520-4829-85e3-2afad43aab04`。
+- 真实模型验收硬限制为单次输入最多 100,000 tokens、checkpoint 输出最多 1,024
+  tokens、最多 3 个逻辑调用；按峰值价格和每次最多 3 次供应商尝试计算，预检最坏上界
+  为 2.248474 元。三次成功调用按实际 usage 和峰值价格计算的费用上界为 0.117919 元；
+  DeepSeek 余额接口调用前后均显示 8.83 元。余额检查 run
+  `0b8d88bc-c7a2-46ec-94ba-d9d110db1354`。
+- checkpoint 的 `max_tokens = 1024` 和请求级显式 `thinking.disabled` 已加入模型合同，
+  并覆盖普通对话默认开启思考的 gateway 配置；无网络参数测试与装配测试通过，run
+  `fb06b79d-ee89-4bac-9103-2ac1d01e338d`。
+- Phase 1 代码审查发现的四个 P1 已修复：checkpoint 输入按自身输出预算分批压缩、
+  DeepSeek 非 `stop` 终止不再落库、晚到最终转写不会产生无 epoch 助手事件、checkpoint
+  正文降为不可信历史消息。最终聚焦回归 42/42 通过，run
+  `44009010-3766-4dc0-a3b4-79c4a99338bd`。
+- 修复后的隔离 PostgreSQL `pnpm check:ci` 最终 183/183 通过且无跳过，run
+  `d46e8f10-76ee-4710-a4b9-c518fd8651a6`，测试子 run
+  `5a4f510a-d92a-4d49-9a77-4535ade89d30`。此前未设置测试数据库 URL 的预检 run
+  `7a87bd50-2844-4c8f-8604-28e03221685a` 为 182 通过、1 跳过，记录保留。
+- 既有三组真实 DeepSeek checkpoint 结果经更新后的离线规则复核仍为 3/3 通过，run
+  `cefb0441-4da9-46cc-b7f7-a8d3a04e5577`；本次未新增付费模型调用。
 
 ## 3. P0：事实与来源
 
@@ -36,21 +98,23 @@
 
 ## 4. P0：上下文
 
-- [ ] 文字和语音使用同一个 `ContextAssembler`。
-- [ ] 切换文字/语音不会结束内部 epoch。
-- [ ] 连续 29 分 59 秒无用户输入仍延续；30 分钟后新输入开启新 epoch。
-- [ ] Core 重启后开启新 epoch。
-- [ ] 助手输出、心跳和无效请求不会延长 epoch。
-- [ ] epoch 不出现在 UI 或助手措辞中。
-- [ ] 模型预算预留最大输出和 4,096 tokens 安全余量。
-- [ ] 未声明最大输出时按 16,384 tokens 预留。
-- [ ] 压缩保留最近 20,000 tokens 的完整轮次。
-- [ ] 每个 epoch 只有一个有效 checkpoint。
-- [ ] 来源删除后旧 checkpoint 使用次数为 0。
-- [ ] 第二次压缩仍失败时明确报错，没有半轮截断。
-- [ ] checkpoint 只使用当前文字模型，来源或 deletion revision 变化时不提交。
-- [ ] Qwen `max_history_turns` 保持 20。
-- [ ] Release 1C 的视觉新鲜度、取消和隐私行为无回归。
+- [x] 文字和语音使用同一个 `ContextAssembler`。
+- [x] 切换文字/语音不会结束内部 epoch。
+- [x] 连续 29 分 59 秒无用户输入仍延续；30 分钟后新输入开启新 epoch。
+- [x] 已绑定旧 epoch 的长连接跨过 30 分钟边界后，不把新输入发送给持有旧历史的
+  Realtime 供应商；客户端重连后进入新 epoch。
+- [x] Core 重启后开启新 epoch。
+- [x] 助手输出、心跳和无效请求不会延长 epoch。
+- [x] epoch 不出现在 UI 或助手措辞中。
+- [x] 模型预算预留最大输出和 4,096 tokens 安全余量。
+- [x] 未声明最大输出时按 16,384 tokens 预留。
+- [x] 压缩保留最近 20,000 tokens 的完整轮次。
+- [x] 每个 epoch 只有一个有效 checkpoint。
+- [x] 来源删除后旧 checkpoint 使用次数为 0。
+- [x] 第二次压缩仍失败时明确报错，没有半轮截断。
+- [x] checkpoint 只使用当前文字模型，来源或 deletion revision 变化时不提交。
+- [x] Qwen `max_history_turns` 保持 20。
+- [x] Release 1C 的视觉新鲜度、取消和隐私行为无回归。
 
 ## 5. P0：写入和隐私
 
@@ -153,7 +217,8 @@ docker compose -f infra/compose/compose.yaml config
 
 另有独立记录证明：
 
-- [ ] `0001 → 0002 → 0003 → 0004` 和空库迁移均通过。
+- [ ] `0001 → 0002 → 0003 → 0004` 和空库迁移均通过。当前 Phase 1 已验证空库
+  `0001 → 0002` 及已有 `0001 → 0002`；`0003/0004` 尚未实现。
 - [ ] PostgreSQL 并发、回滚、重启恢复和删除竞态通过。
 - [ ] OpenAPI 生成前后工作树一致。
 - [ ] backup 旧/新格式、TOS 清理和官方恢复脚本通过。

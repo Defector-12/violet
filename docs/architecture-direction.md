@@ -380,8 +380,11 @@ Violet 只能通过只读诊断 Port 查询与当前目标相关的脱敏证据�
 - 火山引擎 TOS 私有普通桶，通过 S3 兼容 Port 接入；1A 用于加密备份，1C 起用于经过授权和信封加密的截图与附件。
 - 隔离执行 Worker 与任务沙箱属于后续 Release 1E，目前未实现。
 - Devbox 上 OpenTelemetry Collector 和 Grafana LGTM。
-- Release 1A 文字模型使用 DeepSeek OpenAI 兼容 API，模型为 `deepseek-v4-flash`；MCP 和开发 Agent 后续按需接入。
-- Release 1C 视觉理解使用独立的 `ContextUnderstandingPort`，首个 Adapter 为 DeepSeek OpenAI 兼容模型 `deepseek-v4-flash-vision-exp`。它只解析经过 Mac 本地门禁的图片证据，不替代文字模型或 Qwen 实时语音，并可由其他视觉 Adapter 显式替换。
+- 文字模型使用 DeepSeek OpenAI 兼容 API，当前源码默认模型为
+  `deepseek-flash`（DeepSeek-V4.1-Flash）；MCP 和开发 Agent 后续按需接入。
+- Release 1C 视觉理解使用独立的 `ContextUnderstandingPort`，当前 DeepSeek Adapter
+  同样使用具备原生视觉能力的 `deepseek-flash`。它只解析经过 Mac 本地门禁的图片证据，
+  不替代文字模型或 Qwen 实时语音，并可由其他视觉 Adapter 显式替换。
 
 Core、数据库、Worker、观测系统和沙箱即使同机部署，也必须分进程、分网络、分权限。第一阶段暂不引入多用户体系、Kubernetes、独立消息队列、独立向量数据库和复杂微服务。
 
@@ -433,7 +436,9 @@ Devbox
 
 ### 14.3 DeepSeek 边界
 
-- Release 1A 使用 OpenAI 兼容入口 `https://api.deepseek.com` 和 `deepseek-v4-flash`，通过模型 Port/Adapter 接入。
+- 当前使用 OpenAI 兼容入口 `https://api.deepseek.com` 和
+  `deepseek-flash`（DeepSeek-V4.1-Flash），通过模型 Port/Adapter 接入；已退役的
+  `deepseek-v4-flash` 与 `deepseek-v4-flash-vision-exp` 不再作为配置默认值。
 - DeepSeek 是当前文字认知适配器，不是 Violet 的固定大脑。后续实时语音会话可以继续通过 Pipeline 使用 DeepSeek，也可以由经过评估的端到端实时模型完成理解、推理和语音输出。
 - 用户明确允许真实个人记忆进入该模型 API；绝对秘密始终禁止上传，受控敏感信息仍只在当前对象、目的和会话的临时授权范围内处理。
 - 思考模式可以启用，但 `reasoning_content` 不写入事件账本、记忆、日志或 Trace；持久化范围仅包含用户输入、最终回复和脱敏用量元数据。
@@ -463,7 +468,8 @@ Devbox
 - 云端核心与 Worker：Node.js、TypeScript，前后端通过版本化 API 和事件协议分离。
 - 协议：JSON Schema 2020-12 是数据和事件结构的唯一事实源；OpenAPI 3.1 引用这些 Schema 描述 HTTP API，并生成 TypeScript 与 Swift SDK；实时语音使用同一 Schema 体系定义版本化 `RealtimeSession` 双向事件。
 - 数据：PostgreSQL、`pgvector`、通过 S3 Port 接入的火山引擎 TOS。
-- Release 1A 文字模型：DeepSeek `deepseek-v4-flash`，通过 OpenAI 兼容 Adapter 接入。
+- 文字与视觉模型：DeepSeek `deepseek-flash`（DeepSeek-V4.1-Flash），通过 OpenAI
+  兼容 Adapter 接入。
 - 可观测：OpenTelemetry Collector 与 Grafana LGTM。
 - 部署：Docker Compose 起步，Devbox 作为当前环境。
 

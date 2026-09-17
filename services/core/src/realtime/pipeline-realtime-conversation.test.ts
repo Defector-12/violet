@@ -181,6 +181,67 @@ describe("PipelineRealtimeConversationPort", () => {
     await conversation.close();
   });
 
+  it("uses the shared context assembler for every text-model response", async () => {
+    const asr = new FakeTransport([jsonEvent("task-started", "asr-task")]);
+    const tts = new FakeTransport([
+      jsonEvent("task-started", "tts-task"),
+      { data: Uint8Array.from([1]), type: "binary" },
+      jsonEvent("task-finished", "tts-task"),
+    ]);
+    const model = new StreamingModelGateway();
+    const assemblyRequests: ModelRequest[] = [];
+    const generatedIds = ["asr-task", "response-1", "tts-task"];
+    const port = new PipelineRealtimeConversationPort({
+      apiKey: "test-dashscope-key",
+      asrModel: "paraformer-realtime-v2",
+      async assembleContext(input) {
+        const request = {
+          messages: [
+            { content: "Shared instructions", role: "system" as const },
+            input.currentMessage,
+          ],
+          requestId: input.requestId,
+        };
+        assemblyRequests.push(request);
+        return request.messages;
+      },
+      createAsrTransport: () => asr,
+      createTtsTransport: () => tts,
+      generateId: () => generatedIds.shift() ?? "unexpected-id",
+      modelGateway: model,
+      ttsModel: "cosyvoice-v3-flash",
+      voice: "longanyang",
+      workspaceId: "ws-testworkspace",
+    });
+    const conversation = await port.open({
+      ...configuration(),
+      history: [
+        { content: "Legacy fixed history", role: "user" },
+        { content: "Legacy fixed answer", role: "assistant" },
+      ],
+    });
+    const outputs = take(conversation.outputs(), 4);
+
+    await conversation.send({ text: "Current turn", turnId: "turn-1", type: "text" });
+    await outputs;
+
+    expect(assemblyRequests).toEqual([
+      {
+        messages: [
+          { content: "Shared instructions", role: "system" },
+          { content: "Current turn", role: "user" },
+        ],
+        requestId: "turn-1",
+      },
+    ]);
+    expect(model.requests[0]?.messages).toEqual(assemblyRequests[0]?.messages);
+    expect(model.requests[0]?.messages).not.toContainEqual({
+      content: "Legacy fixed history",
+      role: "user",
+    });
+    await conversation.close();
+  });
+
   it("cancels the active model and CosyVoice task", async () => {
     const asr = new FakeTransport([jsonEvent("task-started", "asr-task")]);
     const tts = new FakeTransport([jsonEvent("task-started", "tts-task")]);

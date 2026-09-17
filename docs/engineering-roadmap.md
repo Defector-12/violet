@@ -104,7 +104,9 @@ Violet/
   - Policy
 - 建立 PostgreSQL 迁移、事件表、身份表和最小对话存储。
 - 对话、事件和身份内容在写入 PostgreSQL 前使用应用层信封加密。
-- 建立模型供应商 Port；永久保留确定性测试适配器，并接入用户选择和授权的 DeepSeek `deepseek-v4-flash` 文字模型适配器。供应商不可用时明确失败，不自动切换。
+- 建立模型供应商 Port；永久保留确定性测试适配器，并接入用户选择和授权的 DeepSeek
+  `deepseek-flash`（DeepSeek-V4.1-Flash）文字与视觉模型适配器。供应商不可用时明确
+  失败，不自动切换。
 - 建立 Docker Compose：Core、PostgreSQL、OpenTelemetry Collector 和 Grafana LGTM。
 - 在 Devbox 部署，同一份 Compose 可在空白 Linux 环境启动。
 - Core 监听容器内部接口，但 Devbox 宿主机只在 `127.0.0.1` 发布端口，Mac 只通过 SSH 隧道访问；PostgreSQL 只存在于容器内部网络。

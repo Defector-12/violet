@@ -22,6 +22,11 @@ const { InMemoryContextSessionRepository } = await load(
 );
 const { InMemoryConversationLedger } = await load("conversation/in-memory-conversation-ledger.js");
 const { ChatService } = await load("conversation/chat-service.js");
+const { ContextAssembler } = await load("conversation/context-assembler.js");
+const { ContextEpochManager } = await load("conversation/context-epoch-manager.js");
+const { InMemoryContextCheckpointRepository } = await load(
+  "conversation/in-memory-context-checkpoint-repository.js",
+);
 const { DeterministicModelGateway } = await load("model/deterministic-model-gateway.js");
 const { QwenAudioRealtimeConversationPort } = await load(
   "realtime/qwen-audio-realtime-conversation.js",
@@ -35,6 +40,13 @@ const directory = await createRun(
 );
 const manifest = JSON.parse(await readFile(join(directory, "manifest.json"), "utf8"));
 const ledger = new InMemoryConversationLedger();
+const modelGateway = new DeterministicModelGateway();
+const contextAssembler = new ContextAssembler({
+  checkpoints: new InMemoryContextCheckpointRepository(),
+  ledger,
+  model: modelGateway,
+});
+const contextEpochManager = new ContextEpochManager({ generateId: randomUUID });
 const token = randomUUID();
 const store = new TestTraceStore(join(directory, "server"));
 let visionCalls = 0;
@@ -102,15 +114,19 @@ const app = buildCoreApp({
     expiresAt: new Date(Date.now() + 60_000),
   }),
   chatService: new ChatService({
+    contextAssembler,
+    epochManager: contextEpochManager,
     generateId: randomUUID,
     ledger,
-    modelGateway: new DeterministicModelGateway(),
+    modelGateway,
   }),
   conversationEndIntent: {
     async shouldEnd() {
       return false;
     },
   },
+  contextAssembler,
+  contextEpochManager,
   contextService: new ContextService({
     artifactStore: new InMemoryContextArtifactStore(),
     repository: new InMemoryContextSessionRepository(),

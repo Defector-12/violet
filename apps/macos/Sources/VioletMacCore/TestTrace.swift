@@ -18,6 +18,7 @@ public final class TestTraceRecorder: @unchecked Sendable {
   private let recordingId = UUID().uuidString.lowercased()
   private let lock = NSLock()
   private let file: FileHandle
+  private let fileURL: URL
   private let coreFile: URL
   private var sequence = 0
   private var imageBytes = 0
@@ -60,6 +61,7 @@ public final class TestTraceRecorder: @unchecked Sendable {
     let url = directory.appendingPathComponent("mac-\(recordingId).ndjson")
     let fd = Darwin.open(url.path, O_WRONLY | O_APPEND | O_CREAT | O_NOFOLLOW | O_EXCL, 0o600)
     guard fd >= 0 else { throw TestTraceFailure() }
+    fileURL = url
     file = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
     if let previous = try? String(contentsOf: coreFile, encoding: .utf8) {
       for line in previous.split(separator: "\n") { collected.insert(String(line)) }
@@ -135,8 +137,12 @@ public final class TestTraceRecorder: @unchecked Sendable {
     guard flock(fd, LOCK_EX) == 0 else { throw TestTraceFailure() }
     defer { _ = flock(fd, LOCK_UN) }
     var stat = Darwin.stat()
+    var pathStat = Darwin.stat()
     guard fstat(fd, &stat) == 0, stat.st_nlink > 0,
-      stat.st_mode & S_IFMT == S_IFREG, fchmod(fd, 0o600) == 0
+      lstat(fileURL.path, &pathStat) == 0,
+      stat.st_dev == pathStat.st_dev, stat.st_ino == pathStat.st_ino,
+      stat.st_mode & S_IFMT == S_IFREG, pathStat.st_mode & S_IFMT == S_IFREG,
+      fchmod(fd, 0o600) == 0
     else { throw TestTraceFailure() }
     let limit = 16 * 1024 * 1024
     guard stat.st_size + Int64(data.count) <= limit else { throw TestTraceFailure() }

@@ -1,5 +1,11 @@
 import type { EncryptedEnvelope, EnvelopeCipher } from "@violet/crypto";
-import type { AppendLedgerMessage, ConversationLedger, LedgerMessage } from "@violet/domain";
+import type {
+  AppendLedgerMessage,
+  ConversationLedger,
+  ConversationTurn,
+  LedgerMessage,
+  ListConversationTurns,
+} from "@violet/domain";
 import type { Pool, PoolClient } from "pg";
 
 interface EventRow {
@@ -7,6 +13,7 @@ interface EventRow {
   readonly ciphertext: Buffer;
   readonly content_nonce: Buffer;
   readonly content_tag: Buffer;
+  readonly context_epoch_id: string | null;
   readonly id: string;
   readonly key_nonce: Buffer;
   readonly key_tag: Buffer;
@@ -41,10 +48,38 @@ export class PostgresConversationLedger implements ConversationLedger {
     try {
       await client.query("BEGIN");
       const instanceId = await this.#lockInstance(client, input.occurredAt);
-      const existing = await this.#findByRequest(client, instanceId, input.requestId, input.role);
+      const existing = await this.#findByRequestInTransaction(
+        client,
+        instanceId,
+        input.requestId,
+        input.role,
+      );
       if (existing) {
         await client.query("COMMIT");
         return this.#toMessage(existing);
+      }
+      if (input.contextEpoch) {
+        await client.query(
+          `
+            INSERT INTO context_epochs (
+              instance_id, id, started_at, last_user_input_at
+            )
+            VALUES ($1, $2, $3, $4)
+            ON CONFLICT (instance_id, id) DO UPDATE
+            SET last_user_input_at = CASE
+              WHEN $5 = 'user'
+                THEN GREATEST(context_epochs.last_user_input_at, EXCLUDED.last_user_input_at)
+              ELSE context_epochs.last_user_input_at
+            END
+          `,
+          [
+            instanceId,
+            input.contextEpoch.id,
+            input.contextEpoch.startedAt,
+            input.role === "user" ? input.occurredAt : input.contextEpoch.startedAt,
+            input.role,
+          ],
+        );
       }
 
       const sequenceResult = await client.query<{ next_event_sequence: string }>(
@@ -65,14 +100,15 @@ export class PostgresConversationLedger implements ConversationLedger {
       const result = await client.query<EventRow>(
         `
           INSERT INTO conversation_events (
-            id, instance_id, request_id, sequence, role, algorithm, key_version,
+            id, instance_id, request_id, sequence, role, context_epoch_id,
+            algorithm, key_version,
             ciphertext, content_nonce, content_tag, wrapped_key, key_nonce, key_tag,
             occurred_at
           )
           VALUES (
-            $1, $2, $3, $4, $5, $6, $7,
-            $8, $9, $10, $11, $12, $13,
-            $14
+            $1, $2, $3, $4, $5, $6, $7, $8,
+            $9, $10, $11, $12, $13, $14,
+            $15
           )
           RETURNING *
         `,
@@ -82,6 +118,7 @@ export class PostgresConversationLedger implements ConversationLedger {
           input.requestId,
           sequence,
           input.role,
+          input.contextEpoch?.id ?? null,
           envelope.algorithm,
           envelope.keyVersion,
           envelope.ciphertext,
@@ -120,7 +157,46 @@ export class PostgresConversationLedger implements ConversationLedger {
     return result.rows.map((row) => this.#toMessage(row));
   }
 
-  async #findByRequest(
+  async findByRequest(
+    requestId: string,
+    role: "assistant" | "user",
+  ): Promise<LedgerMessage | null> {
+    const result = await this.#pool.query<EventRow>(
+      `
+        SELECT events.*
+        FROM conversation_events AS events
+        JOIN violet_instances AS instance ON instance.id = events.instance_id
+        WHERE instance.singleton = true
+          AND events.request_id = $1
+          AND events.role = $2
+      `,
+      [requestId, role],
+    );
+    const row = result.rows[0];
+    return row ? this.#toMessage(row) : null;
+  }
+
+  async listTurns(options: ListConversationTurns): Promise<readonly ConversationTurn[]> {
+    const result = await this.#pool.query<EventRow>(
+      `
+        SELECT events.*
+        FROM conversation_events AS events
+        JOIN violet_instances AS instance ON instance.id = events.instance_id
+        WHERE instance.singleton = true
+          AND events.context_epoch_id = $1
+          AND ($2::bigint IS NULL OR events.sequence > $2)
+          AND ($3::bigint IS NULL OR events.sequence < $3)
+        ORDER BY events.sequence
+      `,
+      [options.contextEpochId, options.afterSequence ?? null, options.beforeSequence ?? null],
+    );
+    return groupTurns(
+      result.rows.map((row) => this.#toMessage(row)),
+      options.completeOnly ?? false,
+    );
+  }
+
+  async #findByRequestInTransaction(
     client: PoolClient,
     instanceId: string,
     requestId: string,
@@ -171,6 +247,7 @@ export class PostgresConversationLedger implements ConversationLedger {
     };
     return {
       content: this.#cipher.decrypt(envelope).toString("utf8"),
+      ...(row.context_epoch_id ? { contextEpochId: row.context_epoch_id } : {}),
       id: row.id,
       occurredAt: row.occurred_at,
       requestId: row.request_id,
@@ -178,4 +255,30 @@ export class PostgresConversationLedger implements ConversationLedger {
       sequence: Number(row.sequence),
     };
   }
+}
+
+function groupTurns(
+  messages: readonly LedgerMessage[],
+  completeOnly: boolean,
+): readonly ConversationTurn[] {
+  const grouped = new Map<string, LedgerMessage[]>();
+  for (const message of messages) {
+    const turn = grouped.get(message.requestId) ?? [];
+    turn.push(message);
+    grouped.set(message.requestId, turn);
+  }
+
+  return [...grouped.entries()]
+    .map(
+      ([requestId, turnMessages]): ConversationTurn => ({
+        completed:
+          turnMessages.some((message) => message.role === "user") &&
+          turnMessages.some((message) => message.role === "assistant"),
+        messages: turnMessages,
+        requestId,
+        startSequence: turnMessages[0]?.sequence ?? 0,
+        throughSequence: turnMessages.at(-1)?.sequence ?? 0,
+      }),
+    )
+    .filter((turn) => !completeOnly || turn.completed);
 }

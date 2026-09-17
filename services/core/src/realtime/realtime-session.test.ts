@@ -5,6 +5,7 @@ import { ContextService } from "../context/context-service.js";
 import { DeterministicContextUnderstandingPort } from "../context/deterministic-context-understanding.js";
 import { InMemoryContextArtifactStore } from "../context/in-memory-context-artifact-store.js";
 import { InMemoryContextSessionRepository } from "../context/in-memory-context-session-repository.js";
+import { ContextEpochManager } from "../conversation/context-epoch-manager.js";
 import { InMemoryConversationLedger } from "../conversation/in-memory-conversation-ledger.js";
 import type { ConversationEndIntentPort } from "./conversation-end-intent.js";
 import { DeterministicRealtimeConversationPort } from "./deterministic-realtime-conversation.js";
@@ -318,18 +319,24 @@ describe("RealtimeSession", () => {
   it("seeds a new realtime runtime with recent ledger history", async () => {
     const sessionId = randomUUID();
     const ledger = new InMemoryConversationLedger();
+    const now = new Date("2026-08-22T00:00:02.000Z");
+    const epochManager = new ContextEpochManager({ generateId: randomUUID });
+    const contextEpoch = epochManager.acceptUserInput(new Date("2026-08-22T00:00:00.000Z"));
+    const previousRequestId = randomUUID();
     await ledger.append({
       content: "Earlier question",
+      contextEpoch,
       id: randomUUID(),
       occurredAt: new Date("2026-08-22T00:00:00.000Z"),
-      requestId: randomUUID(),
+      requestId: previousRequestId,
       role: "user",
     });
     await ledger.append({
       content: "Earlier answer",
+      contextEpoch,
       id: randomUUID(),
       occurredAt: new Date("2026-08-22T00:00:01.000Z"),
-      requestId: randomUUID(),
+      requestId: previousRequestId,
       role: "assistant",
     });
     let observedConfiguration: Parameters<DeterministicRealtimeConversationPort["open"]>[0] | null =
@@ -346,8 +353,10 @@ describe("RealtimeSession", () => {
         },
       },
       contextService: createContextService(),
+      epochManager,
       generateId: randomUUID,
       ledger,
+      now: () => now,
     });
 
     await collect(
@@ -372,6 +381,138 @@ describe("RealtimeSession", () => {
       ],
       turnDetection: "smart_turn",
     });
+  });
+
+  it("closes a realtime connection before stale provider history crosses an epoch boundary", async () => {
+    const sessionId = randomUUID();
+    let now = new Date("2026-09-16T00:00:00.000Z");
+    const ledger = new InMemoryConversationLedger();
+    const session = new RealtimeSession({
+      conversationEndIntent: neverEndsConversation,
+      conversationPort: new DeterministicRealtimeConversationPort({ generateId: randomUUID }),
+      contextService: createContextService(),
+      epochManager: new ContextEpochManager({ generateId: randomUUID }),
+      generateId: randomUUID,
+      ledger,
+      now: () => now,
+    });
+    await collect(
+      session.handle({
+        configuration: {
+          inputModalities: ["text"],
+          outputModalities: ["text"],
+          protocolVersion: "1",
+        },
+        eventId: randomUUID(),
+        sequence: 1,
+        sessionId,
+        type: "session.configure",
+      }),
+    );
+    await collect(
+      session.handle({
+        eventId: randomUUID(),
+        sequence: 2,
+        sessionId,
+        text: "First turn",
+        turnId: randomUUID(),
+        type: "input.text",
+      }),
+    );
+    now = new Date(now.getTime() + 30 * 60_000);
+
+    const expired = await collect(
+      session.handle({
+        eventId: randomUUID(),
+        sequence: 3,
+        sessionId,
+        text: "Must not reach the old provider context",
+        turnId: randomUUID(),
+        type: "input.text",
+      }),
+    );
+
+    expect(expired).toMatchObject([
+      {
+        code: "CONTEXT_EPOCH_EXPIRED",
+        type: "error",
+      },
+    ]);
+    expect(session.closed).toBe(true);
+    await expect(ledger.list()).resolves.toHaveLength(1);
+  });
+
+  it("suppresses a final audio turn that crosses the epoch boundary before transcription", async () => {
+    const sessionId = randomUUID();
+    const turnId = randomUUID();
+    let now = new Date("2026-09-16T00:00:00.000Z");
+    const ledger = new InMemoryConversationLedger();
+    const epochManager = new ContextEpochManager({ generateId: randomUUID });
+    epochManager.acceptUserInput(now);
+    const session = new RealtimeSession({
+      conversationEndIntent: neverEndsConversation,
+      conversationPort: {
+        async open() {
+          return {
+            capabilities: {
+              inputModalities: ["audio"],
+              interruption: true,
+              outputModalities: ["audio", "text"],
+              runtimeKind: "integrated",
+              transcription: true,
+              turnDetection: "smart_turn",
+              voiceKind: "preset",
+            } as const,
+            async close() {},
+            async *outputs() {
+              yield {
+                final: true,
+                text: "Late final transcript",
+                turnId,
+                type: "transcript",
+              } as const;
+            },
+            async send() {},
+          };
+        },
+      },
+      contextService: createContextService(),
+      epochManager,
+      generateId: randomUUID,
+      ledger,
+      now: () => now,
+    });
+    await collect(
+      session.handle({
+        configuration: {
+          inputModalities: ["audio"],
+          outputModalities: ["audio", "text"],
+          protocolVersion: "1",
+          turnDetection: "smart_turn",
+        },
+        eventId: randomUUID(),
+        sequence: 1,
+        sessionId,
+        type: "session.configure",
+      }),
+    );
+    now = new Date(now.getTime() + 30 * 60_000);
+
+    const outputs = await collect(session.outputs());
+
+    expect(outputs).toMatchObject([
+      {
+        code: "CONTEXT_EPOCH_EXPIRED",
+        type: "error",
+      },
+    ]);
+    expect(session.closed).toBe(true);
+    await expect(ledger.list()).resolves.toMatchObject([
+      {
+        content: "Late final transcript",
+        role: "user",
+      },
+    ]);
   });
 
   it("resolves an active context before opening the realtime provider", async () => {
@@ -441,8 +582,8 @@ describe("RealtimeSession", () => {
     );
 
     expect(observedConfiguration).toMatchObject({
-      contextEvidence: expect.stringContaining("Current selected evidence"),
       contextLookupAvailable: true,
+      instructions: expect.stringContaining("Current selected evidence"),
     });
   });
 
@@ -504,7 +645,7 @@ describe("RealtimeSession", () => {
     );
 
     expect(observedConfiguration).toMatchObject({
-      contextEvidence: expect.stringContaining('"status":"unavailable"'),
+      instructions: expect.stringContaining('"status":"unavailable"'),
     });
     expect(JSON.stringify(observedConfiguration)).not.toContain("Maybe the label is EMBER.");
   });
@@ -910,6 +1051,104 @@ describe("RealtimeSession", () => {
       "response.completed",
     ]);
     expect(receivedInputs).toEqual([]);
+  });
+
+  it("waits for a late final transcript before persisting the assistant turn", async () => {
+    const sessionId = randomUUID();
+    const turnId = randomUUID();
+    const responseId = randomUUID();
+    const ledger = new InMemoryConversationLedger();
+    const session = new RealtimeSession({
+      conversationEndIntent: neverEndsConversation,
+      contextService: createContextService(),
+      conversationPort: {
+        async open() {
+          return {
+            capabilities: {
+              inputModalities: ["audio"],
+              interruption: true,
+              outputModalities: ["audio", "text"],
+              runtimeKind: "integrated",
+              transcription: true,
+              turnDetection: "smart_turn",
+              voiceKind: "preset",
+            },
+            async close() {},
+            async *outputs() {
+              yield { responseId, turnId, type: "response-started" } as const;
+              yield {
+                responseId,
+                text: "Short answer",
+                turnId,
+                type: "response-text",
+              } as const;
+              yield {
+                inputTokens: 1,
+                outputTokens: 1,
+                responseId,
+                turnId,
+                type: "response-completed",
+              } as const;
+              yield {
+                final: true,
+                text: "Late final transcript",
+                turnId,
+                type: "transcript",
+              } as const;
+            },
+            async send() {},
+          };
+        },
+      },
+      generateId: randomUUID,
+      ledger,
+    });
+    await collect(
+      session.handle({
+        configuration: {
+          inputModalities: ["audio"],
+          outputModalities: ["audio", "text"],
+          protocolVersion: "1",
+          turnDetection: "smart_turn",
+        },
+        eventId: randomUUID(),
+        sequence: 1,
+        sessionId,
+        type: "session.configure",
+      }),
+    );
+
+    const output = await collect(session.outputs());
+    const messages = await ledger.list();
+    const contextEpochId = messages[0]?.contextEpochId;
+
+    expect(contextEpochId).toBeDefined();
+    expect(output.map((event) => event.type)).toEqual([
+      "response.started",
+      "response.text",
+      "response.completed",
+      "input.transcript",
+    ]);
+    expect(messages).toMatchObject([
+      {
+        content: "Late final transcript",
+        contextEpochId,
+        requestId: turnId,
+        role: "user",
+      },
+      {
+        content: "Short answer",
+        contextEpochId,
+        requestId: turnId,
+        role: "assistant",
+      },
+    ]);
+    await expect(
+      ledger.listTurns({
+        completeOnly: true,
+        contextEpochId: contextEpochId ?? "",
+      }),
+    ).resolves.toHaveLength(1);
   });
 
   it("ignores a stale capture result after a newer speech turn starts", async () => {
