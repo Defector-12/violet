@@ -1,7 +1,7 @@
 # Release 1D：验收清单
 
-> 状态：Phase 1 第三轮审查发现的五项 P1 已在本地修复并通过回归，尚未提交、合入或
-> 重新部署；Phase 2/3 未开始。
+> 状态：Phase 1 第三轮审查修复已提交、复审、合入双主线并重新部署；Phase 2/3
+> 未开始。
 > 本文记录 Release 1D 的实际版本、失败、证据和剩余门禁。规格见
 > [最终规格](./release-1d-spec.md)，实施顺序见 [任务拆分](./release-1d-tasks.md)。
 
@@ -19,7 +19,7 @@
 
 - [x] 用户已批准 1D 规格和任务拆分（2026-09-16）；Phase 1 已完成三轮本地实现与审查。
 - [x] 已部署 Phase 1 版本的 commit、Core 版本和 Mac 二进制 hash 已记录。
-- [ ] Phase 1 第三轮修复的验收 commit、Core 版本和重新部署 hash 尚待生成。
+- [x] Phase 1 第三轮修复的验收 commit、Core 版本和重新部署 hash 已记录。
 - [ ] Mac/Core recorder 在真人测试前均为 ready。
 - [x] 当前 Phase 1 自动化测试数据全部为合成数据。
 - [x] 本机 Xcode license 已接受；检查 run `8dd35fde-dede-40ec-bd50-c75d1e71f1af`。
@@ -263,8 +263,28 @@
   `f15b6cae-9572-4d30-a6cb-7f3a5b49eb48` 为 Vitest 不支持 `--repeat` 的命令错误。
   对取消发送时序的替代 20 次循环为 20/20，通过 run
   `e213f5f1-cd3e-4bae-8cd4-4c014814fc7c`。
-- 本轮修改提交、复审并重新部署前，运行中的
-  `d311e1a-release-1d-phase1-final` 尚不包含修复，Phase 2 仍保持未开始。
+- 修复提交为 `472ea086deccf3a922061d40d8633dd9d4a9dd29`；Codebase MR
+  [!25](https://code.byted.org/user/violet/merge_requests/25) 合入
+  `main@a6389f6de14642e753748e019a65adad3efd20fa`，GitHub PR
+  [#8](https://github.com/Defector-12/violet/pull/8) 合入
+  `main@6f9f7a6686a39fa04759f9b8e2aad9f03b1a1d6a`；两个主线 tree 与修复提交 tree
+  均为 `7788f08f1ddc5994e998aa578ae7555b25c30b01`。
+- exact-main Core 构建通过，run `cf755f45-94be-4749-8bb3-e00c7437ffdc`。部署前加密
+  PostgreSQL 备份 run `22c29e97-31d8-4752-a55b-7a2a52dd64cb`，文件
+  `20260918T051419Z-c7c1a042-0494-41d3-b28b-c904427c9ab0.vltbk`，密文 SHA-256
+  `7642c8febd441b2a2b9faf60f3ebeca1fa83567502c151c2665cfda08ecffe6b`。
+- Core 部署 run `4d76ce5e-f36b-45c4-b5df-dbcb1f298ff1`：发布归档 SHA-256
+  `da8cca9abe211177178d360dd4c3a3bc9e1b91ca6c75e8dd6fd9fb781c9c400a`，运行镜像
+  `sha256:20edbc4e03ad7b4da53a4393874b404020a997452e24649371f5bef3b51abaa1`，
+  版本为 `a6389f6-release-1d-phase1-review3`。
+- 部署后健康、零重启、三项迁移、checkpoint 开关、模型、备份和回滚镜像验证通过，
+  run `747ca438-191e-4825-b1a8-669a61355d2b`；远端与本地 `dist` 清单 SHA-256
+  均为 `96639c78bcad2b68096696f5b333eb62c7351e6ce2b0d80595223045d6e393b8`。
+  首次验证仅因假定迁移名称排序而失败的 run
+  `b69031b0-2c78-4c27-aedd-4bf5e6eff329` 已保留。
+- Mac 源码和协议未变化，因此未重复构建或安装 App；现有 Mac 客户端经 SSH 隧道验证
+  Core 健康且认证状态 `ready`，run `791a1919-75dc-461c-8d37-e4e7a67d9a06`。
+  Phase 1 第三轮修复已重新放行，Phase 2 仍保持未开始。
 
 ## 3. P0：事实与来源
 
@@ -443,7 +463,8 @@ docker compose -f infra/compose/compose.yaml config
 - [ ] 实际 commit、构建、部署、失败和 run ID 已写回本文。
 - [x] Phase 1 两轮审查加固已提交、合入主线并重新部署，运行版本为
   `d311e1a-release-1d-phase1-final`。
-- [ ] Phase 1 第三轮审查修复尚待提交、复审并重新部署。
+- [x] Phase 1 第三轮审查修复已提交、复审、合入双主线并重新部署，运行版本为
+  `a6389f6-release-1d-phase1-review3`。
 - [ ] 用户明确批准后，生产自动记忆才开启。
 
 关闭自动提取、记忆注入或 checkpoint 可以回滚能力；任何回滚都不得降低
