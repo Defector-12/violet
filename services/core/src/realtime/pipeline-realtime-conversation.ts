@@ -331,7 +331,7 @@ class PipelineRealtimeConversation implements RealtimeConversation {
       }
     } catch (error) {
       if (!this.#closed) {
-        this.#outputQueue.push(pipelineErrorOutput(error, "ASR"));
+        this.#outputQueue.push(pipelineErrorOutput(error, "ASR", this.#currentTurnId ?? undefined));
       }
     }
   }
@@ -485,7 +485,7 @@ class PipelineRealtimeConversation implements RealtimeConversation {
     } catch (error) {
       if (!response.controller.signal.aborted && this.#activeResponse === response) {
         this.#activeResponse = null;
-        this.#outputQueue.push(pipelineErrorOutput(error, "RESPONSE"));
+        this.#outputQueue.push(pipelineErrorOutput(error, "RESPONSE", response.turnId));
       }
     } finally {
       response.ttsTransport?.close();
@@ -856,12 +856,14 @@ function providerTaskError(
 function pipelineErrorOutput(
   error: unknown,
   stage: string,
+  turnId?: string,
 ): Extract<RealtimeConversationOutput, { readonly type: "error" }> {
   if (error instanceof PipelineAdapterError) {
     return {
       code: error.code,
       message: error.message,
       retryable: error.retryable,
+      ...(turnId ? { turnId } : {}),
       type: "error",
     };
   }
@@ -869,6 +871,7 @@ function pipelineErrorOutput(
     code: `PIPELINE_${stage}_FAILED`,
     message: `The realtime pipeline ${stage.toLowerCase()} stage failed`,
     retryable: true,
+    ...(turnId ? { turnId } : {}),
     type: "error",
   };
 }

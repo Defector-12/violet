@@ -115,6 +115,8 @@ export type RealtimeConversationOutput =
       readonly code: string;
       readonly message: string;
       readonly retryable: boolean;
+      readonly terminal?: boolean;
+      readonly turnId?: string;
       readonly type: "error";
     }
   | {

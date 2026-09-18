@@ -72,6 +72,7 @@ describe("DeterministicRealtimeConversationPort", () => {
         code: "UNSUPPORTED_REALTIME_INPUT",
         message: "The deterministic realtime adapter accepts text input only",
         retryable: false,
+        turnId: "turn-1",
         type: "error",
       },
     ]);

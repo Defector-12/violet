@@ -224,6 +224,34 @@ describe("ContextAssembler", () => {
     expect(context.history.at(-1)?.content).toBe("Answer 21");
   });
 
+  it("rejects a checkpoint when a failed request is retried during save", async () => {
+    const ledger = new InMemoryConversationLedger();
+    await ledger.append({
+      content: "Question that will be retried",
+      contextEpoch: epoch,
+      id: "failed-user",
+      occurredAt: epoch.startedAt,
+      requestId: "failed-request",
+      role: "user",
+    });
+    await ledger.markRequestFailed("failed-request", epoch.id, epoch.startedAt);
+    for (let index = 1; index <= 21; index += 1) {
+      await appendTurn(ledger, index, `Question ${index}`, `Answer ${index}`);
+    }
+    const assembler = new ContextAssembler({
+      checkpoints: new ReopeningCheckpointRepository(ledger, "failed-request"),
+      ledger,
+      model: new CheckpointModel(),
+    });
+
+    await expect(
+      assembler.assemble({
+        contextEpochId: epoch.id,
+        maximumHistoryTurns: 20,
+      }),
+    ).rejects.toThrow("Conversation changed while the checkpoint was generated");
+  });
+
   it("rejects a persisted checkpoint whose watermark splits a logical turn", async () => {
     const ledger = new InMemoryConversationLedger();
     for (const [id, requestId, role, content] of [
@@ -579,6 +607,23 @@ class ChangingRevisionRepository implements ContextCheckpointRepository {
 
   async save() {
     return false;
+  }
+}
+
+class ReopeningCheckpointRepository extends InMemoryContextCheckpointRepository {
+  readonly #ledger: InMemoryConversationLedger;
+  readonly #requestId: string;
+
+  constructor(ledger: InMemoryConversationLedger, requestId: string) {
+    super();
+    this.#ledger = ledger;
+    this.#requestId = requestId;
+  }
+
+  override async save(checkpoint: Parameters<ContextCheckpointRepository["save"]>[0]) {
+    const saved = await super.save(checkpoint);
+    await this.#ledger.clearRequestFailure(this.#requestId);
+    return saved;
   }
 }
 

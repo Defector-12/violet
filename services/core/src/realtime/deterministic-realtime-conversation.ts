@@ -77,6 +77,7 @@ class DeterministicRealtimeConversation implements RealtimeConversation {
         code: "UNSUPPORTED_REALTIME_INPUT",
         message: "The deterministic realtime adapter accepts text input only",
         retryable: false,
+        ...("turnId" in input ? { turnId: input.turnId } : {}),
         type: "error",
       });
       return;
