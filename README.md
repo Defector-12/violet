@@ -3,8 +3,8 @@
 单用户私人智能体项目。当前可用入口为原生 macOS 菜单栏 App 和文字开发 CLI；
 云端 Core 负责对话、模型调用、加密事件与短时视觉上下文。
 
-Release 1A/1B/1C 已完成产品验收；当前运行版本为 Release 1C.2。
-长期记忆、持久任务、Worker 和浏览器扩展属于后续目标，不是现有能力。
+Release 1A/1B/1C 已完成产品验收；Release 1D Phase 1 已部署，第三轮审查修复正在
+本地收尾。长期记忆、持久任务、Worker 和浏览器扩展属于后续目标，不是现有能力。
 
 ## 开发
 
@@ -36,7 +36,8 @@ Mac 配置、权限、启动与一次性失败样本录制见 [Mac README](./app
 
 ## 文档入口
 
-- [当前部署与验收状态](./docs/release-1c-acceptance.md)：唯一维护动态版本与测试结果的位置。
+- [Release 1D 当前状态](./docs/release-1d-acceptance.md)：当前开发、部署与测试证据。
+- [Release 1C 验收](./docs/release-1c-acceptance.md)：视觉与 Natural Pointing 基线。
 - [Natural Pointing](./docs/natural-pointing-handoff.md)：当前实现合同与边界。
 - [历史记录](./docs/历史记录.md)：阶段变化，不代替当前健康状态。
 - [架构方向](./docs/architecture-direction.md)、[工程路线](./docs/engineering-roadmap.md)：

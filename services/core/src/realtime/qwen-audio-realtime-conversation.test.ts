@@ -480,6 +480,51 @@ describe("QwenAudioRealtimeConversationPort", () => {
     expect(transport.sent).toContainEqual({ type: "response.cancel" });
   });
 
+  it("binds a late transcription failure to its provider input item", async () => {
+    const transport = new FakeTransport([
+      { type: "session.created" },
+      { type: "session.updated" },
+      { item_id: "item-1", type: "input_audio_buffer.speech_started" },
+      { item_id: "item-1", type: "input_audio_buffer.speech_stopped" },
+      { item_id: "item-2", type: "input_audio_buffer.speech_started" },
+      {
+        error: {
+          code: "transcription_failed",
+          message: "First transcription failed.",
+          type: "invalid_request_error",
+        },
+        item_id: "item-1",
+        type: "conversation.item.input_audio_transcription.failed",
+      },
+    ]);
+    const generatedIds = ["turn-1", "turn-2"];
+    const port = new QwenAudioRealtimeConversationPort({
+      apiKey: "test-qwen-api-key",
+      createTransport: () => transport,
+      generateId: () => generatedIds.shift() ?? "unexpected-id",
+      model: "qwen-audio-3.0-realtime-plus",
+      voice: "longanqian",
+      workspaceId: "ws-jvh4fvlcktrjvtbj",
+    });
+    const conversation = await port.open({
+      ...configuration(),
+      turnDetection: "smart_turn",
+    });
+
+    expect(await take(conversation.outputs(), 4)).toEqual([
+      { turnId: "turn-1", type: "speech-started" },
+      { turnId: "turn-1", type: "speech-stopped" },
+      { turnId: "turn-2", type: "speech-started" },
+      {
+        code: "QWEN_TRANSCRIPTION_FAILED",
+        message: "First transcription failed.",
+        retryable: false,
+        turnId: "turn-1",
+        type: "error",
+      },
+    ]);
+  });
+
   it("binds delayed provider responses to the turn that requested them", async () => {
     const transport = new FakeTransport([
       { type: "session.created" },
@@ -516,6 +561,96 @@ describe("QwenAudioRealtimeConversationPort", () => {
       {
         responseId: "local-response-2",
         turnId: "turn-2",
+        type: "response-started",
+      },
+    ]);
+  });
+
+  it("binds a provider request error to only the failed pending turn", async () => {
+    const transport = new FakeTransport([
+      { type: "session.created" },
+      { type: "session.updated" },
+      {
+        error: {
+          code: "invalid_request_error",
+          message: "First response failed.",
+          param: "response.create",
+          type: "invalid_request_error",
+        },
+        type: "error",
+      },
+      {
+        response: { id: "resp-qwen-2", status: "in_progress" },
+        type: "response.created",
+      },
+    ]);
+    const port = new QwenAudioRealtimeConversationPort({
+      apiKey: "test-qwen-api-key",
+      createTransport: () => transport,
+      generateId: () => "local-response-2",
+      model: "qwen-audio-3.0-realtime-plus",
+      voice: "longanqian",
+      workspaceId: "ws-jvh4fvlcktrjvtbj",
+    });
+    const conversation = await port.open(configuration());
+    await conversation.send({ text: "First", turnId: "turn-1", type: "text" });
+    await conversation.send({ text: "Second", turnId: "turn-2", type: "text" });
+
+    expect(await take(conversation.outputs(), 2)).toEqual([
+      {
+        code: "QWEN_INVALID_REQUEST_ERROR",
+        message: "First response failed.",
+        retryable: false,
+        turnId: "turn-1",
+        type: "error",
+      },
+      {
+        responseId: "local-response-2",
+        turnId: "turn-2",
+        type: "response-started",
+      },
+    ]);
+  });
+
+  it("does not consume a pending response turn for an unrelated provider error", async () => {
+    const transport = new FakeTransport([
+      { type: "session.created" },
+      { type: "session.updated" },
+      {
+        error: {
+          code: "invalid_request_error",
+          message: "Audio append failed.",
+          param: "input_audio_buffer.append",
+          type: "invalid_request_error",
+        },
+        type: "error",
+      },
+      {
+        response: { id: "resp-qwen-1", status: "in_progress" },
+        type: "response.created",
+      },
+    ]);
+    const port = new QwenAudioRealtimeConversationPort({
+      apiKey: "test-qwen-api-key",
+      createTransport: () => transport,
+      generateId: () => "local-response-1",
+      model: "qwen-audio-3.0-realtime-plus",
+      voice: "longanqian",
+      workspaceId: "ws-jvh4fvlcktrjvtbj",
+    });
+    const conversation = await port.open(configuration());
+    await conversation.send({ text: "Pending response", turnId: "turn-1", type: "text" });
+
+    expect(await take(conversation.outputs(), 2)).toEqual([
+      {
+        code: "QWEN_INVALID_REQUEST_ERROR",
+        message: "Audio append failed.",
+        retryable: false,
+        type: "error",
+      },
+      {
+        responseId: "local-response-1",
+        turnId: "turn-1",
         type: "response-started",
       },
     ]);
@@ -786,6 +921,61 @@ describe("QwenAudioRealtimeConversationPort", () => {
     expect(transport.sent).toContainEqual({ type: "response.cancel" });
   });
 
+  it("preserves a pending visual result when cancellation transport fails", async () => {
+    const transport = new FakeTransport(
+      [
+        { type: "session.created" },
+        { type: "session.updated" },
+        {
+          response: { id: "resp-qwen-1", status: "in_progress" },
+          type: "response.created",
+        },
+        {
+          arguments: '{"question":"Current view"}',
+          call_id: "pending-call",
+          name: "inspect_current_view",
+          response_id: "resp-qwen-1",
+          type: "response.function_call_arguments.done",
+        },
+      ],
+      "response.cancel",
+    );
+    const port = new QwenAudioRealtimeConversationPort({
+      apiKey: "test-qwen-api-key",
+      createTransport: () => transport,
+      generateId: () => "local-response-1",
+      model: "qwen-audio-3.0-realtime-plus",
+      voice: "longanqian",
+      workspaceId: "ws-jvh4fvlcktrjvtbj",
+    });
+    const conversation = await port.open(configuration());
+    const outputs = conversation.outputs()[Symbol.asyncIterator]();
+    await conversation.send({ text: "Inspect this", turnId: "turn-1", type: "text" });
+
+    expect((await outputs.next()).value).toMatchObject({ type: "response-started" });
+    expect((await outputs.next()).value).toMatchObject({
+      callId: "pending-call",
+      type: "context-request",
+    });
+    await expect(
+      conversation.send({ responseId: "local-response-1", type: "cancel" }),
+    ).rejects.toThrow("Fake transport rejected response.cancel");
+    await conversation.send({
+      callId: "pending-call",
+      output: '{"status":"ready"}',
+      type: "context-result",
+    });
+
+    expect(transport.sent).toContainEqual({
+      item: {
+        call_id: "pending-call",
+        output: '{"status":"ready"}',
+        type: "function_call_output",
+      },
+      type: "conversation.item.create",
+    });
+  });
+
   it("keeps unrelated provider errors visible after cancellation", async () => {
     const transport = new FakeTransport([
       { type: "session.created" },
@@ -861,11 +1051,13 @@ describe("QwenAudioRealtimeConversationPort", () => {
 class FakeTransport implements QwenRealtimeTransport {
   readonly sent: Array<Readonly<Record<string, unknown>>> = [];
   readonly #events: unknown[];
+  readonly #rejectedSendType: string | undefined;
   closed = false;
   connected = false;
 
-  constructor(events: unknown[]) {
+  constructor(events: unknown[], rejectedSendType?: string) {
     this.#events = [...events];
+    this.#rejectedSendType = rejectedSendType;
   }
 
   close(): void {
@@ -885,6 +1077,9 @@ class FakeTransport implements QwenRealtimeTransport {
 
   async send(event: Readonly<Record<string, unknown>>): Promise<void> {
     this.sent.push(event);
+    if (event["type"] === this.#rejectedSendType) {
+      throw new Error(`Fake transport rejected ${this.#rejectedSendType}`);
+    }
   }
 }
 

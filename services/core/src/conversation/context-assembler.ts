@@ -267,7 +267,10 @@ export class ContextAssembler {
       throughSequence,
       updatedAt: this.#now(),
     };
-    if (await this.#checkpoints.save(checkpoint)) {
+    if (
+      (await this.#checkpoints.save(checkpoint)) &&
+      (await this.#ledger.isCompletePrefix(input.contextEpochId, throughSequence))
+    ) {
       return { checkpoint, concurrent: false };
     }
     const concurrent = await this.#checkpoints.get(input.contextEpochId);

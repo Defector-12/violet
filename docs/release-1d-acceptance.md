@@ -1,6 +1,7 @@
 # Release 1D：验收清单
 
-> 状态：Phase 1 第二轮审查修复已提交、合入主线并重新部署；Phase 2/3 未开始。
+> 状态：Phase 1 第三轮审查发现的五项 P1 已在本地修复并通过回归，尚未提交、合入或
+> 重新部署；Phase 2/3 未开始。
 > 本文记录 Release 1D 的实际版本、失败、证据和剩余门禁。规格见
 > [最终规格](./release-1d-spec.md)，实施顺序见 [任务拆分](./release-1d-tasks.md)。
 
@@ -16,8 +17,9 @@
 
 ## 2. 验收前置
 
-- [x] 用户已批准 1D 规格和任务拆分（2026-09-16）；Phase 1 本地实现已开始。
-- [x] Phase 1 验收 commit、工作树指纹、Core 版本和 Mac 二进制 hash 已记录。
+- [x] 用户已批准 1D 规格和任务拆分（2026-09-16）；Phase 1 已完成三轮本地实现与审查。
+- [x] 已部署 Phase 1 版本的 commit、Core 版本和 Mac 二进制 hash 已记录。
+- [ ] Phase 1 第三轮修复的验收 commit、Core 版本和重新部署 hash 尚待生成。
 - [ ] Mac/Core recorder 在真人测试前均为 ready。
 - [x] 当前 Phase 1 自动化测试数据全部为合成数据。
 - [x] 本机 Xcode license 已接受；检查 run `8dd35fde-dede-40ec-bd50-c75d1e71f1af`。
@@ -210,6 +212,60 @@
 - Mac SSH 隧道下健康和认证状态 `ready`，run
   `86a6ce25-23c5-4c95-8fdd-46af7a6a2733`。Phase 1 第二轮修复已重新放行。
 
+### 2.4 Phase 1 第三轮审查修复（2026-09-18）
+
+- 独立分组与跨组审查发现五项 P1：Qwen 自动 VAD 的 provider turn ID 与客户端音频
+  stream ID 不一致导致快照延迟门禁失效；Realtime 取消和 provider 错误未终止化已落账
+  用户轮次；跨模态乱序输入可能违反 epoch 时间约束；checkpoint 保存与失败标记清除
+  存在竞态；checkpoint 语义评估可被否定句误判为通过。
+- Realtime 现对已经接收自动音频的 Integrated 会话统一延迟回答，直到对应最终转写落账
+  并完成账本快照复核；取消、provider 错误、输入发送失败和会话关闭都会把已落账但未完成
+  的轮次标记为终止，视觉工具前的中间取消继续保留 turn epoch。
+- PostgreSQL epoch 写入使用不早于 `started_at` 的单调水位；失败标记清除与 checkpoint
+  保存共用实例行锁。`ContextAssembler` 在保存成功后再次验证连续完整前缀。
+- checkpoint 评估器增加否定和矛盾语义拦截。新增反例通过，既有三组真实 DeepSeek 输出离线
+  复核仍为 3/3，且没有新增模型调用，run
+  `10bd3c24-e0be-4694-8e6d-521368abb2f8`。首次规则过严导致两组假阴性的失败 run
+  `f0cabfe4-996d-4c7d-8b74-af0bef210338` 已保留。
+- 最终聚焦回归 59/59 通过，run `d34c1cc6-1c12-427d-92f5-026c0759610b`。此前关闭顺序
+  回归导致 56/57 的失败 run `b2fcdb0e-bac3-4ce8-927e-cda8e62b42b0` 已保留，修复后
+  不再延迟视觉任务取消。
+- 隔离 pgvector PostgreSQL 集成回归 3/3 通过，run
+  `f5f58ee8-6c3a-4acb-9c9d-ea293c3f0236`。首次误用不含 `vector` 扩展的普通
+  PostgreSQL 镜像而失败的 run `2235e094-2d1e-4de8-9aec-89ff672315b5` 已保留。
+- 带隔离 PostgreSQL 的完整 `pnpm check:ci` 通过：212/212，无跳过，run
+  `65775f75-9348-4042-aaa4-67d0469e88c1`，测试子 run
+  `20687051-2cc2-4d24-8fe1-eae4b8319ac5`。Mac 95/95 为
+  `fbd64dc1-cfc5-420b-9dd5-1475fb5029a6`；Mac App 构建为
+  `938b656a-fa0b-48cb-af2b-45901cb8a907`；Compose 配置为
+  `70e23119-71d5-4a40-ad12-6118e1b6b6d4`，均通过。
+- 聚焦回归、DeepSeek 离线复核和完整 Node 回归绑定 `main@4dd1c2a` 加工作树指纹
+  `4f5503cce3b45ba58cf7bfd045c92d54e1e82d350d88b779e7518100e8824dc8`；PostgreSQL
+  聚焦回归绑定指纹 `11ee83574a5315f258b608a71a59d6dc870ae7ac00b906512ae5b866f4fbd507`；
+  Mac 测试、App 构建和 Compose 检查绑定指纹
+  `cc00a8e0778ac81480edaaa43099ad94b6b7a0f1a8fb00e2adf92ef5d82184ad`。这些均为
+  交付前复审之前的中间证据。
+- 交付前独立复审进一步关闭了 Realtime 取消发送回滚、手动 commit 与自动 VAD 的迟到
+  转写、并发 provider error 归属、终止标记持久化重试与连接清理，以及 checkpoint
+  评估器的关系作用域、否定、方向和时态问题。最终定向复审未再发现 P0-P2；聚焦回归
+  106/106 通过，run `4c96a2d4-b892-4f57-bb68-cdf8605fb9b7`。
+- 隔离 pgvector 下最终 `pnpm check:ci` 通过：生成一致、Biome、全仓构建和类型检查
+  通过，239/239 且无跳过；run `7c4e0588-0b6d-4dbf-b390-3c0d2d3e1060`，测试子 run
+  `98c856f0-5e66-43cc-966b-1c8b485b6649`，绑定 `main@4dd1c2a` 加工作树指纹
+  `eedd14e8b8f7465de324e60fead09239319afcd6bdeb992bd16fc48339e892be`。
+- 交付前失败记录均保留：`1fd19dae-3f3d-4fca-a42e-2432442048ab`、
+  `e7f11c6d-06fe-46c5-ac73-c8f1274a334e` 为异步测试夹具未完整消费输出；
+  `07d6003b-7e99-4d13-b99f-3dc7e56a96c7`、`27980627-3913-4ae3-a9a8-d1a1c0831185`
+  为评估规则中间版本的真实样本假阴性；`b900498c-7dfa-45e1-9889-ceaa89749984`、
+  `a6145441-3b69-4013-97f1-b416a1580dc9` 为新增语义反例暴露的规则缺口；
+  `99eaad1f-7f3e-47dc-b637-25fd86895a81` 为内部错误契约更新后测试预期未同步；
+  `43588c9d-f8b8-428f-b558-29f0f2d2ff12` 为 terminal error 语义调整后旧夹具未同步；
+  `f15b6cae-9572-4d30-a6cb-7f3a5b49eb48` 为 Vitest 不支持 `--repeat` 的命令错误。
+  对取消发送时序的替代 20 次循环为 20/20，通过 run
+  `e213f5f1-cd3e-4bae-8cd4-4c014814fc7c`。
+- 本轮修改提交、复审并重新部署前，运行中的
+  `d311e1a-release-1d-phase1-final` 尚不包含修复，Phase 2 仍保持未开始。
+
 ## 3. P0：事实与来源
 
 - [ ] PostgreSQL `conversation_events` 仍是唯一原始事实源。
@@ -387,6 +443,7 @@ docker compose -f infra/compose/compose.yaml config
 - [ ] 实际 commit、构建、部署、失败和 run ID 已写回本文。
 - [x] Phase 1 两轮审查加固已提交、合入主线并重新部署，运行版本为
   `d311e1a-release-1d-phase1-final`。
+- [ ] Phase 1 第三轮审查修复尚待提交、复审并重新部署。
 - [ ] 用户明确批准后，生产自动记忆才开启。
 
 关闭自动提取、记忆注入或 checkpoint 可以回滚能力；任何回滚都不得降低

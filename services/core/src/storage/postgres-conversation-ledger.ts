@@ -83,7 +83,9 @@ export class PostgresConversationLedger implements ConversationLedger {
             instanceId,
             input.contextEpoch.id,
             input.contextEpoch.startedAt,
-            input.role === "user" ? input.occurredAt : input.contextEpoch.startedAt,
+            input.role === "user" && input.occurredAt > input.contextEpoch.startedAt
+              ? input.occurredAt
+              : input.contextEpoch.startedAt,
             input.role,
           ],
         );
@@ -155,16 +157,29 @@ export class PostgresConversationLedger implements ConversationLedger {
   }
 
   async clearRequestFailure(requestId: string): Promise<void> {
-    await this.#pool.query(
-      `
-        DELETE FROM conversation_turn_failures AS failure
-        USING violet_instances AS instance
-        WHERE instance.singleton = true
-          AND failure.instance_id = instance.id
-          AND failure.request_id = $1
-      `,
-      [requestId],
-    );
+    const client = await this.#pool.connect();
+    try {
+      await client.query("BEGIN");
+      const instance = await client.query<{ id: string }>(
+        "SELECT id FROM violet_instances WHERE singleton = true FOR UPDATE",
+      );
+      const instanceId = instance.rows[0]?.id;
+      if (instanceId) {
+        await client.query(
+          `
+            DELETE FROM conversation_turn_failures
+            WHERE instance_id = $1 AND request_id = $2
+          `,
+          [instanceId, requestId],
+        );
+      }
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async list(): Promise<readonly LedgerMessage[]> {
