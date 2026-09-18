@@ -109,6 +109,14 @@ export class InMemoryConversationLedger implements ConversationLedger {
     contextEpochId: string,
     _occurredAt: Date,
   ): Promise<void> {
+    if (
+      this.#messages.some(
+        (message) => message.requestId === requestId && message.role === "assistant",
+      )
+    ) {
+      this.#failedRequests.delete(requestId);
+      return;
+    }
     const user = this.#messages.find(
       (message) =>
         message.requestId === requestId &&
@@ -119,6 +127,25 @@ export class InMemoryConversationLedger implements ConversationLedger {
       throw new Error("Cannot fail a request without its persisted user event");
     }
     this.#failedRequests.set(requestId, contextEpochId);
+  }
+
+  async recoverIncompleteRequests(_occurredAt: Date): Promise<number> {
+    let recovered = 0;
+    for (const user of this.#messages.filter(
+      (message) => message.role === "user" && message.contextEpochId,
+    )) {
+      if (
+        this.#failedRequests.has(user.requestId) ||
+        this.#messages.some(
+          (message) => message.requestId === user.requestId && message.role === "assistant",
+        )
+      ) {
+        continue;
+      }
+      this.#failedRequests.set(user.requestId, user.contextEpochId as string);
+      recovered += 1;
+    }
+    return recovered;
   }
 }
 

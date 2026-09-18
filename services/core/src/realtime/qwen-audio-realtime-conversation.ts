@@ -62,6 +62,11 @@ export interface QwenRealtimeTransport {
   send(event: Readonly<Record<string, unknown>>): Promise<void>;
 }
 
+interface PendingResponseTurn {
+  readonly attemptId?: number;
+  readonly turnId: string;
+}
+
 export type QwenRealtimeTransportFactory = (
   url: URL,
   headers: Readonly<Record<string, string>>,
@@ -170,19 +175,25 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
   readonly capabilities: RealtimeCapabilities;
   readonly #cancelledProviderResponseIds = new Set<string>();
   readonly #completedToolResponseIds = new Set<string>();
+  readonly #contextAttemptIds = new Map<string, number>();
   readonly #contextProviderResponseIds = new Map<string, string>();
   readonly #contextTurnIds = new Map<string, string>();
   readonly #generateId: () => string;
   readonly #localResponseIds = new Map<string, string>();
   readonly #pendingContextCallIds = new Set<string>();
   readonly #pendingContextResponseIds = new Set<string>();
-  readonly #pendingResponseTurnIds: string[] = [];
+  readonly #pendingResponseTurns: PendingResponseTurn[] = [];
   readonly #providerResponseIds = new Map<string, string>();
   readonly #retiredPendingTurnIds = new Set<string>();
+  readonly #submittedTextTurns = new Map<
+    string,
+    { attemptId?: number; readonly text: string; responseRequested: boolean }
+  >();
   readonly #suppressedProviderResponseIds = new Set<string>();
   readonly #toolResponseIds = new Set<string>();
   readonly #transport: QwenRealtimeTransport;
   readonly #turnDetection: "manual" | "server_vad" | "smart_turn";
+  readonly #attemptIdsByProviderResponse = new Map<string, number>();
   readonly #turnIdsByInputItem = new Map<string, string>();
   readonly #turnIdsByProviderResponse = new Map<string, string>();
   #activeProviderResponseId: string | null = null;
@@ -220,10 +231,12 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
     this.#transport.close();
     this.#cancelledProviderResponseIds.clear();
     this.#clearPendingContextRequests();
+    this.#attemptIdsByProviderResponse.clear();
     this.#localResponseIds.clear();
-    this.#pendingResponseTurnIds.length = 0;
+    this.#pendingResponseTurns.length = 0;
     this.#providerResponseIds.clear();
     this.#retiredPendingTurnIds.clear();
+    this.#submittedTextTurns.clear();
     this.#suppressedProviderResponseIds.clear();
     this.#turnIdsByInputItem.clear();
     this.#turnIdsByProviderResponse.clear();
@@ -277,13 +290,13 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
         await this.#appendAudio(input);
         break;
       case "commit":
-        await this.#commitAudio(input.turnId);
+        await this.#commitAudio(input.turnId, input.attemptId);
         break;
       case "context-result":
         await this.#sendContextResult(input.callId, input.output);
         break;
       case "text":
-        await this.#sendText(input.text, input.turnId);
+        await this.#sendText(input.text, input.turnId, input.attemptId);
         break;
       case "cancel":
         await this.#cancelResponse(input.responseId);
@@ -322,7 +335,7 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
     });
   }
 
-  async #commitAudio(turnId: string): Promise<void> {
+  async #commitAudio(turnId: string, attemptId?: number): Promise<void> {
     if (this.#turnDetection !== "manual") {
       throw new QwenAdapterError(
         "AUTOMATIC_TURN_DETECTION",
@@ -341,10 +354,10 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
     this.#pendingAudioTurnId = null;
     this.#currentTurnId = turnId;
     await this.#transport.send({ type: "input_audio_buffer.commit" });
-    await this.#requestResponse(turnId);
+    await this.#requestResponse(turnId, attemptId);
   }
 
-  async #sendText(text: string, turnId: string): Promise<void> {
+  async #sendText(text: string, turnId: string, attemptId?: number): Promise<void> {
     if (this.#pendingAudioTurnId) {
       throw new QwenAdapterError(
         "AUDIO_TURN_IN_PROGRESS",
@@ -354,15 +367,41 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
     }
 
     this.#currentTurnId = turnId;
-    await this.#transport.send({
-      item: {
-        content: [{ text, type: "input_text" }],
-        role: "user",
-        type: "message",
-      },
-      type: "conversation.item.create",
-    });
-    await this.#requestResponse(turnId);
+    const key = canonicalId(turnId);
+    let submitted = this.#submittedTextTurns.get(key);
+    if (submitted && submitted.text !== text) {
+      throw new QwenAdapterError(
+        "TEXT_TURN_MISMATCH",
+        "The retried text turn does not match its original content",
+        false,
+      );
+    }
+    if (!submitted) {
+      await this.#transport.send({
+        item: {
+          content: [{ text, type: "input_text" }],
+          role: "user",
+          type: "message",
+        },
+        type: "conversation.item.create",
+      });
+      submitted = { responseRequested: false, text };
+      this.#submittedTextTurns.set(key, submitted);
+    }
+    if (!submitted.responseRequested) {
+      if (attemptId === undefined) {
+        delete submitted.attemptId;
+      } else {
+        submitted.attemptId = attemptId;
+      }
+      submitted.responseRequested = true;
+      try {
+        await this.#requestResponse(turnId, attemptId);
+      } catch (error) {
+        submitted.responseRequested = false;
+        throw error;
+      }
+    }
   }
 
   async #cancelResponse(localResponseId: string): Promise<void> {
@@ -394,8 +433,10 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
       return;
     }
     const providerResponseId = this.#contextProviderResponseIds.get(callId);
+    const attemptId = this.#contextAttemptIds.get(callId);
     const turnId = this.#contextTurnIds.get(callId);
     this.#contextProviderResponseIds.delete(callId);
+    this.#contextAttemptIds.delete(callId);
     this.#contextTurnIds.delete(callId);
     await this.#transport.send({
       item: {
@@ -409,7 +450,7 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
       return;
     }
     if (this.#completedToolResponseIds.delete(providerResponseId)) {
-      await this.#requestResponse(turnId ?? this.#currentTurnId ?? this.#newTurnId());
+      await this.#requestResponse(turnId ?? this.#currentTurnId ?? this.#newTurnId(), attemptId);
     } else {
       this.#pendingContextResponseIds.add(providerResponseId);
     }
@@ -432,28 +473,55 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
         this.#cancelledProviderResponseIds.add(cancelledProviderResponseId);
         const suppressed = this.#suppressedProviderResponseIds.has(cancelledProviderResponseId);
         const localResponseId = this.#localResponseIds.get(cancelledProviderResponseId);
-        return !suppressed && localResponseId
-          ? {
-              responseId: localResponseId,
-              type: "response-cancelled",
-            }
-          : undefined;
+        const attemptId = this.#attemptIdsByProviderResponse.get(cancelledProviderResponseId);
+        const turnId = this.#turnIdsByProviderResponse.get(cancelledProviderResponseId);
+        if (turnId) {
+          const submitted = this.#submittedTextTurns.get(canonicalId(turnId));
+          if (submitted) {
+            submitted.responseRequested = false;
+          }
+        }
+        const cancelled: RealtimeConversationOutput | undefined =
+          !suppressed && localResponseId
+            ? {
+                ...(attemptId !== undefined ? { attemptId } : {}),
+                responseId: localResponseId,
+                type: "response-cancelled",
+              }
+            : undefined;
+        if (localResponseId) {
+          this.#forgetResponse(cancelledProviderResponseId, localResponseId);
+        }
+        return cancelled;
       }
       const error = record(event["error"]);
-      const failedTurnId =
+      const failed =
         string(error?.["param"]) === "response.create"
-          ? this.#pendingResponseTurnIds.shift()
+          ? this.#pendingResponseTurns.shift()
           : undefined;
-      if (failedTurnId) {
-        this.#retiredPendingTurnIds.delete(failedTurnId);
+      if (failed) {
+        this.#retiredPendingTurnIds.delete(failed.turnId);
+        const submitted = this.#submittedTextTurns.get(canonicalId(failed.turnId));
+        if (submitted) {
+          submitted.responseRequested = false;
+        }
       }
-      return failedTurnId ? { ...output, turnId: failedTurnId } : output;
+      return failed
+        ? {
+            ...output,
+            ...(failed.attemptId !== undefined ? { attemptId: failed.attemptId } : {}),
+            turnId: failed.turnId,
+          }
+        : output;
     }
     if (event.type === "input_audio_buffer.speech_started") {
       if (this.#activeProviderResponseId) {
         await this.#requestProviderCancellation(this.#activeProviderResponseId);
       }
-      if (this.#currentTurnId && this.#pendingResponseTurnIds.includes(this.#currentTurnId)) {
+      if (
+        this.#currentTurnId &&
+        this.#pendingResponseTurns.some((pending) => pending.turnId === this.#currentTurnId)
+      ) {
         this.#retiredPendingTurnIds.add(this.#currentTurnId);
       }
       this.#clearPendingContextRequests();
@@ -469,8 +537,11 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
     }
     if (event.type === "input_audio_buffer.speech_stopped") {
       const turnId = this.#inputTurnId(event);
-      if (this.#turnDetection !== "manual" && !this.#pendingResponseTurnIds.includes(turnId)) {
-        this.#pendingResponseTurnIds.push(turnId);
+      if (
+        this.#turnDetection !== "manual" &&
+        !this.#pendingResponseTurns.some((pending) => pending.turnId === turnId)
+      ) {
+        this.#pendingResponseTurns.push({ turnId });
       }
       return {
         turnId,
@@ -535,8 +606,12 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
       this.#toolResponseIds.add(providerResponseId);
       this.#pendingContextCallIds.add(callId);
       this.#contextProviderResponseIds.set(callId, providerResponseId);
+      if (context.attemptId !== undefined) {
+        this.#contextAttemptIds.set(callId, context.attemptId);
+      }
       this.#contextTurnIds.set(callId, context.turnId);
       return {
+        ...(context.attemptId !== undefined ? { attemptId: context.attemptId } : {}),
         callId,
         query: contextQuestion(event["arguments"]),
         responseId: context.localResponseId,
@@ -554,6 +629,7 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
         this.#cancelledProviderResponseIds.delete(providerResponseId);
         const suppressed = this.#suppressedProviderResponseIds.delete(providerResponseId);
         const localResponseId = this.#localResponseIds.get(providerResponseId);
+        const attemptId = this.#attemptIdsByProviderResponse.get(providerResponseId);
         if (this.#pendingCancellationProviderResponseId === providerResponseId) {
           this.#pendingCancellationProviderResponseId = null;
         }
@@ -564,6 +640,7 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
           localResponseId &&
           string(record(event["response"])?.["status"]) === "cancelled"
           ? {
+              ...(attemptId !== undefined ? { attemptId } : {}),
               responseId: localResponseId,
               type: "response-cancelled",
             }
@@ -580,6 +657,7 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
       }
       this.#activeProviderResponseId = providerResponseId;
       return {
+        ...(context.attemptId !== undefined ? { attemptId: context.attemptId } : {}),
         responseId: context.localResponseId,
         turnId: context.turnId,
         type: "response-started",
@@ -589,6 +667,7 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
       const delta = string(event["delta"]);
       return delta
         ? {
+            ...(context.attemptId !== undefined ? { attemptId: context.attemptId } : {}),
             responseId: context.localResponseId,
             text: delta,
             turnId: context.turnId,
@@ -606,6 +685,7 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
         );
       }
       return {
+        ...(context.attemptId !== undefined ? { attemptId: context.attemptId } : {}),
         audio: decodeBase64(delta),
         responseId: context.localResponseId,
         turnId: context.turnId,
@@ -625,7 +705,7 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
       if (status && status !== "completed") {
         this.#forgetContextProviderResponse(providerResponseId);
       } else if (this.#pendingContextResponseIds.delete(providerResponseId)) {
-        await this.#requestResponse(context.turnId);
+        await this.#requestResponse(context.turnId, context.attemptId);
       } else if (
         Array.from(this.#contextProviderResponseIds.values()).includes(providerResponseId)
       ) {
@@ -636,22 +716,34 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
     }
     this.#forgetResponse(providerResponseId, context.localResponseId);
     if (status === "cancelled") {
+      const submitted = this.#submittedTextTurns.get(canonicalId(context.turnId));
+      if (submitted) {
+        submitted.responseRequested = false;
+      }
       return {
+        ...(context.attemptId !== undefined ? { attemptId: context.attemptId } : {}),
         responseId: context.localResponseId,
         type: "response-cancelled",
       };
     }
     if (status && status !== "completed") {
+      const submitted = this.#submittedTextTurns.get(canonicalId(context.turnId));
+      if (submitted) {
+        submitted.responseRequested = false;
+      }
       return adapterError(
         "QWEN_RESPONSE_FAILED",
         "Qwen could not complete the realtime response",
         status === "failed",
         context.turnId,
+        false,
+        context.attemptId,
       );
     }
 
     const usage = record(response?.["usage"]);
     return {
+      ...(context.attemptId !== undefined ? { attemptId: context.attemptId } : {}),
       inputTokens: nonNegativeInteger(usage?.["input_tokens"]),
       outputTokens: nonNegativeInteger(usage?.["output_tokens"]),
       responseId: context.localResponseId,
@@ -680,34 +772,44 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
     providerResponseId: string,
     consumePendingTurn = false,
   ): {
+    readonly attemptId?: number;
     readonly localResponseId: string;
     readonly turnId: string;
   } {
     const existingResponseId = this.#localResponseIds.get(providerResponseId);
     const existingTurnId = this.#turnIdsByProviderResponse.get(providerResponseId);
     if (existingResponseId && existingTurnId) {
+      const existingAttemptId = this.#attemptIdsByProviderResponse.get(providerResponseId);
       return {
+        ...(existingAttemptId !== undefined ? { attemptId: existingAttemptId } : {}),
         localResponseId: existingResponseId,
         turnId: existingTurnId,
       };
     }
     const localResponseId = this.#generateId();
-    const turnId =
-      (consumePendingTurn ? this.#pendingResponseTurnIds.shift() : undefined) ??
-      this.#currentTurnId ??
-      this.#newTurnId();
+    const pending = consumePendingTurn ? this.#pendingResponseTurns.shift() : undefined;
+    const turnId = pending?.turnId ?? this.#currentTurnId ?? this.#newTurnId();
     this.#localResponseIds.set(providerResponseId, localResponseId);
     this.#providerResponseIds.set(canonicalId(localResponseId), providerResponseId);
+    if (pending?.attemptId !== undefined) {
+      this.#attemptIdsByProviderResponse.set(providerResponseId, pending.attemptId);
+    }
     this.#turnIdsByProviderResponse.set(providerResponseId, turnId);
     recordTestTrace("qwen.response.mapping", {
+      ...(pending?.attemptId !== undefined ? { attemptId: pending.attemptId } : {}),
       providerResponseId,
       responseId: localResponseId,
       turnId,
     });
-    return { localResponseId, turnId };
+    return {
+      ...(pending?.attemptId !== undefined ? { attemptId: pending.attemptId } : {}),
+      localResponseId,
+      turnId,
+    };
   }
 
   #forgetResponse(providerResponseId: string, localResponseId: string): void {
+    this.#attemptIdsByProviderResponse.delete(providerResponseId);
     this.#localResponseIds.delete(providerResponseId);
     this.#providerResponseIds.delete(canonicalId(localResponseId));
     this.#turnIdsByProviderResponse.delete(providerResponseId);
@@ -718,6 +820,7 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
 
   #clearPendingContextRequests(): void {
     this.#completedToolResponseIds.clear();
+    this.#contextAttemptIds.clear();
     this.#contextProviderResponseIds.clear();
     this.#contextTurnIds.clear();
     this.#pendingContextCallIds.clear();
@@ -729,6 +832,7 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
     this.#pendingContextResponseIds.delete(providerResponseId);
     for (const [callId, responseId] of this.#contextProviderResponseIds) {
       if (responseId === providerResponseId) {
+        this.#contextAttemptIds.delete(callId);
         this.#contextProviderResponseIds.delete(callId);
         this.#contextTurnIds.delete(callId);
         this.#pendingContextCallIds.delete(callId);
@@ -736,14 +840,18 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
     }
   }
 
-  async #requestResponse(turnId: string): Promise<void> {
-    this.#pendingResponseTurnIds.push(turnId);
+  async #requestResponse(turnId: string, attemptId?: number): Promise<void> {
+    const pending = {
+      ...(attemptId !== undefined ? { attemptId } : {}),
+      turnId,
+    };
+    this.#pendingResponseTurns.push(pending);
     try {
       await this.#transport.send({ type: "response.create" });
     } catch (error) {
-      const index = this.#pendingResponseTurnIds.lastIndexOf(turnId);
+      const index = this.#pendingResponseTurns.lastIndexOf(pending);
       if (index >= 0) {
-        this.#pendingResponseTurnIds.splice(index, 1);
+        this.#pendingResponseTurns.splice(index, 1);
       }
       throw error;
     }
@@ -992,8 +1100,10 @@ function adapterError(
   retryable: boolean,
   turnId?: string,
   terminal = false,
+  attemptId?: number,
 ): Extract<RealtimeConversationOutput, { readonly type: "error" }> {
   return {
+    ...(attemptId !== undefined ? { attemptId } : {}),
     code,
     message,
     retryable,

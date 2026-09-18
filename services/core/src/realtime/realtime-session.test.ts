@@ -845,14 +845,443 @@ describe("RealtimeSession", () => {
     ).resolves.toMatchObject([{ completed: false, failed: true, requestId: turnId }]);
   });
 
-  it("closes the provider after terminal failure persistence exhausts its retries", async () => {
+  it("reopens a failed turn before retrying the same request", async () => {
+    const sessionId = randomUUID();
+    const turnId = randomUUID();
+    const ledger = new InMemoryConversationLedger();
+    let sendAttempts = 0;
+    const session = new RealtimeSession({
+      conversationEndIntent: neverEndsConversation,
+      conversationPort: {
+        async open() {
+          return {
+            capabilities: {
+              inputModalities: ["text"],
+              interruption: true,
+              outputModalities: ["text"],
+              runtimeKind: "integrated",
+              transcription: true,
+              turnDetection: "manual",
+              voiceKind: "preset",
+            } as const,
+            async close() {},
+            async *outputs() {},
+            async send() {
+              sendAttempts += 1;
+              if (sendAttempts === 1) {
+                throw new Error("Provider rejected the first request");
+              }
+            },
+          };
+        },
+      },
+      contextService: createContextService(),
+      generateId: randomUUID,
+      ledger,
+    });
+    await collect(
+      session.handle({
+        configuration: {
+          inputModalities: ["text"],
+          outputModalities: ["text"],
+          protocolVersion: "1",
+        },
+        eventId: randomUUID(),
+        sequence: 1,
+        sessionId,
+        type: "session.configure",
+      }),
+    );
+
+    await expect(
+      collect(
+        session.handle({
+          eventId: randomUUID(),
+          sequence: 2,
+          sessionId,
+          text: "Retry this request",
+          turnId,
+          type: "input.text",
+        }),
+      ),
+    ).resolves.toMatchObject([{ code: "REALTIME_INPUT_FAILED", type: "error" }]);
+    const user = (await ledger.list())[0];
+    await expect(
+      ledger.listTurns({ contextEpochId: user?.contextEpochId ?? "" }),
+    ).resolves.toMatchObject([{ completed: false, failed: true, requestId: turnId }]);
+
+    await collect(
+      session.handle({
+        eventId: randomUUID(),
+        sequence: 3,
+        sessionId,
+        text: "Retry this request",
+        turnId,
+        type: "input.text",
+      }),
+    );
+
+    await expect(
+      ledger.listTurns({ contextEpochId: user?.contextEpochId ?? "" }),
+    ).resolves.toMatchObject([{ completed: false, failed: false, requestId: turnId }]);
+    expect(sendAttempts).toBe(2);
+  });
+
+  it("persists the assistant after retrying an asynchronously failed turn", async () => {
     const sessionId = randomUUID();
     const turnId = randomUUID();
     const responseId = randomUUID();
     const ledger = new InMemoryConversationLedger();
-    const markFailed = vi
-      .spyOn(ledger, "markRequestFailed")
-      .mockRejectedValue(new Error("Persistent ledger failure"));
+    const outputQueue = new AsyncQueue<RealtimeConversationOutput>();
+    let sendAttempts = 0;
+    let firstAttemptId: number | undefined;
+    let firstTurnId: string | undefined;
+    const session = new RealtimeSession({
+      conversationEndIntent: neverEndsConversation,
+      conversationPort: {
+        async open() {
+          return {
+            capabilities: {
+              inputModalities: ["text"],
+              interruption: true,
+              outputModalities: ["text"],
+              runtimeKind: "integrated",
+              transcription: true,
+              turnDetection: "manual",
+              voiceKind: "preset",
+            } as const,
+            async close() {
+              outputQueue.close();
+            },
+            async *outputs(signal) {
+              while (true) {
+                const output = await outputQueue.next(signal);
+                if (!output) return;
+                yield output;
+              }
+            },
+            async send(input) {
+              if (input.type !== "text") return;
+              sendAttempts += 1;
+              if (sendAttempts === 1) {
+                firstAttemptId = input.attemptId;
+                firstTurnId = input.turnId;
+                outputQueue.push({
+                  ...(input.attemptId !== undefined ? { attemptId: input.attemptId } : {}),
+                  code: "PROVIDER_FAILED",
+                  message: "Retry this response",
+                  retryable: true,
+                  turnId: input.turnId,
+                  type: "error",
+                });
+                return;
+              }
+              const unfencedResponseId = randomUUID();
+              outputQueue.push({
+                responseId: unfencedResponseId,
+                turnId: firstTurnId ?? input.turnId,
+                type: "response-started",
+              });
+              outputQueue.push({
+                responseId: unfencedResponseId,
+                text: "Unfenced stale answer",
+                turnId: firstTurnId ?? input.turnId,
+                type: "response-text",
+              });
+              outputQueue.push({
+                inputTokens: 1,
+                outputTokens: 1,
+                responseId: unfencedResponseId,
+                turnId: firstTurnId ?? input.turnId,
+                type: "response-completed",
+              });
+              outputQueue.push({
+                responseId: unfencedResponseId,
+                type: "response-cancelled",
+              });
+              const staleResponseId = randomUUID();
+              outputQueue.push({
+                ...(firstAttemptId !== undefined ? { attemptId: firstAttemptId } : {}),
+                responseId: staleResponseId,
+                turnId: firstTurnId ?? input.turnId,
+                type: "response-started",
+              });
+              outputQueue.push({
+                ...(firstAttemptId !== undefined ? { attemptId: firstAttemptId } : {}),
+                responseId: staleResponseId,
+                text: "Stale answer",
+                turnId: firstTurnId ?? input.turnId,
+                type: "response-text",
+              });
+              outputQueue.push({
+                ...(firstAttemptId !== undefined ? { attemptId: firstAttemptId } : {}),
+                inputTokens: 1,
+                outputTokens: 1,
+                responseId: staleResponseId,
+                turnId: firstTurnId ?? input.turnId,
+                type: "response-completed",
+              });
+              outputQueue.push({
+                ...(input.attemptId !== undefined ? { attemptId: input.attemptId } : {}),
+                responseId,
+                turnId: input.turnId,
+                type: "response-started",
+              });
+              outputQueue.push({
+                ...(input.attemptId !== undefined ? { attemptId: input.attemptId } : {}),
+                responseId,
+                text: "Recovered answer",
+                turnId: input.turnId,
+                type: "response-text",
+              });
+              outputQueue.push({
+                ...(input.attemptId !== undefined ? { attemptId: input.attemptId } : {}),
+                inputTokens: 1,
+                outputTokens: 1,
+                responseId,
+                turnId: input.turnId,
+                type: "response-completed",
+              });
+            },
+          };
+        },
+      },
+      contextService: createContextService(),
+      generateId: randomUUID,
+      ledger,
+    });
+    await collect(
+      session.handle({
+        configuration: {
+          inputModalities: ["text"],
+          outputModalities: ["text"],
+          protocolVersion: "1",
+        },
+        eventId: randomUUID(),
+        sequence: 1,
+        sessionId,
+        type: "session.configure",
+      }),
+    );
+    await collect(
+      session.handle({
+        eventId: randomUUID(),
+        sequence: 2,
+        sessionId,
+        text: "Retry this request",
+        turnId: turnId.toUpperCase(),
+        type: "input.text",
+      }),
+    );
+    await take(session.outputs(), 1);
+
+    await collect(
+      session.handle({
+        eventId: randomUUID(),
+        sequence: 3,
+        sessionId,
+        text: "Retry this request",
+        turnId,
+        type: "input.text",
+      }),
+    );
+    await take(session.outputs(), 3);
+
+    const user = (await ledger.list())[0];
+    await expect(
+      ledger.listTurns({ contextEpochId: user?.contextEpochId ?? "" }),
+    ).resolves.toMatchObject([{ completed: true, failed: false, requestId: turnId }]);
+  });
+
+  it("rechecks a queued old completion after a retry advances the turn generation", async () => {
+    const sessionId = randomUUID();
+    const turnId = randomUUID();
+    const staleResponseId = randomUUID();
+    const responseId = randomUUID();
+    const ledger = new InMemoryConversationLedger();
+    const clearFailure = ledger.clearRequestFailure.bind(ledger);
+    let clearCalls = 0;
+    let reportRetryClearStarted = () => {};
+    const retryClearStarted = new Promise<void>((resolve) => {
+      reportRetryClearStarted = resolve;
+    });
+    let releaseRetryClear = () => {};
+    const retryClearReleased = new Promise<void>((resolve) => {
+      releaseRetryClear = resolve;
+    });
+    vi.spyOn(ledger, "clearRequestFailure").mockImplementation(async (requestId) => {
+      clearCalls += 1;
+      if (clearCalls === 2) {
+        reportRetryClearStarted();
+        await retryClearReleased;
+      }
+      return clearFailure(requestId);
+    });
+    const outputQueue = new AsyncQueue<RealtimeConversationOutput>();
+    let sendAttempts = 0;
+    let firstAttemptId: number | undefined;
+    const session = new RealtimeSession({
+      conversationEndIntent: neverEndsConversation,
+      conversationPort: {
+        async open() {
+          return {
+            capabilities: {
+              inputModalities: ["text"],
+              interruption: true,
+              outputModalities: ["text"],
+              runtimeKind: "integrated",
+              transcription: true,
+              turnDetection: "manual",
+              voiceKind: "preset",
+            } as const,
+            async close() {
+              outputQueue.close();
+            },
+            async *outputs(signal) {
+              while (true) {
+                const output = await outputQueue.next(signal);
+                if (!output) return;
+                yield output;
+              }
+            },
+            async send(input) {
+              if (input.type !== "text") return;
+              sendAttempts += 1;
+              if (sendAttempts === 1) {
+                firstAttemptId = input.attemptId;
+                outputQueue.push({
+                  ...(input.attemptId !== undefined ? { attemptId: input.attemptId } : {}),
+                  code: "PROVIDER_FAILED",
+                  message: "Retry this response",
+                  retryable: true,
+                  turnId: input.turnId,
+                  type: "error",
+                });
+                return;
+              }
+              outputQueue.push({
+                ...(input.attemptId !== undefined ? { attemptId: input.attemptId } : {}),
+                responseId,
+                turnId: input.turnId,
+                type: "response-started",
+              });
+              outputQueue.push({
+                ...(input.attemptId !== undefined ? { attemptId: input.attemptId } : {}),
+                responseId,
+                text: "Current answer",
+                turnId: input.turnId,
+                type: "response-text",
+              });
+              outputQueue.push({
+                ...(input.attemptId !== undefined ? { attemptId: input.attemptId } : {}),
+                inputTokens: 1,
+                outputTokens: 1,
+                responseId,
+                turnId: input.turnId,
+                type: "response-completed",
+              });
+            },
+          };
+        },
+      },
+      contextService: createContextService(),
+      generateId: randomUUID,
+      ledger,
+    });
+    await collect(
+      session.handle({
+        configuration: {
+          inputModalities: ["text"],
+          outputModalities: ["text"],
+          protocolVersion: "1",
+        },
+        eventId: randomUUID(),
+        sequence: 1,
+        sessionId,
+        type: "session.configure",
+      }),
+    );
+    await collect(
+      session.handle({
+        eventId: randomUUID(),
+        sequence: 2,
+        sessionId,
+        text: "Retry this request",
+        turnId,
+        type: "input.text",
+      }),
+    );
+    await take(session.outputs(), 1);
+
+    const retry = collect(
+      session.handle({
+        eventId: randomUUID(),
+        sequence: 3,
+        sessionId,
+        text: "Retry this request",
+        turnId,
+        type: "input.text",
+      }),
+    );
+    await retryClearStarted;
+    outputQueue.push({
+      ...(firstAttemptId !== undefined ? { attemptId: firstAttemptId } : {}),
+      responseId: staleResponseId,
+      turnId,
+      type: "response-started",
+    });
+    outputQueue.push({
+      ...(firstAttemptId !== undefined ? { attemptId: firstAttemptId } : {}),
+      responseId: staleResponseId,
+      text: "Stale answer",
+      turnId,
+      type: "response-text",
+    });
+    outputQueue.push({
+      ...(firstAttemptId !== undefined ? { attemptId: firstAttemptId } : {}),
+      inputTokens: 1,
+      outputTokens: 1,
+      responseId: staleResponseId,
+      turnId,
+      type: "response-completed",
+    });
+    const outputs = take(session.outputs(), 3);
+    releaseRetryClear();
+    await retry;
+
+    await expect(outputs).resolves.toMatchObject([
+      { responseId, type: "response.started" },
+      { responseId, text: "Current answer", type: "response.text" },
+      { responseId, type: "response.completed" },
+    ]);
+    const user = (await ledger.list())[0];
+    await expect(
+      ledger.listTurns({ contextEpochId: user?.contextEpochId ?? "" }),
+    ).resolves.toMatchObject([
+      {
+        completed: true,
+        failed: false,
+        messages: expect.arrayContaining([
+          expect.objectContaining({ content: "Current answer", role: "assistant" }),
+        ]),
+        requestId: turnId,
+      },
+    ]);
+  });
+
+  it("recovers terminal failure persistence after immediate retries are exhausted", async () => {
+    const sessionId = randomUUID();
+    const turnId = randomUUID();
+    const responseId = randomUUID();
+    const ledger = new InMemoryConversationLedger();
+    const persistFailure = ledger.markRequestFailed.bind(ledger);
+    let attempts = 0;
+    const markFailed = vi.spyOn(ledger, "markRequestFailed").mockImplementation((...input) => {
+      attempts += 1;
+      return attempts <= 3
+        ? Promise.reject(new Error("Temporary ledger failure"))
+        : persistFailure(...input);
+    });
     let providerClosed = false;
     const session = new RealtimeSession({
       conversationEndIntent: neverEndsConversation,
@@ -873,13 +1302,20 @@ describe("RealtimeSession", () => {
             },
             async *outputs() {
               yield { responseId, turnId, type: "response-started" } as const;
-              yield { responseId, type: "response-cancelled" } as const;
+              yield {
+                code: "PROVIDER_FAILED",
+                message: "The provider connection failed",
+                retryable: true,
+                terminal: true,
+                type: "error",
+              } as const;
             },
             async send() {},
           };
         },
       },
       contextService: createContextService(),
+      failureRetryDelayMs: 0,
       generateId: randomUUID,
       ledger,
     });
@@ -907,11 +1343,95 @@ describe("RealtimeSession", () => {
       }),
     );
 
-    await expect(collect(session.outputs())).rejects.toThrow("Persistent ledger failure");
-    await expect(session.close()).rejects.toThrow("Persistent ledger failure");
+    const output = await collect(session.outputs());
+    expect(output).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: "PROVIDER_FAILED", type: "error" })]),
+    );
+    await waitUntil(() => markFailed.mock.calls.length === 4);
+    const user = (await ledger.list())[0];
 
-    expect(markFailed).toHaveBeenCalledTimes(6);
+    await expect(
+      ledger.listTurns({ contextEpochId: user?.contextEpochId ?? "" }),
+    ).resolves.toMatchObject([{ completed: false, failed: true, requestId: turnId }]);
     expect(providerClosed).toBe(true);
+  });
+
+  it("waits for an in-flight final transcript before terminalizing on close", async () => {
+    const sessionId = randomUUID();
+    const turnId = randomUUID();
+    const ledger = new InMemoryConversationLedger();
+    const append = ledger.append.bind(ledger);
+    let releaseUserAppend = () => {};
+    const userAppendReleased = new Promise<void>((resolve) => {
+      releaseUserAppend = resolve;
+    });
+    let reportUserAppendStarted = () => {};
+    const userAppendStarted = new Promise<void>((resolve) => {
+      reportUserAppendStarted = resolve;
+    });
+    vi.spyOn(ledger, "append").mockImplementation(async (input) => {
+      if (input.role === "user") {
+        reportUserAppendStarted();
+        await userAppendReleased;
+      }
+      return append(input);
+    });
+    const session = new RealtimeSession({
+      conversationEndIntent: neverEndsConversation,
+      conversationPort: {
+        async open() {
+          return {
+            capabilities: {
+              inputModalities: ["audio"],
+              interruption: true,
+              outputModalities: ["text"],
+              runtimeKind: "integrated",
+              transcription: true,
+              turnDetection: "smart_turn",
+              voiceKind: "preset",
+            } as const,
+            async close() {},
+            async *outputs() {
+              yield {
+                final: true,
+                text: "Transcript persisted while the session closes",
+                turnId,
+                type: "transcript",
+              } as const;
+            },
+            async send() {},
+          };
+        },
+      },
+      contextService: createContextService(),
+      generateId: randomUUID,
+      ledger,
+    });
+    await collect(
+      session.handle({
+        configuration: {
+          inputModalities: ["audio"],
+          outputModalities: ["text"],
+          protocolVersion: "1",
+          turnDetection: "smart_turn",
+        },
+        eventId: randomUUID(),
+        sequence: 1,
+        sessionId,
+        type: "session.configure",
+      }),
+    );
+    const outputTask = collect(session.outputs());
+    await userAppendStarted;
+
+    const closeTask = session.close();
+    releaseUserAppend();
+    await Promise.all([closeTask, outputTask]);
+    const user = (await ledger.list())[0];
+
+    await expect(
+      ledger.listTurns({ contextEpochId: user?.contextEpochId ?? "" }),
+    ).resolves.toMatchObject([{ completed: false, failed: true, requestId: turnId }]);
   });
 
   it("clears response mappings after a scoped provider error", async () => {

@@ -45,16 +45,19 @@ export interface RealtimeCapabilities {
 
 export type RealtimeConversationInput =
   | {
+      readonly attemptId?: number;
       readonly text: string;
       readonly turnId: string;
       readonly type: "text";
     }
   | {
+      readonly attemptId?: number;
       readonly audio: Uint8Array;
       readonly turnId: string;
       readonly type: "audio";
     }
   | {
+      readonly attemptId?: number;
       readonly turnId: string;
       readonly type: "commit";
     }
@@ -70,37 +73,44 @@ export type RealtimeConversationInput =
 
 export type RealtimeConversationOutput =
   | {
+      readonly attemptId?: number;
       readonly turnId: string;
       readonly type: "speech-started";
     }
   | {
+      readonly attemptId?: number;
       readonly turnId: string;
       readonly type: "speech-stopped";
     }
   | {
+      readonly attemptId?: number;
       readonly final: boolean;
       readonly text: string;
       readonly turnId: string;
       readonly type: "transcript";
     }
   | {
+      readonly attemptId?: number;
       readonly responseId: string;
       readonly turnId: string;
       readonly type: "response-started";
     }
   | {
+      readonly attemptId?: number;
       readonly responseId: string;
       readonly text: string;
       readonly turnId: string;
       readonly type: "response-text";
     }
   | {
+      readonly attemptId?: number;
       readonly audio: Uint8Array;
       readonly responseId: string;
       readonly turnId: string;
       readonly type: "response-audio";
     }
   | {
+      readonly attemptId?: number;
       readonly inputTokens: number;
       readonly outputTokens: number;
       readonly responseId: string;
@@ -108,10 +118,12 @@ export type RealtimeConversationOutput =
       readonly type: "response-completed";
     }
   | {
+      readonly attemptId?: number;
       readonly responseId: string;
       readonly type: "response-cancelled";
     }
   | {
+      readonly attemptId?: number;
       readonly code: string;
       readonly message: string;
       readonly retryable: boolean;
@@ -120,6 +132,7 @@ export type RealtimeConversationOutput =
       readonly type: "error";
     }
   | {
+      readonly attemptId?: number;
       readonly callId: string;
       readonly query: string;
       readonly responseId: string;
