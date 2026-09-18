@@ -77,6 +77,10 @@ export function handleRealtimeWebSocket(
         for await (const event of session.outputs(abortController.signal)) {
           await sendEvent(event);
         }
+        if (session.closed && socket.readyState === socket.OPEN) {
+          closeTrace();
+          socket.close(1011, "REALTIME_SESSION_FAILED");
+        }
       }),
     ).catch(fail);
   };
@@ -132,6 +136,6 @@ export function handleRealtimeWebSocket(
     removeFailureListener?.();
     closeTrace();
     abortController.abort();
-    void session.close();
+    void session.close().catch(fail);
   });
 }

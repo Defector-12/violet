@@ -183,6 +183,7 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
   readonly #toolResponseIds = new Set<string>();
   readonly #transport: QwenRealtimeTransport;
   readonly #turnDetection: "manual" | "server_vad" | "smart_turn";
+  readonly #turnIdsByInputItem = new Map<string, string>();
   readonly #turnIdsByProviderResponse = new Map<string, string>();
   #activeProviderResponseId: string | null = null;
   #closed = false;
@@ -224,6 +225,7 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
     this.#providerResponseIds.clear();
     this.#retiredPendingTurnIds.clear();
     this.#suppressedProviderResponseIds.clear();
+    this.#turnIdsByInputItem.clear();
     this.#turnIdsByProviderResponse.clear();
     this.#toolResponseIds.clear();
     this.#activeProviderResponseId = null;
@@ -245,11 +247,13 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
           return;
         }
         if (error instanceof QwenAdapterError) {
-          yield adapterError(error.code, error.message, error.retryable);
+          yield adapterError(error.code, error.message, error.retryable, undefined, true);
         } else {
           yield adapterError(
             "QWEN_REALTIME_TRANSPORT_ERROR",
             "The Qwen realtime connection failed",
+            true,
+            undefined,
             true,
           );
         }
@@ -367,8 +371,8 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
       return;
     }
 
-    this.#clearPendingContextRequests();
     await this.#requestProviderCancellation(providerResponseId);
+    this.#clearPendingContextRequests();
   }
 
   async #requestProviderCancellation(providerResponseId: string): Promise<void> {
@@ -435,11 +439,15 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
             }
           : undefined;
       }
-      const failedTurnId = this.#pendingResponseTurnIds.shift();
+      const error = record(event["error"]);
+      const failedTurnId =
+        string(error?.["param"]) === "response.create"
+          ? this.#pendingResponseTurnIds.shift()
+          : undefined;
       if (failedTurnId) {
         this.#retiredPendingTurnIds.delete(failedTurnId);
       }
-      return output;
+      return failedTurnId ? { ...output, turnId: failedTurnId } : output;
     }
     if (event.type === "input_audio_buffer.speech_started") {
       if (this.#activeProviderResponseId) {
@@ -450,13 +458,17 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
       }
       this.#clearPendingContextRequests();
       this.#currentTurnId = this.#generateId();
+      const itemId = string(event["item_id"]);
+      if (itemId) {
+        this.#turnIdsByInputItem.set(itemId, this.#currentTurnId);
+      }
       return {
         turnId: this.#currentTurnId,
         type: "speech-started",
       };
     }
     if (event.type === "input_audio_buffer.speech_stopped") {
-      const turnId = this.#currentTurnId ?? this.#newTurnId();
+      const turnId = this.#inputTurnId(event);
       if (this.#turnDetection !== "manual" && !this.#pendingResponseTurnIds.includes(turnId)) {
         this.#pendingResponseTurnIds.push(turnId);
       }
@@ -473,24 +485,37 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
         ? {
             final: false,
             text: transcript,
-            turnId: this.#currentTurnId ?? this.#newTurnId(),
+            turnId: this.#inputTurnId(event),
             type: "transcript",
           }
         : undefined;
     }
     if (event.type === "conversation.item.input_audio_transcription.completed") {
       const transcript = string(event["transcript"]);
+      const turnId = this.#inputTurnId(event);
+      const itemId = string(event["item_id"]);
+      if (itemId) {
+        this.#turnIdsByInputItem.delete(itemId);
+      }
       return transcript
         ? {
             final: true,
             text: transcript,
-            turnId: this.#currentTurnId ?? this.#newTurnId(),
+            turnId,
             type: "transcript",
           }
         : undefined;
     }
     if (event.type === "conversation.item.input_audio_transcription.failed") {
-      return providerErrorOutput(event);
+      const turnId = this.#inputTurnId(event);
+      const itemId = string(event["item_id"]);
+      if (itemId) {
+        this.#turnIdsByInputItem.delete(itemId);
+      }
+      return {
+        ...providerErrorOutput(event),
+        turnId,
+      };
     }
     if (event.type === "response.function_call_arguments.done") {
       const providerResponseId = string(event["response_id"]);
@@ -621,6 +646,7 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
         "QWEN_RESPONSE_FAILED",
         "Qwen could not complete the realtime response",
         status === "failed",
+        context.turnId,
       );
     }
 
@@ -637,6 +663,16 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
   #newTurnId(): string {
     const turnId = this.#generateId();
     this.#currentTurnId = turnId;
+    return turnId;
+  }
+
+  #inputTurnId(event: Readonly<Record<string, unknown>>): string {
+    const itemId = string(event["item_id"]);
+    const mapped = itemId ? this.#turnIdsByInputItem.get(itemId) : undefined;
+    const turnId = mapped ?? this.#currentTurnId ?? this.#newTurnId();
+    if (itemId && !mapped) {
+      this.#turnIdsByInputItem.set(itemId, turnId);
+    }
     return turnId;
   }
 
@@ -954,8 +990,17 @@ function adapterError(
   code: string,
   message: string,
   retryable: boolean,
+  turnId?: string,
+  terminal = false,
 ): Extract<RealtimeConversationOutput, { readonly type: "error" }> {
-  return { code, message, retryable, type: "error" };
+  return {
+    code,
+    message,
+    retryable,
+    ...(terminal ? { terminal } : {}),
+    ...(turnId ? { turnId } : {}),
+    type: "error",
+  };
 }
 
 function normalizeErrorCode(value: string): string {

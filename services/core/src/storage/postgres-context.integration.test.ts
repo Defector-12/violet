@@ -4,6 +4,7 @@ import { EnvelopeCipher } from "@violet/crypto";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { ContextEpochManager } from "../conversation/context-epoch-manager.js";
 import { PostgresContextCheckpointRepository } from "./postgres-context-checkpoint-repository.js";
 import { PostgresConversationLedger } from "./postgres-conversation-ledger.js";
 
@@ -313,5 +314,46 @@ integration("PostgreSQL conversation context", () => {
       await upgradePool.end();
       await admin.query(`DROP SCHEMA IF EXISTS "${upgradeSchema}" CASCADE`);
     }
+  });
+
+  it("persists a delayed cross-modal input without violating the epoch timestamp constraint", async () => {
+    const cipher = new EnvelopeCipher({
+      key: randomBytes(32),
+      keyVersion: "test-content-v1",
+    });
+    const ledger = new PostgresConversationLedger({
+      cipher,
+      constitutionVersion: "test",
+      instanceId: randomUUID(),
+      pool,
+    });
+    const epochManager = new ContextEpochManager({ generateId: randomUUID });
+    const earlierAt = new Date("2026-09-16T00:00:00.000Z");
+    const laterAt = new Date("2026-09-16T00:00:01.000Z");
+    const epoch = epochManager.acceptUserInput(laterAt);
+
+    await ledger.append({
+      content: "Later input admitted first",
+      contextEpoch: epoch,
+      id: randomUUID(),
+      occurredAt: laterAt,
+      requestId: randomUUID(),
+      role: "user",
+    });
+    const delayedEpoch = epochManager.acceptUserInput(earlierAt);
+
+    await expect(
+      ledger.append({
+        content: "Earlier input persisted later",
+        contextEpoch: delayedEpoch,
+        id: randomUUID(),
+        occurredAt: earlierAt,
+        requestId: randomUUID(),
+        role: "user",
+      }),
+    ).resolves.toMatchObject({
+      content: "Earlier input persisted later",
+      contextEpochId: epoch.id,
+    });
   });
 });

@@ -559,7 +559,8 @@ describe("RealtimeSession", () => {
 
   it("suppresses an automatic VAD response when another entry point advances the epoch", async () => {
     const sessionId = randomUUID();
-    const turnId = randomUUID();
+    const clientAudioTurnId = randomUUID();
+    const providerTurnId = randomUUID();
     const responseId = randomUUID();
     const now = new Date("2026-09-16T00:00:00.000Z");
     const epochManager = new ContextEpochManager({ generateId: randomUUID });
@@ -598,19 +599,24 @@ describe("RealtimeSession", () => {
             } as const,
             async close() {},
             async *outputs() {
-              yield { responseId, turnId, type: "response-started" } as const;
-              yield { responseId, text: "Stale answer", turnId, type: "response-text" } as const;
+              yield { responseId, turnId: providerTurnId, type: "response-started" } as const;
+              yield {
+                responseId,
+                text: "Stale answer",
+                turnId: providerTurnId,
+                type: "response-text",
+              } as const;
               yield {
                 inputTokens: 1,
                 outputTokens: 1,
                 responseId,
-                turnId,
+                turnId: providerTurnId,
                 type: "response-completed",
               } as const;
               yield {
                 final: true,
                 text: "Final transcript",
-                turnId,
+                turnId: providerTurnId,
                 type: "transcript",
               } as const;
             },
@@ -644,7 +650,7 @@ describe("RealtimeSession", () => {
         eventId: randomUUID(),
         sequence: 2,
         sessionId,
-        turnId,
+        turnId: clientAudioTurnId,
         type: "input.audio",
       }),
     );
@@ -671,6 +677,834 @@ describe("RealtimeSession", () => {
     expect(output).toMatchObject([{ code: "CONTEXT_SNAPSHOT_STALE", type: "error" }]);
     expect(output.some((event) => event.type === "response.text")).toBe(false);
     expect(session.closed).toBe(true);
+  });
+
+  it.each([
+    {
+      closesSession: false,
+      name: "cancelled",
+      terminal: (responseId: string) => ({ responseId, type: "response-cancelled" }) as const,
+    },
+    {
+      closesSession: true,
+      name: "provider error",
+      terminal: () =>
+        ({
+          code: "PROVIDER_FAILED",
+          message: "Provider failed",
+          retryable: true,
+          terminal: true,
+          type: "error",
+        }) as const,
+    },
+  ])(
+    "marks a persisted realtime turn failed after a $name response",
+    async ({ closesSession, terminal }) => {
+      const sessionId = randomUUID();
+      const turnId = randomUUID();
+      const responseId = randomUUID();
+      const ledger = new InMemoryConversationLedger();
+      const closeProvider = vi.fn();
+      const session = new RealtimeSession({
+        conversationEndIntent: neverEndsConversation,
+        conversationPort: {
+          async open() {
+            return {
+              capabilities: {
+                inputModalities: ["text"],
+                interruption: true,
+                outputModalities: ["text"],
+                runtimeKind: "integrated",
+                transcription: true,
+                turnDetection: "manual",
+                voiceKind: "preset",
+              } as const,
+              async close() {
+                closeProvider();
+              },
+              async *outputs() {
+                yield { responseId, turnId, type: "response-started" } as const;
+                yield terminal(responseId);
+              },
+              async send() {},
+            };
+          },
+        },
+        contextService: createContextService(),
+        generateId: randomUUID,
+        ledger,
+      });
+      await collect(
+        session.handle({
+          configuration: {
+            inputModalities: ["text"],
+            outputModalities: ["text"],
+            protocolVersion: "1",
+          },
+          eventId: randomUUID(),
+          sequence: 1,
+          sessionId,
+          type: "session.configure",
+        }),
+      );
+      await collect(
+        session.handle({
+          eventId: randomUUID(),
+          sequence: 2,
+          sessionId,
+          text: "Persist this terminal turn",
+          turnId,
+          type: "input.text",
+        }),
+      );
+
+      await collect(session.outputs());
+      const user = (await ledger.list())[0];
+
+      await expect(
+        ledger.listTurns({ contextEpochId: user?.contextEpochId ?? "" }),
+      ).resolves.toMatchObject([
+        {
+          completed: false,
+          failed: true,
+          requestId: turnId,
+        },
+      ]);
+      expect(session.closed).toBe(closesSession);
+      expect(closeProvider).toHaveBeenCalledTimes(closesSession ? 1 : 0);
+    },
+  );
+
+  it("retries a transient failure while persisting a terminal realtime turn", async () => {
+    const sessionId = randomUUID();
+    const turnId = randomUUID();
+    const responseId = randomUUID();
+    const ledger = new InMemoryConversationLedger();
+    const persistFailure = ledger.markRequestFailed.bind(ledger);
+    const markFailed = vi
+      .spyOn(ledger, "markRequestFailed")
+      .mockRejectedValueOnce(new Error("Temporary ledger failure"))
+      .mockImplementation(persistFailure);
+    const session = new RealtimeSession({
+      conversationEndIntent: neverEndsConversation,
+      conversationPort: {
+        async open() {
+          return {
+            capabilities: {
+              inputModalities: ["text"],
+              interruption: true,
+              outputModalities: ["text"],
+              runtimeKind: "integrated",
+              transcription: true,
+              turnDetection: "manual",
+              voiceKind: "preset",
+            } as const,
+            async close() {},
+            async *outputs() {
+              yield { responseId, turnId, type: "response-started" } as const;
+              yield { responseId, type: "response-cancelled" } as const;
+            },
+            async send() {},
+          };
+        },
+      },
+      contextService: createContextService(),
+      generateId: randomUUID,
+      ledger,
+    });
+    await collect(
+      session.handle({
+        configuration: {
+          inputModalities: ["text"],
+          outputModalities: ["text"],
+          protocolVersion: "1",
+        },
+        eventId: randomUUID(),
+        sequence: 1,
+        sessionId,
+        type: "session.configure",
+      }),
+    );
+    await collect(
+      session.handle({
+        eventId: randomUUID(),
+        sequence: 2,
+        sessionId,
+        text: "Persist a terminal turn despite one transient failure",
+        turnId,
+        type: "input.text",
+      }),
+    );
+
+    await collect(session.outputs());
+    const user = (await ledger.list())[0];
+
+    expect(markFailed).toHaveBeenCalledTimes(2);
+    await expect(
+      ledger.listTurns({ contextEpochId: user?.contextEpochId ?? "" }),
+    ).resolves.toMatchObject([{ completed: false, failed: true, requestId: turnId }]);
+  });
+
+  it("closes the provider after terminal failure persistence exhausts its retries", async () => {
+    const sessionId = randomUUID();
+    const turnId = randomUUID();
+    const responseId = randomUUID();
+    const ledger = new InMemoryConversationLedger();
+    const markFailed = vi
+      .spyOn(ledger, "markRequestFailed")
+      .mockRejectedValue(new Error("Persistent ledger failure"));
+    let providerClosed = false;
+    const session = new RealtimeSession({
+      conversationEndIntent: neverEndsConversation,
+      conversationPort: {
+        async open() {
+          return {
+            capabilities: {
+              inputModalities: ["text"],
+              interruption: true,
+              outputModalities: ["text"],
+              runtimeKind: "integrated",
+              transcription: true,
+              turnDetection: "manual",
+              voiceKind: "preset",
+            } as const,
+            async close() {
+              providerClosed = true;
+            },
+            async *outputs() {
+              yield { responseId, turnId, type: "response-started" } as const;
+              yield { responseId, type: "response-cancelled" } as const;
+            },
+            async send() {},
+          };
+        },
+      },
+      contextService: createContextService(),
+      generateId: randomUUID,
+      ledger,
+    });
+    await collect(
+      session.handle({
+        configuration: {
+          inputModalities: ["text"],
+          outputModalities: ["text"],
+          protocolVersion: "1",
+        },
+        eventId: randomUUID(),
+        sequence: 1,
+        sessionId,
+        type: "session.configure",
+      }),
+    );
+    await collect(
+      session.handle({
+        eventId: randomUUID(),
+        sequence: 2,
+        sessionId,
+        text: "Do not leak the provider connection",
+        turnId,
+        type: "input.text",
+      }),
+    );
+
+    await expect(collect(session.outputs())).rejects.toThrow("Persistent ledger failure");
+    await expect(session.close()).rejects.toThrow("Persistent ledger failure");
+
+    expect(markFailed).toHaveBeenCalledTimes(6);
+    expect(providerClosed).toBe(true);
+  });
+
+  it("clears response mappings after a scoped provider error", async () => {
+    const sessionId = randomUUID();
+    const turnId = randomUUID();
+    const responseId = randomUUID();
+    const ledger = new InMemoryConversationLedger();
+    const markFailed = vi.spyOn(ledger, "markRequestFailed");
+    const session = new RealtimeSession({
+      conversationEndIntent: neverEndsConversation,
+      conversationPort: {
+        async open() {
+          return {
+            capabilities: {
+              inputModalities: ["text"],
+              interruption: true,
+              outputModalities: ["text"],
+              runtimeKind: "integrated",
+              transcription: true,
+              turnDetection: "manual",
+              voiceKind: "preset",
+            } as const,
+            async close() {},
+            async *outputs() {
+              yield { responseId, turnId, type: "response-started" } as const;
+              yield {
+                responseId,
+                text: "Discard this partial answer",
+                turnId,
+                type: "response-text",
+              } as const;
+              yield {
+                code: "PROVIDER_FAILED",
+                message: "The response failed",
+                retryable: true,
+                turnId,
+                type: "error",
+              } as const;
+              yield { responseId, type: "response-cancelled" } as const;
+            },
+            async send() {},
+          };
+        },
+      },
+      contextService: createContextService(),
+      generateId: randomUUID,
+      ledger,
+    });
+    await collect(
+      session.handle({
+        configuration: {
+          inputModalities: ["text"],
+          outputModalities: ["text"],
+          protocolVersion: "1",
+        },
+        eventId: randomUUID(),
+        sequence: 1,
+        sessionId,
+        type: "session.configure",
+      }),
+    );
+    await collect(
+      session.handle({
+        eventId: randomUUID(),
+        sequence: 2,
+        sessionId,
+        text: "Fail this response once",
+        turnId,
+        type: "input.text",
+      }),
+    );
+
+    await collect(session.outputs());
+
+    expect(markFailed).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not fail another open turn when a provider error identifies its turn", async () => {
+    const sessionId = randomUUID();
+    const failedTurnId = randomUUID();
+    const completedTurnId = randomUUID();
+    const completedResponseId = randomUUID();
+    const ledger = new InMemoryConversationLedger();
+    const session = new RealtimeSession({
+      conversationEndIntent: neverEndsConversation,
+      conversationPort: {
+        async open() {
+          return {
+            capabilities: {
+              inputModalities: ["text"],
+              interruption: true,
+              outputModalities: ["text"],
+              runtimeKind: "integrated",
+              transcription: true,
+              turnDetection: "manual",
+              voiceKind: "preset",
+            } as const,
+            async close() {},
+            async *outputs() {
+              yield {
+                code: "PROVIDER_FAILED",
+                message: "Only the first turn failed",
+                retryable: true,
+                turnId: failedTurnId,
+                type: "error",
+              } as const;
+              yield {
+                responseId: completedResponseId,
+                turnId: completedTurnId,
+                type: "response-started",
+              } as const;
+              yield {
+                responseId: completedResponseId,
+                text: "Second turn completed",
+                turnId: completedTurnId,
+                type: "response-text",
+              } as const;
+              yield {
+                inputTokens: 1,
+                outputTokens: 1,
+                responseId: completedResponseId,
+                turnId: completedTurnId,
+                type: "response-completed",
+              } as const;
+            },
+            async send() {},
+          };
+        },
+      },
+      contextService: createContextService(),
+      generateId: randomUUID,
+      ledger,
+    });
+    await collect(
+      session.handle({
+        configuration: {
+          inputModalities: ["text"],
+          outputModalities: ["text"],
+          protocolVersion: "1",
+        },
+        eventId: randomUUID(),
+        sequence: 1,
+        sessionId,
+        type: "session.configure",
+      }),
+    );
+    for (const [sequence, turnId, text] of [
+      [2, failedTurnId, "First concurrent turn"],
+      [3, completedTurnId, "Second concurrent turn"],
+    ] as const) {
+      await collect(
+        session.handle({
+          eventId: randomUUID(),
+          sequence,
+          sessionId,
+          text,
+          turnId,
+          type: "input.text",
+        }),
+      );
+    }
+
+    await collect(session.outputs());
+    const user = (await ledger.list())[0];
+
+    await expect(
+      ledger.listTurns({ contextEpochId: user?.contextEpochId ?? "" }),
+    ).resolves.toMatchObject([
+      { completed: false, failed: true, requestId: failedTurnId },
+      { completed: true, failed: false, requestId: completedTurnId },
+    ]);
+  });
+
+  it("does not terminalize a turn for a nonterminal unscoped provider error", async () => {
+    const sessionId = randomUUID();
+    const turnId = randomUUID();
+    const ledger = new InMemoryConversationLedger();
+    const session = new RealtimeSession({
+      conversationEndIntent: neverEndsConversation,
+      conversationPort: {
+        async open() {
+          return {
+            capabilities: {
+              inputModalities: ["text"],
+              interruption: true,
+              outputModalities: ["text"],
+              runtimeKind: "integrated",
+              transcription: true,
+              turnDetection: "manual",
+              voiceKind: "preset",
+            } as const,
+            async close() {},
+            async *outputs() {
+              yield {
+                code: "UNRELATED_PROVIDER_ERROR",
+                message: "An unrelated provider operation failed",
+                retryable: true,
+                type: "error",
+              } as const;
+            },
+            async send() {},
+          };
+        },
+      },
+      contextService: createContextService(),
+      generateId: randomUUID,
+      ledger,
+    });
+    await collect(
+      session.handle({
+        configuration: {
+          inputModalities: ["text"],
+          outputModalities: ["text"],
+          protocolVersion: "1",
+        },
+        eventId: randomUUID(),
+        sequence: 1,
+        sessionId,
+        type: "session.configure",
+      }),
+    );
+    await collect(
+      session.handle({
+        eventId: randomUUID(),
+        sequence: 2,
+        sessionId,
+        text: "Keep this turn open",
+        turnId,
+        type: "input.text",
+      }),
+    );
+
+    await collect(session.outputs());
+    const user = (await ledger.list())[0];
+
+    await expect(
+      ledger.listTurns({ contextEpochId: user?.contextEpochId ?? "" }),
+    ).resolves.toMatchObject([{ completed: false, failed: false, requestId: turnId }]);
+  });
+
+  it("applies an early automatic-VAD cancellation after the final transcript is persisted", async () => {
+    const sessionId = randomUUID();
+    const clientAudioTurnId = randomUUID();
+    const providerTurnId = randomUUID();
+    const responseId = randomUUID();
+    const ledger = new InMemoryConversationLedger();
+    const session = new RealtimeSession({
+      conversationEndIntent: neverEndsConversation,
+      conversationPort: {
+        async open() {
+          return {
+            capabilities: {
+              inputModalities: ["audio"],
+              interruption: true,
+              outputModalities: ["text"],
+              runtimeKind: "integrated",
+              transcription: true,
+              turnDetection: "smart_turn",
+              voiceKind: "preset",
+            } as const,
+            async close() {},
+            async *outputs() {
+              yield { responseId, turnId: providerTurnId, type: "response-started" } as const;
+              yield { responseId, type: "response-cancelled" } as const;
+              yield {
+                final: true,
+                text: "Cancelled question",
+                turnId: providerTurnId,
+                type: "transcript",
+              } as const;
+            },
+            async send() {},
+          };
+        },
+      },
+      contextService: createContextService(),
+      generateId: randomUUID,
+      ledger,
+    });
+    await collect(
+      session.handle({
+        configuration: {
+          inputModalities: ["audio"],
+          outputModalities: ["text"],
+          protocolVersion: "1",
+          turnDetection: "smart_turn",
+        },
+        eventId: randomUUID(),
+        sequence: 1,
+        sessionId,
+        type: "session.configure",
+      }),
+    );
+    await collect(
+      session.handle({
+        audio: Buffer.from([1, 2]).toString("base64"),
+        eventId: randomUUID(),
+        sequence: 2,
+        sessionId,
+        turnId: clientAudioTurnId,
+        type: "input.audio",
+      }),
+    );
+
+    const output = await collect(session.outputs());
+    const user = (await ledger.list())[0];
+
+    expect(output.map((event) => event.type)).toEqual(["response.cancelled", "input.transcript"]);
+    await expect(
+      ledger.listTurns({ contextEpochId: user?.contextEpochId ?? "" }),
+    ).resolves.toMatchObject([
+      {
+        completed: false,
+        failed: true,
+        requestId: providerTurnId,
+      },
+    ]);
+  });
+
+  it("applies an automatic-VAD provider error before response start to the late transcript", async () => {
+    const sessionId = randomUUID();
+    const clientAudioTurnId = randomUUID();
+    const providerTurnId = randomUUID();
+    const ledger = new InMemoryConversationLedger();
+    const session = new RealtimeSession({
+      conversationEndIntent: neverEndsConversation,
+      conversationPort: {
+        async open() {
+          return {
+            capabilities: {
+              inputModalities: ["audio"],
+              interruption: true,
+              outputModalities: ["text"],
+              runtimeKind: "integrated",
+              transcription: true,
+              turnDetection: "smart_turn",
+              voiceKind: "preset",
+            } as const,
+            async close() {},
+            async *outputs() {
+              yield { turnId: providerTurnId, type: "speech-started" } as const;
+              yield {
+                code: "PROVIDER_FAILED",
+                message: "Provider failed before creating a response",
+                retryable: true,
+                turnId: providerTurnId,
+                type: "error",
+              } as const;
+              yield {
+                final: true,
+                text: "Question transcribed after the provider error",
+                turnId: providerTurnId,
+                type: "transcript",
+              } as const;
+            },
+            async send() {},
+          };
+        },
+      },
+      contextService: createContextService(),
+      generateId: randomUUID,
+      ledger,
+    });
+    await collect(
+      session.handle({
+        configuration: {
+          inputModalities: ["audio"],
+          outputModalities: ["text"],
+          protocolVersion: "1",
+          turnDetection: "smart_turn",
+        },
+        eventId: randomUUID(),
+        sequence: 1,
+        sessionId,
+        type: "session.configure",
+      }),
+    );
+    await collect(
+      session.handle({
+        audio: Buffer.from([1, 2]).toString("base64"),
+        eventId: randomUUID(),
+        sequence: 2,
+        sessionId,
+        turnId: clientAudioTurnId,
+        type: "input.audio",
+      }),
+    );
+
+    await collect(session.outputs());
+    const user = (await ledger.list())[0];
+
+    await expect(
+      ledger.listTurns({ contextEpochId: user?.contextEpochId ?? "" }),
+    ).resolves.toMatchObject([
+      {
+        completed: false,
+        failed: true,
+        requestId: providerTurnId,
+      },
+    ]);
+  });
+
+  it("does not fail an active turn when sending its cancellation is rejected", async () => {
+    const sessionId = randomUUID();
+    const turnId = randomUUID();
+    const responseId = randomUUID();
+    let continueResponse = () => {};
+    const responseStarted = new Promise<void>((resolveStarted) => {
+      continueResponse = resolveStarted;
+    });
+    let releaseCompletion = () => {};
+    const completionReleased = new Promise<void>((resolveCompletion) => {
+      releaseCompletion = resolveCompletion;
+    });
+    const ledger = new InMemoryConversationLedger();
+    const session = new RealtimeSession({
+      conversationEndIntent: neverEndsConversation,
+      conversationPort: {
+        async open() {
+          return {
+            capabilities: {
+              inputModalities: ["text"],
+              interruption: true,
+              outputModalities: ["text"],
+              runtimeKind: "integrated",
+              transcription: true,
+              turnDetection: "manual",
+              voiceKind: "preset",
+            } as const,
+            async close() {},
+            async *outputs() {
+              yield { responseId, turnId, type: "response-started" } as const;
+              continueResponse();
+              await completionReleased;
+              yield {
+                responseId,
+                text: "Original response completed",
+                turnId,
+                type: "response-text",
+              } as const;
+              yield {
+                inputTokens: 1,
+                outputTokens: 1,
+                responseId,
+                turnId,
+                type: "response-completed",
+              } as const;
+            },
+            async send(input) {
+              if (input.type === "cancel") {
+                throw new Error("Cancellation transport failed");
+              }
+            },
+          };
+        },
+      },
+      contextService: createContextService(),
+      generateId: randomUUID,
+      ledger,
+    });
+    await collect(
+      session.handle({
+        configuration: {
+          inputModalities: ["text"],
+          outputModalities: ["text"],
+          protocolVersion: "1",
+        },
+        eventId: randomUUID(),
+        sequence: 1,
+        sessionId,
+        type: "session.configure",
+      }),
+    );
+    await collect(
+      session.handle({
+        eventId: randomUUID(),
+        sequence: 2,
+        sessionId,
+        text: "Keep the original response alive",
+        turnId,
+        type: "input.text",
+      }),
+    );
+    const outputTask = collect(session.outputs());
+    await responseStarted;
+
+    const cancelResult = await collect(
+      session.handle({
+        eventId: randomUUID(),
+        responseId,
+        sequence: 3,
+        sessionId,
+        type: "response.cancel",
+      }),
+    );
+    const user = (await ledger.list())[0];
+    expect(cancelResult).toMatchObject([{ code: "REALTIME_INPUT_FAILED", type: "error" }]);
+    await expect(
+      ledger.listTurns({ contextEpochId: user?.contextEpochId ?? "" }),
+    ).resolves.toMatchObject([{ completed: false, failed: false, requestId: turnId }]);
+
+    releaseCompletion();
+    const completedOutput = await outputTask;
+    expect(completedOutput.map((event) => event.type)).toEqual([
+      "response.started",
+      "response.text",
+      "response.completed",
+    ]);
+
+    await expect(
+      ledger.listTurns({ contextEpochId: user?.contextEpochId ?? "" }),
+    ).resolves.toMatchObject([{ completed: true, failed: false, requestId: turnId }]);
+  });
+
+  it("applies a failed manual commit to a final transcript that arrives later", async () => {
+    const sessionId = randomUUID();
+    const turnId = randomUUID();
+    const ledger = new InMemoryConversationLedger();
+    const session = new RealtimeSession({
+      conversationEndIntent: neverEndsConversation,
+      conversationPort: {
+        async open() {
+          return {
+            capabilities: {
+              inputModalities: ["audio"],
+              interruption: true,
+              outputModalities: ["text"],
+              runtimeKind: "integrated",
+              transcription: true,
+              turnDetection: "manual",
+              voiceKind: "preset",
+            } as const,
+            async close() {},
+            async *outputs() {
+              yield {
+                final: true,
+                text: "Transcript from the accepted audio commit",
+                turnId,
+                type: "transcript",
+              } as const;
+            },
+            async send(input) {
+              if (input.type === "commit") {
+                throw new Error("Response creation failed after audio commit");
+              }
+            },
+          };
+        },
+      },
+      contextService: createContextService(),
+      generateId: randomUUID,
+      ledger,
+    });
+    await collect(
+      session.handle({
+        configuration: {
+          inputModalities: ["audio"],
+          outputModalities: ["text"],
+          protocolVersion: "1",
+          turnDetection: "manual",
+        },
+        eventId: randomUUID(),
+        sequence: 1,
+        sessionId,
+        type: "session.configure",
+      }),
+    );
+    await collect(
+      session.handle({
+        audio: Buffer.from([1, 2]).toString("base64"),
+        eventId: randomUUID(),
+        sequence: 2,
+        sessionId,
+        turnId,
+        type: "input.audio",
+      }),
+    );
+    const commitResult = await collect(
+      session.handle({
+        eventId: randomUUID(),
+        sequence: 3,
+        sessionId,
+        turnId,
+        type: "input.commit",
+      }),
+    );
+
+    expect(commitResult).toMatchObject([{ code: "REALTIME_INPUT_FAILED", type: "error" }]);
+    await collect(session.outputs());
+    const user = (await ledger.list())[0];
+    await expect(
+      ledger.listTurns({ contextEpochId: user?.contextEpochId ?? "" }),
+    ).resolves.toMatchObject([{ completed: false, failed: true, requestId: turnId }]);
   });
 
   it("checks epoch expiry again before committing buffered audio", async () => {

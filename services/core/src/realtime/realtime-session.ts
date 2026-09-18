@@ -25,6 +25,7 @@ import { recordTestTrace, withTestTraceIds } from "./test-trace.js";
 import { formatVisualResult } from "./visual-grounding.js";
 
 const maximumCaptureClockSkewMs = 30_000;
+const maximumFailurePersistenceAttempts = 3;
 
 function canonicalId(value: string): string {
   return value.toLowerCase();
@@ -83,11 +84,13 @@ export class RealtimeSession {
   readonly #finalTranscripts = new Map<string, string>();
   readonly #pendingContextCaptures = new Map<string, PendingContextCapture>();
   readonly #pendingAssistantTurns = new Map<string, PendingAssistantTurn>();
+  readonly #pendingFailedTurns = new Set<string>();
   readonly #persistedTurns = new Set<string>();
   readonly #responseTurnIds = new Map<string, string>();
   readonly #turnEpochs = new Map<string, ContextEpoch>();
   readonly #visibleResponseIds = new Set<string>();
   readonly #visualRequestedTurns = new Set<string>();
+  #automaticAudioInputAccepted = false;
   #closed = false;
   #activeTurnId: string | null = null;
   #conversation: RealtimeConversation | null = null;
@@ -137,7 +140,9 @@ export class RealtimeSession {
       return;
     }
     this.#closed = true;
+    let closeError: unknown;
     this.#acceptedInputTurns.clear();
+    this.#automaticAudioInputAccepted = false;
     this.#assistantContent.clear();
     this.#clientEventIds.clear();
     this.#completedResponseTurns.clear();
@@ -152,7 +157,13 @@ export class RealtimeSession {
       pending.abortController.abort();
     }
     this.#pendingContextCaptures.clear();
+    try {
+      await this.#markOpenTurnsFailed();
+    } catch (error) {
+      closeError = error;
+    }
     this.#pendingAssistantTurns.clear();
+    this.#pendingFailedTurns.clear();
     this.#persistedTurns.clear();
     this.#responseTurnIds.clear();
     this.#turnEpochs.clear();
@@ -163,7 +174,14 @@ export class RealtimeSession {
     this.#requiresStableContextSnapshot = false;
     this.#sessionEpochId = null;
     this.#sessionLedgerSequence = null;
-    await this.#conversation?.close();
+    try {
+      await this.#conversation?.close();
+    } catch (error) {
+      closeError ??= error;
+    }
+    if (closeError) {
+      throw closeError;
+    }
   }
 
   async *handle(
@@ -346,6 +364,13 @@ export class RealtimeSession {
     }
     if (isNewInputTurn && (event.type === "input.audio" || event.type === "input.text")) {
       this.#acceptedInputTurns.add(canonicalId(event.turnId));
+      if (
+        event.type === "input.audio" &&
+        this.#requiresStableContextSnapshot &&
+        this.#conversation.capabilities.turnDetection !== "manual"
+      ) {
+        this.#automaticAudioInputAccepted = true;
+      }
     }
 
     if (event.type === "context.capture.succeeded" || event.type === "context.capture.failed") {
@@ -420,14 +445,16 @@ export class RealtimeSession {
         return;
       }
     }
-    if (event.type === "response.cancel") {
-      const turnId = this.#responseTurnIds.get(canonicalId(event.responseId));
-      if (turnId) this.#cancelContextCapturesForTurn(turnId);
-    }
-
     try {
       await this.#conversation.send(mapInput(event), signal);
+      if (event.type === "response.cancel") {
+        const turnId = this.#responseTurnIds.get(canonicalId(event.responseId));
+        if (turnId) this.#cancelContextCapturesForTurn(turnId);
+      }
     } catch {
+      if ("turnId" in event) {
+        await this.#markTurnFailed(event.turnId, event.type === "input.commit");
+      }
       yield this.#error(
         event.sessionId,
         "REALTIME_INPUT_FAILED",
@@ -451,7 +478,8 @@ export class RealtimeSession {
         (this.#onDemandContext ||
           (this.#requiresStableContextSnapshot &&
             deferredTurnId !== undefined &&
-            this.#acceptedInputTurns.has(canonicalId(deferredTurnId)))) &&
+            (this.#acceptedInputTurns.has(canonicalId(deferredTurnId)) ||
+              this.#automaticAudioInputAccepted))) &&
         deferredTurnId &&
         !this.#finalTranscripts.has(deferredTurnId)
       ) {
@@ -559,6 +587,10 @@ export class RealtimeSession {
           return;
         }
         yield this.#mapOutput(this.#sessionId, output);
+        if (output.type === "error" && output.terminal) {
+          await this.close();
+          return;
+        }
         if (output.type === "response-completed") {
           if (!this.#finalTranscripts.has(output.turnId)) {
             this.#completedResponseTurns.add(output.turnId);
@@ -843,6 +875,13 @@ export class RealtimeSession {
             throw new RealtimeEpochExpiredError();
           }
           await this.#persistPendingAssistantTurn(output.turnId);
+          if (
+            this.#pendingFailedTurns.delete(output.turnId) &&
+            this.#turnEpochs.has(output.turnId)
+          ) {
+            await this.#markTurnFailed(output.turnId);
+            this.#turnEpochs.delete(output.turnId);
+          }
         }
         break;
       case "response-started":
@@ -887,12 +926,29 @@ export class RealtimeSession {
         {
           const turnId = this.#responseTurnIds.get(canonicalId(output.responseId));
           if (turnId && !options.preserveTurnEpoch) {
-            this.#pendingAssistantTurns.delete(turnId);
-            this.#turnEpochs.delete(turnId);
+            let terminalized = false;
+            try {
+              await this.#markTurnFailed(turnId, true);
+              terminalized = true;
+            } finally {
+              this.#clearTurnOutputState(turnId, terminalized);
+            }
           }
         }
         break;
       case "error":
+        if (output.turnId) {
+          let terminalized = false;
+          try {
+            await this.#markTurnFailed(output.turnId, true);
+            terminalized = true;
+          } finally {
+            this.#clearTurnOutputState(output.turnId, terminalized);
+          }
+        } else if (output.terminal) {
+          await this.#markOpenTurnsFailed(true);
+        }
+        break;
       case "context-request":
       case "response-audio":
         break;
@@ -965,6 +1021,76 @@ export class RealtimeSession {
     });
     if (message.contextEpochId) {
       this.#trackSessionSequence(message.contextEpochId, message.sequence);
+    }
+  }
+
+  async #markOpenTurnsFailed(deferUntilPersisted = false): Promise<void> {
+    const turnIds = new Set([...this.#turnEpochs.keys(), ...this.#responseTurnIds.values()]);
+    if (this.#activeTurnId) {
+      turnIds.add(this.#activeTurnId);
+    }
+    let failure: unknown;
+    for (const turnId of turnIds) {
+      let terminalized = false;
+      try {
+        await this.#markTurnFailed(turnId, deferUntilPersisted);
+        terminalized = true;
+      } catch (error) {
+        failure ??= error;
+      } finally {
+        this.#clearTurnOutputState(turnId, terminalized);
+      }
+    }
+    if (failure) {
+      throw failure;
+    }
+  }
+
+  #clearTurnOutputState(turnId: string, clearEpoch: boolean): void {
+    this.#deferredResponseOutputs.delete(turnId);
+    this.#pendingAssistantTurns.delete(turnId);
+    for (const [responseId, responseTurnId] of this.#responseTurnIds) {
+      if (canonicalId(responseTurnId) !== canonicalId(turnId)) continue;
+      this.#responseTurnIds.delete(responseId);
+      for (const visibleResponseId of this.#visibleResponseIds) {
+        if (canonicalId(visibleResponseId) === responseId) {
+          this.#visibleResponseIds.delete(visibleResponseId);
+        }
+      }
+      for (const bufferedResponseId of this.#assistantContent.keys()) {
+        if (canonicalId(bufferedResponseId) === responseId) {
+          this.#assistantContent.delete(bufferedResponseId);
+        }
+      }
+    }
+    if (clearEpoch) {
+      this.#turnEpochs.delete(turnId);
+    }
+  }
+
+  async #markTurnFailed(turnId: string, deferUntilPersisted = false): Promise<void> {
+    const contextEpoch = this.#turnEpochs.get(turnId);
+    if (!contextEpoch || !this.#persistedTurns.has(turnId)) {
+      if (deferUntilPersisted) {
+        this.#pendingFailedTurns.add(turnId);
+      }
+      return;
+    }
+    for (let attempt = 1; attempt <= maximumFailurePersistenceAttempts; attempt += 1) {
+      try {
+        await this.#ledger.markRequestFailed(turnId, contextEpoch.id, this.#now());
+        this.#pendingFailedTurns.delete(turnId);
+        return;
+      } catch (error) {
+        recordTestTrace("realtime.failure_state.failed", {
+          attempt,
+          error: error instanceof Error ? error.message : "unknown",
+          turnId,
+        });
+        if (attempt === maximumFailurePersistenceAttempts) {
+          throw error;
+        }
+      }
     }
   }
 
