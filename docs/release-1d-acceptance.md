@@ -1,7 +1,7 @@
 # Release 1D：验收清单
 
-> 状态：Phase 1 第四轮审查修复已完成本地实现与复审，等待合入和生产部署；生产仍
-> 运行第三轮版本，Phase 2/3 未开始。
+> 状态：Phase 1 第四轮审查修复已提交、复审、合入双主线并重新部署；Phase 2/3
+> 未开始。
 > 本文记录 Release 1D 的实际版本、失败、证据和剩余门禁。规格见
 > [最终规格](./release-1d-spec.md)，实施顺序见 [任务拆分](./release-1d-tasks.md)。
 
@@ -20,8 +20,8 @@
 - [x] 用户已批准 1D 规格和任务拆分（2026-09-16）；Phase 1 已完成第四轮本地实现与审查。
 - [x] 已部署 Phase 1 版本的 commit、Core 版本和 Mac 二进制 hash 已记录。
 - [x] Phase 1 第三轮修复的验收 commit、Core 版本和重新部署 hash 已记录。
-- [ ] Phase 1 第四轮修复尚待合入双主线并重新部署；生产仍为
-  `a6389f6-release-1d-phase1-review3`。
+- [x] Phase 1 第四轮修复的验收 commit、双主线 merge commit、Core 版本、备份和
+  重新部署 hash 已记录。
 - [ ] Mac/Core recorder 在真人测试前均为 ready。
 - [x] 当前 Phase 1 自动化测试数据全部为合成数据。
 - [x] 本机 Xcode license 已接受；检查 run `8dd35fde-dede-40ec-bd50-c75d1e71f1af`。
@@ -288,7 +288,7 @@
   Core 健康且认证状态 `ready`，run `791a1919-75dc-461c-8d37-e4e7a67d9a06`。
   Phase 1 第三轮修复已重新放行，Phase 2 仍保持未开始。
 
-### 2.5 Phase 1 第四轮审查修复（2026-09-18，本地待发布）
+### 2.5 Phase 1 第四轮审查修复（2026-09-18）
 
 - 第四轮独立审查覆盖 Realtime 进程生命周期、失败补偿和供应商重试，发现关闭期间
   user-only 轮次可能遗留、失败标记瞬时写入失败后会被遗忘、两个 Core 可同时操作同一
@@ -328,8 +328,28 @@
   配置通过，run `a99c5b15-1a90-44c6-a271-ea48b0bf782b`。
 - 最终代码与测试证据绑定 `main@97ed17a7feb2402efb9aeee24ec14cb687ee8c06` 加工作树
   指纹 `ee5efef23cc7c0792f180cb34b388fcfbf0f5ee08e7fd4b4e2574ba1691d478d`。
-  分组与跨组独立复审未再发现 P0-P2。该结论只覆盖本地修复；合入、exact-main 构建、
-  加密备份和生产部署仍是门禁，Phase 2 不得提前开始。
+  分组与跨组独立复审未再发现 P0-P2。
+- 修复提交为 `43bf6eae369d48062a63023a4ff0a03f2cbd21bd`；Codebase MR
+  [!27](https://code.byted.org/user/violet/merge_requests/27) 合入
+  `main@1ee90fe8021aff99b9a05f00f978809bdde2673d`，GitHub PR
+  [#10](https://github.com/Defector-12/violet/pull/10) 合入
+  `main@873e833474c330a8efcd7bd8fab61282e907e699`；两个主线与修复提交 tree 均为
+  `259bf9a2da1b451dc9854ceaf56c521b672a0b20`。
+- exact-main Core 构建通过，run `e6121bbf-1629-44f9-8924-e666d1b73de0`。部署前
+  加密 PostgreSQL 备份 run `31d92f42-1806-4180-9166-4b62069d5e98`，文件
+  `20260918T103333Z-8ffb7a3f-da2f-4764-b2a1-44c6f1646fec.vltbk`，密文 SHA-256
+  `cf32a07984680331517bd7a8e3a8146959d4e621acf02e3292a82f4d3eaa9842`。
+- Core 部署 run `ffb150ac-97a1-4a57-b67f-91c944e9fce6`：发布归档 SHA-256
+  `812bda5e7669c9c2baa3d3d7d5157399b38e167d52649f02ac9567c4ea43a932`，运行镜像
+  `sha256:899b5d840846e2b19195ed5238e31b200019c03708c5d1ff69644a832fd663a5`，
+  版本为 `1ee90fe-release-1d-phase1-review4`。
+- 部署后健康、零重启、三项迁移、checkpoint 开关、模型、备份、发布归档、回滚镜像、
+  user-only 轮次收敛和 advisory lease 验证均通过，run
+  `f777d4d3-468c-43e6-96fa-9e688676ce6d`；远端与本地 `dist` 清单 SHA-256 均为
+  `6f8b3629ffd37de851499e130ef4eb74f62ec95d98bad9a29496eacc906c9909`。
+  Mac SSH 隧道下健康及认证状态 `ready`，run
+  `904fb9a6-cccc-405a-8b6f-cf494aad684f`。Phase 1 第四轮修复已重新放行，
+  Phase 2 仍保持未开始。
 
 ## 3. P0：事实与来源
 
@@ -515,8 +535,8 @@ docker compose -f infra/compose/compose.yaml config
   `d311e1a-release-1d-phase1-final`。
 - [x] Phase 1 第三轮审查修复已提交、复审、合入双主线并重新部署，运行版本为
   `a6389f6-release-1d-phase1-review3`。
-- [ ] Phase 1 第四轮审查修复已完成本地实现与复审，仍待双主线合入、exact-main 构建、
-  加密备份、生产部署和部署后验证。
+- [x] Phase 1 第四轮审查修复已提交、复审、合入双主线并重新部署，运行版本为
+  `1ee90fe-release-1d-phase1-review4`。
 - [ ] 用户明确批准后，生产自动记忆才开启。
 
 关闭自动提取、记忆注入或 checkpoint 可以回滚能力；任何回滚都不得降低
