@@ -1,7 +1,7 @@
 # Release 1D：任务拆分
 
-> 状态：方案已批准；Phase 1 第三轮审查修复已提交、复审、合入双主线并重新部署；
-> Phase 2/3 未开始。
+> 状态：方案已批准；Phase 1 第四轮审查修复已完成本地实现与复审，等待合入和生产
+> 部署；生产仍运行第三轮版本，Phase 2/3 未开始。
 > 产品合同见 [最终规格](./release-1d-spec.md)，放行条件见
 > [验收清单](./release-1d-acceptance.md)。
 
@@ -93,6 +93,12 @@
 - Pipeline 在模型装配前保证当前最终用户事件已落账，并使用其 sequence 作为读取上界。
 - Integrated Realtime 自动 VAD 回答在最终转写落账和快照复核前不得对客户端可见。
 - 视觉工具调用的中间取消不清除 turn epoch，grounded 最终回答必须与用户输入一起落账。
+- 同一 turn 的持久化串行执行并规范化 UUID；重试使用 attempt ID 隔离，旧 attempt 的
+  迟到输出和取消不能影响当前 attempt。
+- Qwen 文字重试不重复创建 provider item，只补发尚未成功的 `response.create`。
+- 失败终止标记由跨会话共享恢复器重试；Core 启动时终止化遗留 user-only 轮次。
+- Core 关闭前有界排空 Realtime 会话，再关闭数据库；生产数据库使用 advisory lease
+  拒绝第二个并发 Core 进程。
 - 不改变 Natural Pointing 的当前轮、新鲜度、取消和隐私门禁。
 
 **Phase 1 合并门**

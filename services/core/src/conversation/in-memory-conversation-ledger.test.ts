@@ -175,4 +175,25 @@ describe("InMemoryConversationLedger", () => {
       { completed: true, failed: false, requestId: "request-later" },
     ]);
   });
+
+  it("recovers persisted user-only turns after a process restart", async () => {
+    const ledger = new InMemoryConversationLedger();
+    const contextEpoch = {
+      id: "00000000-0000-4000-8000-000000000001",
+      startedAt: new Date("2026-09-16T00:00:00.000Z"),
+    };
+    await ledger.append({
+      content: "Interrupted question",
+      contextEpoch,
+      id: "user-interrupted",
+      occurredAt: contextEpoch.startedAt,
+      requestId: "request-interrupted",
+      role: "user",
+    });
+
+    await expect(ledger.recoverIncompleteRequests(new Date())).resolves.toBe(1);
+    await expect(ledger.listTurns({ contextEpochId: contextEpoch.id })).resolves.toMatchObject([
+      { completed: false, failed: true, requestId: "request-interrupted" },
+    ]);
+  });
 });

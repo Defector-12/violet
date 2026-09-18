@@ -1,7 +1,7 @@
 # Release 1D：Violet Continuity 最终规格
 
-> 状态：方案已批准；Phase 1 第三轮审查修复已提交、复审、合入双主线并重新部署；
-> Phase 2/3 未开始。本文是 Release 1D 的产品与技术事实源。
+> 状态：方案已批准；Phase 1 第四轮审查修复已完成本地实现与复审，等待合入和生产
+> 部署；生产仍运行第三轮版本，Phase 2/3 未开始。本文是 Release 1D 的产品与技术事实源。
 > 实施顺序见 [任务拆分](./release-1d-tasks.md)，放行条件见
 > [验收清单](./release-1d-acceptance.md)。
 
@@ -145,6 +145,13 @@ Integrated Realtime 会话除了绑定 epoch，也绑定建立连接时的账本
 作为装配上界。Integrated Realtime 的自动 VAD 轮次在最终转写前缓存供应商回答，复核
 账本快照后才可对客户端可见。视觉工具调用产生的中间取消不结束逻辑轮次，最终 grounded
 回答仍须与用户输入使用同一 epoch 落账。
+
+Realtime 的同一逻辑 turn 必须按规范化 ID 串行持久化，并由单调 attempt ID 隔离重试；
+旧 attempt 的迟到转写、回答、取消和错误均不得改变新 attempt。Qwen 对同一文字 turn
+只允许创建一个 provider item，失败后只重试尚未成功的 `response.create`。Core 启动时
+终止化数据库中遗留的 user-only 轮次，运行时失败标记使用共享重试器持久化；关闭服务时
+先停止接收并等待 Realtime 会话有界排空，再关闭数据库。生产数据库同时只允许一个 Core
+进程持有 advisory lease。
 
 ## 5. 长期记忆
 

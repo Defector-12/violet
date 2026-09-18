@@ -312,27 +312,108 @@ export class PostgresConversationLedger implements ConversationLedger {
     contextEpochId: string,
     occurredAt: Date,
   ): Promise<void> {
-    const result = await this.#pool.query(
-      `
-        INSERT INTO conversation_turn_failures (
-          instance_id, request_id, context_epoch_id, occurred_at
-        )
-        SELECT events.instance_id, events.request_id, events.context_epoch_id, $3
-        FROM conversation_events AS events
-        JOIN violet_instances AS instance ON instance.id = events.instance_id
-        WHERE instance.singleton = true
-          AND events.request_id = $1
-          AND events.role = 'user'
-          AND events.context_epoch_id = $2
-        ON CONFLICT (instance_id, request_id) DO UPDATE SET
-          context_epoch_id = EXCLUDED.context_epoch_id,
-          occurred_at = EXCLUDED.occurred_at
-        RETURNING request_id
-      `,
-      [requestId, contextEpochId, occurredAt],
-    );
-    if (result.rowCount !== 1) {
-      throw new Error("Cannot fail a request without its persisted user event");
+    const client = await this.#pool.connect();
+    try {
+      await client.query("BEGIN");
+      const instance = await client.query<{ id: string }>(
+        "SELECT id FROM violet_instances WHERE singleton = true FOR UPDATE",
+      );
+      const instanceId = instance.rows[0]?.id;
+      if (!instanceId) {
+        throw new Error("Cannot fail a request without its persisted user event");
+      }
+      const result = await client.query(
+        `
+          INSERT INTO conversation_turn_failures (
+            instance_id, request_id, context_epoch_id, occurred_at
+          )
+          SELECT users.instance_id, users.request_id, users.context_epoch_id, $4
+          FROM conversation_events AS users
+          WHERE users.instance_id = $1
+            AND users.request_id = $2
+            AND users.role = 'user'
+            AND users.context_epoch_id = $3
+            AND NOT EXISTS (
+              SELECT 1
+              FROM conversation_events AS assistants
+              WHERE assistants.instance_id = users.instance_id
+                AND assistants.request_id = users.request_id
+                AND assistants.role = 'assistant'
+            )
+          ON CONFLICT (instance_id, request_id) DO UPDATE SET
+            context_epoch_id = EXCLUDED.context_epoch_id,
+            occurred_at = EXCLUDED.occurred_at
+          RETURNING request_id
+        `,
+        [instanceId, requestId, contextEpochId, occurredAt],
+      );
+      if (result.rowCount !== 1) {
+        const user = await client.query(
+          `
+            SELECT 1
+            FROM conversation_events
+            WHERE instance_id = $1
+              AND request_id = $2
+              AND role = 'user'
+              AND context_epoch_id = $3
+          `,
+          [instanceId, requestId, contextEpochId],
+        );
+        if (user.rowCount !== 1) {
+          throw new Error("Cannot fail a request without its persisted user event");
+        }
+        await this.#clearRequestFailureInTransaction(client, instanceId, requestId);
+      }
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async recoverIncompleteRequests(occurredAt: Date): Promise<number> {
+    const client = await this.#pool.connect();
+    try {
+      await client.query("BEGIN");
+      const instance = await client.query<{ id: string }>(
+        "SELECT id FROM violet_instances WHERE singleton = true FOR UPDATE",
+      );
+      const instanceId = instance.rows[0]?.id;
+      if (!instanceId) {
+        await client.query("COMMIT");
+        return 0;
+      }
+      const recovered = await client.query<{ request_id: string }>(
+        `
+          INSERT INTO conversation_turn_failures (
+            instance_id, request_id, context_epoch_id, occurred_at
+          )
+          SELECT users.instance_id, users.request_id, users.context_epoch_id, $2
+          FROM conversation_events AS users
+          WHERE users.instance_id = $1
+            AND users.role = 'user'
+            AND users.context_epoch_id IS NOT NULL
+            AND NOT EXISTS (
+              SELECT 1
+              FROM conversation_events AS assistants
+              WHERE assistants.instance_id = users.instance_id
+                AND assistants.request_id = users.request_id
+                AND assistants.role = 'assistant'
+            )
+          ON CONFLICT (instance_id, request_id) DO NOTHING
+          RETURNING request_id
+        `,
+        [instanceId, occurredAt],
+      );
+      await client.query("COMMIT");
+      return recovered.rowCount ?? 0;
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
     }
   }
 

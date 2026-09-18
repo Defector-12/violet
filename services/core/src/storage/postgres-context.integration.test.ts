@@ -356,4 +356,62 @@ integration("PostgreSQL conversation context", () => {
       contextEpochId: epoch.id,
     });
   });
+
+  it("recovers persisted user-only turns after a process restart", async () => {
+    const cipher = new EnvelopeCipher({
+      key: randomBytes(32),
+      keyVersion: "test-content-v1",
+    });
+    const ledger = new PostgresConversationLedger({
+      cipher,
+      constitutionVersion: "test",
+      instanceId: randomUUID(),
+      pool,
+    });
+    const contextEpoch = {
+      id: randomUUID(),
+      startedAt: new Date("2026-09-16T00:10:00.000Z"),
+    };
+    const requestId = randomUUID();
+    await ledger.append({
+      content: "Interrupted before the previous process exited",
+      contextEpoch,
+      id: randomUUID(),
+      occurredAt: contextEpoch.startedAt,
+      requestId,
+      role: "user",
+    });
+
+    await expect(ledger.recoverIncompleteRequests(new Date())).resolves.toBeGreaterThan(0);
+    await expect(ledger.listTurns({ contextEpochId: contextEpoch.id })).resolves.toMatchObject([
+      { completed: false, failed: true, requestId },
+    ]);
+    await expect(ledger.recoverIncompleteRequests(new Date())).resolves.toBe(0);
+
+    const completedRequestId = randomUUID();
+    await ledger.append({
+      content: "Question completed while failure recovery runs",
+      contextEpoch,
+      id: randomUUID(),
+      occurredAt: contextEpoch.startedAt,
+      requestId: completedRequestId,
+      role: "user",
+    });
+    await Promise.all([
+      ledger.markRequestFailed(completedRequestId, contextEpoch.id, new Date()),
+      ledger.append({
+        content: "Completed answer",
+        contextEpoch,
+        id: randomUUID(),
+        occurredAt: new Date(),
+        requestId: completedRequestId,
+        role: "assistant",
+      }),
+    ]);
+    await expect(
+      pool.query("SELECT 1 FROM conversation_turn_failures WHERE request_id = $1", [
+        completedRequestId,
+      ]),
+    ).resolves.toMatchObject({ rowCount: 0 });
+  });
 });
