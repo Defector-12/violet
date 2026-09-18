@@ -85,17 +85,20 @@ class DeterministicRealtimeConversation implements RealtimeConversation {
 
     const responseId = this.#generateId();
     this.#outputQueue.push({
+      ...(input.attemptId !== undefined ? { attemptId: input.attemptId } : {}),
       responseId,
       turnId: input.turnId,
       type: "response-started",
     });
     this.#outputQueue.push({
+      ...(input.attemptId !== undefined ? { attemptId: input.attemptId } : {}),
       responseId,
       text: `Violet realtime test response: ${input.text}`,
       turnId: input.turnId,
       type: "response-text",
     });
     this.#outputQueue.push({
+      ...(input.attemptId !== undefined ? { attemptId: input.attemptId } : {}),
       inputTokens: input.text.length,
       outputTokens: input.text.length + 31,
       responseId,

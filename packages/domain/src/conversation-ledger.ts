@@ -49,4 +49,5 @@ export interface ConversationLedger {
   list(): Promise<readonly LedgerMessage[]>;
   listTurns(options: ListConversationTurns): Promise<readonly ConversationTurn[]>;
   markRequestFailed(requestId: string, contextEpochId: string, occurredAt: Date): Promise<void>;
+  recoverIncompleteRequests(occurredAt: Date): Promise<number>;
 }

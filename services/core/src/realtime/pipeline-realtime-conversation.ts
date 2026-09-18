@@ -158,6 +158,7 @@ export class PipelineRealtimeConversationPort implements RealtimeConversationPor
 }
 
 interface ActiveResponse {
+  readonly attemptId?: number;
   readonly controller: AbortController;
   readonly responseId: string;
   readonly turnId: string;
@@ -311,7 +312,7 @@ class PipelineRealtimeConversation implements RealtimeConversation {
         if (!this.#assembleContext) {
           this.#history.push({ content: input.text, role: "user" });
         }
-        await this.#startResponse(input.turnId, input.text);
+        await this.#startResponse(input.turnId, input.text, input.attemptId);
         break;
     }
   }
@@ -390,13 +391,14 @@ class PipelineRealtimeConversation implements RealtimeConversation {
     return turnId;
   }
 
-  async #startResponse(turnId: string, userContent: string): Promise<void> {
+  async #startResponse(turnId: string, userContent: string, attemptId?: number): Promise<void> {
     await this.#cancelActiveResponse();
     if (this.#closed) {
       return;
     }
 
     const response: ActiveResponse = {
+      ...(attemptId !== undefined ? { attemptId } : {}),
       controller: new AbortController(),
       responseId: this.#generateId(),
       turnId,
@@ -404,6 +406,7 @@ class PipelineRealtimeConversation implements RealtimeConversation {
     };
     this.#activeResponse = response;
     this.#outputQueue.push({
+      ...(response.attemptId !== undefined ? { attemptId: response.attemptId } : {}),
       responseId: response.responseId,
       turnId,
       type: "response-started",
@@ -444,6 +447,7 @@ class PipelineRealtimeConversation implements RealtimeConversation {
 
         assistantText += event.content;
         this.#outputQueue.push({
+          ...(response.attemptId !== undefined ? { attemptId: response.attemptId } : {}),
           responseId: response.responseId,
           text: event.content,
           turnId: response.turnId,
@@ -476,6 +480,7 @@ class PipelineRealtimeConversation implements RealtimeConversation {
       }
       this.#activeResponse = null;
       this.#outputQueue.push({
+        ...(response.attemptId !== undefined ? { attemptId: response.attemptId } : {}),
         inputTokens,
         outputTokens,
         responseId: response.responseId,
@@ -485,7 +490,10 @@ class PipelineRealtimeConversation implements RealtimeConversation {
     } catch (error) {
       if (!response.controller.signal.aborted && this.#activeResponse === response) {
         this.#activeResponse = null;
-        this.#outputQueue.push(pipelineErrorOutput(error, "RESPONSE", response.turnId));
+        this.#outputQueue.push({
+          ...pipelineErrorOutput(error, "RESPONSE", response.turnId),
+          ...(response.attemptId !== undefined ? { attemptId: response.attemptId } : {}),
+        });
       }
     } finally {
       response.ttsTransport?.close();
@@ -525,6 +533,7 @@ class PipelineRealtimeConversation implements RealtimeConversation {
       if (message.type === "binary") {
         if (message.data.length > 0 && this.#activeResponse === response) {
           this.#outputQueue.push({
+            ...(response.attemptId !== undefined ? { attemptId: response.attemptId } : {}),
             audio: message.data,
             responseId: response.responseId,
             turnId: response.turnId,
@@ -563,6 +572,7 @@ class PipelineRealtimeConversation implements RealtimeConversation {
     }
     if (emit) {
       this.#outputQueue.push({
+        ...(response.attemptId !== undefined ? { attemptId: response.attemptId } : {}),
         responseId: response.responseId,
         type: "response-cancelled",
       });

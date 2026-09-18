@@ -208,6 +208,152 @@ describe("QwenAudioRealtimeConversationPort", () => {
     ]);
   });
 
+  it("does not duplicate a text item when response creation is retried", async () => {
+    const transport = new FakeTransport(
+      [{ type: "session.created" }, { type: "session.updated" }],
+      "response.create",
+      1,
+    );
+    const port = new QwenAudioRealtimeConversationPort({
+      apiKey: "test-qwen-api-key",
+      createTransport: () => transport,
+      generateId: () => "unused",
+      model: "qwen-audio-3.0-realtime-plus",
+      voice: "longanqian",
+      workspaceId: "ws-jvh4fvlcktrjvtbj",
+    });
+    const conversation = await port.open(configuration());
+    const input = { text: "Retry this once", turnId: "turn-1", type: "text" } as const;
+
+    await expect(conversation.send(input)).rejects.toThrow(
+      "Fake transport rejected response.create",
+    );
+    await expect(conversation.send(input)).resolves.toBeUndefined();
+    await expect(conversation.send(input)).resolves.toBeUndefined();
+    await expect(conversation.send({ ...input, text: "Changed retry content" })).rejects.toThrow(
+      "does not match",
+    );
+
+    expect(transport.sent.filter((event) => event["type"] === "conversation.item.create")).toEqual([
+      {
+        item: {
+          content: [{ text: input.text, type: "input_text" }],
+          role: "user",
+          type: "message",
+        },
+        type: "conversation.item.create",
+      },
+    ]);
+    expect(transport.sent.filter((event) => event["type"] === "response.create")).toHaveLength(2);
+  });
+
+  it("allows response creation to retry after an asynchronous provider rejection", async () => {
+    const transport = new FakeTransport([
+      { type: "session.created" },
+      { type: "session.updated" },
+      {
+        error: {
+          code: "server_error",
+          message: "Response creation failed",
+          param: "response.create",
+          type: "server_error",
+        },
+        type: "error",
+      },
+    ]);
+    const port = new QwenAudioRealtimeConversationPort({
+      apiKey: "test-qwen-api-key",
+      createTransport: () => transport,
+      generateId: () => "unused",
+      model: "qwen-audio-3.0-realtime-plus",
+      voice: "longanqian",
+      workspaceId: "ws-jvh4fvlcktrjvtbj",
+    });
+    const conversation = await port.open(configuration());
+    const input = {
+      attemptId: 1,
+      text: "Retry after provider rejection",
+      turnId: "turn-1",
+      type: "text",
+    } as const;
+
+    await conversation.send(input);
+    await expect(conversation.outputs()[Symbol.asyncIterator]().next()).resolves.toMatchObject({
+      value: { attemptId: 1, turnId: input.turnId, type: "error" },
+    });
+    await conversation.send({ ...input, attemptId: 2 });
+
+    expect(
+      transport.sent.filter((event) => event["type"] === "conversation.item.create"),
+    ).toHaveLength(1);
+    expect(transport.sent.filter((event) => event["type"] === "response.create")).toHaveLength(2);
+  });
+
+  it("allows the same text turn to retry after cancellation finds no active response", async () => {
+    const transport = new FakeTransport([
+      { type: "session.created" },
+      { type: "session.updated" },
+      {
+        response: { id: "resp-qwen-1", status: "in_progress" },
+        type: "response.created",
+      },
+      {
+        error: {
+          code: "invalid_request_error",
+          message: "Conversation has no active response.",
+          type: "invalid_request_error",
+        },
+        type: "error",
+      },
+      {
+        response: { id: "resp-qwen-2", status: "in_progress" },
+        type: "response.created",
+      },
+    ]);
+    const generatedIds = ["local-response-1", "local-response-2"];
+    const port = new QwenAudioRealtimeConversationPort({
+      apiKey: "test-qwen-api-key",
+      createTransport: () => transport,
+      generateId: () => generatedIds.shift() ?? "unexpected-id",
+      model: "qwen-audio-3.0-realtime-plus",
+      voice: "longanqian",
+      workspaceId: "ws-jvh4fvlcktrjvtbj",
+    });
+    const conversation = await port.open(configuration());
+    const input = {
+      attemptId: 1,
+      text: "Retry after cancellation",
+      turnId: "turn-1",
+      type: "text",
+    } as const;
+    const outputs = conversation.outputs()[Symbol.asyncIterator]();
+
+    await conversation.send(input);
+    expect((await outputs.next()).value).toMatchObject({
+      attemptId: 1,
+      responseId: "local-response-1",
+      type: "response-started",
+    });
+    await conversation.send({ responseId: "local-response-1", type: "cancel" });
+    expect((await outputs.next()).value).toEqual({
+      attemptId: 1,
+      responseId: "local-response-1",
+      type: "response-cancelled",
+    });
+
+    await conversation.send({ ...input, attemptId: 2 });
+    expect((await outputs.next()).value).toEqual({
+      attemptId: 2,
+      responseId: "local-response-2",
+      turnId: "turn-1",
+      type: "response-started",
+    });
+    expect(
+      transport.sent.filter((event) => event["type"] === "conversation.item.create"),
+    ).toHaveLength(1);
+    expect(transport.sent.filter((event) => event["type"] === "response.create")).toHaveLength(2);
+  });
+
   it("drops a context result after a new speech turn cancels the tool response", async () => {
     const transport = new FakeTransport([
       { type: "session.created" },
@@ -549,16 +695,18 @@ describe("QwenAudioRealtimeConversationPort", () => {
     });
     const conversation = await port.open(configuration());
 
-    await conversation.send({ text: "First", turnId: "turn-1", type: "text" });
-    await conversation.send({ text: "Second", turnId: "turn-2", type: "text" });
+    await conversation.send({ attemptId: 1, text: "First", turnId: "turn-1", type: "text" });
+    await conversation.send({ attemptId: 2, text: "Second", turnId: "turn-2", type: "text" });
 
     expect(await take(conversation.outputs(), 2)).toEqual([
       {
+        attemptId: 1,
         responseId: "local-response-1",
         turnId: "turn-1",
         type: "response-started",
       },
       {
+        attemptId: 2,
         responseId: "local-response-2",
         turnId: "turn-2",
         type: "response-started",
@@ -593,11 +741,12 @@ describe("QwenAudioRealtimeConversationPort", () => {
       workspaceId: "ws-jvh4fvlcktrjvtbj",
     });
     const conversation = await port.open(configuration());
-    await conversation.send({ text: "First", turnId: "turn-1", type: "text" });
-    await conversation.send({ text: "Second", turnId: "turn-2", type: "text" });
+    await conversation.send({ attemptId: 1, text: "First", turnId: "turn-1", type: "text" });
+    await conversation.send({ attemptId: 2, text: "Second", turnId: "turn-2", type: "text" });
 
     expect(await take(conversation.outputs(), 2)).toEqual([
       {
+        attemptId: 1,
         code: "QWEN_INVALID_REQUEST_ERROR",
         message: "First response failed.",
         retryable: false,
@@ -605,6 +754,7 @@ describe("QwenAudioRealtimeConversationPort", () => {
         type: "error",
       },
       {
+        attemptId: 2,
         responseId: "local-response-2",
         turnId: "turn-2",
         type: "response-started",
@@ -1052,12 +1202,18 @@ class FakeTransport implements QwenRealtimeTransport {
   readonly sent: Array<Readonly<Record<string, unknown>>> = [];
   readonly #events: unknown[];
   readonly #rejectedSendType: string | undefined;
+  #remainingRejectedSends: number;
   closed = false;
   connected = false;
 
-  constructor(events: unknown[], rejectedSendType?: string) {
+  constructor(
+    events: unknown[],
+    rejectedSendType?: string,
+    rejectedSendCount = Number.POSITIVE_INFINITY,
+  ) {
     this.#events = [...events];
     this.#rejectedSendType = rejectedSendType;
+    this.#remainingRejectedSends = rejectedSendCount;
   }
 
   close(): void {
@@ -1077,7 +1233,8 @@ class FakeTransport implements QwenRealtimeTransport {
 
   async send(event: Readonly<Record<string, unknown>>): Promise<void> {
     this.sent.push(event);
-    if (event["type"] === this.#rejectedSendType) {
+    if (event["type"] === this.#rejectedSendType && this.#remainingRejectedSends > 0) {
+      this.#remainingRejectedSends -= 1;
       throw new Error(`Fake transport rejected ${this.#rejectedSendType}`);
     }
   }

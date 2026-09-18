@@ -1,7 +1,7 @@
 # Release 1D：验收清单
 
-> 状态：Phase 1 第三轮审查修复已提交、复审、合入双主线并重新部署；Phase 2/3
-> 未开始。
+> 状态：Phase 1 第四轮审查修复已完成本地实现与复审，等待合入和生产部署；生产仍
+> 运行第三轮版本，Phase 2/3 未开始。
 > 本文记录 Release 1D 的实际版本、失败、证据和剩余门禁。规格见
 > [最终规格](./release-1d-spec.md)，实施顺序见 [任务拆分](./release-1d-tasks.md)。
 
@@ -17,9 +17,11 @@
 
 ## 2. 验收前置
 
-- [x] 用户已批准 1D 规格和任务拆分（2026-09-16）；Phase 1 已完成三轮本地实现与审查。
+- [x] 用户已批准 1D 规格和任务拆分（2026-09-16）；Phase 1 已完成第四轮本地实现与审查。
 - [x] 已部署 Phase 1 版本的 commit、Core 版本和 Mac 二进制 hash 已记录。
 - [x] Phase 1 第三轮修复的验收 commit、Core 版本和重新部署 hash 已记录。
+- [ ] Phase 1 第四轮修复尚待合入双主线并重新部署；生产仍为
+  `a6389f6-release-1d-phase1-review3`。
 - [ ] Mac/Core recorder 在真人测试前均为 ready。
 - [x] 当前 Phase 1 自动化测试数据全部为合成数据。
 - [x] 本机 Xcode license 已接受；检查 run `8dd35fde-dede-40ec-bd50-c75d1e71f1af`。
@@ -286,6 +288,49 @@
   Core 健康且认证状态 `ready`，run `791a1919-75dc-461c-8d37-e4e7a67d9a06`。
   Phase 1 第三轮修复已重新放行，Phase 2 仍保持未开始。
 
+### 2.5 Phase 1 第四轮审查修复（2026-09-18，本地待发布）
+
+- 第四轮独立审查覆盖 Realtime 进程生命周期、失败补偿和供应商重试，发现关闭期间
+  user-only 轮次可能遗留、失败标记瞬时写入失败后会被遗忘、两个 Core 可同时操作同一
+  数据库、Qwen 文字重试可能重复创建 provider item 或 response，以及相同 turn 的新旧
+  attempt 和迟到输出可能互相污染。评估器还存在跨语义单元、方向和未来时态误判。
+- Core 现在启动时终止化遗留的 user-only 轮次；运行时使用跨会话共享、串行且带退避
+  重试的失败恢复器。生产数据库由 PostgreSQL advisory lease 保证单活，关闭时先停止
+  接收并有界排空 WebSocket 会话和持久化队列，再释放数据库连接。
+- Realtime 对规范化 turn ID 串行持久化，并把单调 attempt ID 端到端传入 adapter；
+  旧 attempt 的迟到转写、回答、取消或错误被拒绝，已拒绝 response ID 使用 tombstone
+  防止后续分片重新进入。Qwen 对文字 item 创建和 response 请求分别保持幂等，只重试
+  未完成步骤。
+- PostgreSQL 和内存账本都支持启动恢复；失败标记只针对存在、同 epoch 且尚无助手事件
+  的用户轮次。恢复、清除和成功助手写入保持串行，避免 checkpoint 连续前缀再次被永久
+  阻塞。
+- checkpoint 评估器补齐否定作用域、关系方向、已完成与未来计划的区分及中英文反例。
+  新鲜 DeepSeek 三组输出 run `e6f39901-3024-43cb-80dc-cd161341a32b` 暴露两项规则
+  假阴性；修正规则后对同一原始输出零新增模型调用复核 3/3，通过 run
+  `4b757832-fa6f-496e-ba5d-50de3d0e2fe5`，最终代码下再次复核 3/3，通过 run
+  `53a4fd00-bebf-4dde-acb0-7ede747d447c`。
+- 隔离 pgvector PostgreSQL 下最终 `pnpm check:ci` 生成一致、Biome、全仓构建和类型
+  检查均通过，299/299 且无跳过；run
+  `11227219-288e-462b-9b15-5b048f32737c`，测试子 run
+  `42d8ca18-9e0c-4a05-ad9a-01f1c6f475d0`。
+- 六份状态文档同步后再次执行完整 `pnpm check:ci`，299/299 且无跳过；run
+  `156ee99d-2e44-4dcc-a472-e7efce5221c4`，测试子 run
+  `555d1df6-49f0-482c-8ee2-b97a66b7b492`。首次按不存在的容器用户变量推断连接串，
+  导致 PostgreSQL 鉴权失败；外层 run `b4fdea1e-f507-4843-bee7-943947e47ae8` 和
+  测试子 run `9f44f3b9-fa66-4cc1-9f88-2d3c28729239` 保留，未改代码，改用容器实际
+  默认用户后通过。
+- 六个关键竞态用例连续运行 20 次，每次 6/6 通过，run
+  `cecdd021-667a-4fe2-a0c1-ac7d9b1b0cc1`。Mac 95/95 通过，run
+  `9b2481b5-91e4-44be-9b74-1bcef3e9ccf6`；Mac App 构建通过，run
+  `874029cc-0b6e-4855-a0f1-f92cc0d08742`，二进制 SHA-256 为
+  `6e4094325a89788a4d956e8e32ad299ef7703411678aefb8e1aefa230ee1c1ef`，
+  签名、hash 和 plist 验证 run `721c1bb4-d5a0-4f20-93e6-1170f3487a97`；Compose
+  配置通过，run `a99c5b15-1a90-44c6-a271-ea48b0bf782b`。
+- 最终代码与测试证据绑定 `main@97ed17a7feb2402efb9aeee24ec14cb687ee8c06` 加工作树
+  指纹 `ee5efef23cc7c0792f180cb34b388fcfbf0f5ee08e7fd4b4e2574ba1691d478d`。
+  分组与跨组独立复审未再发现 P0-P2。该结论只覆盖本地修复；合入、exact-main 构建、
+  加密备份和生产部署仍是门禁，Phase 2 不得提前开始。
+
 ## 3. P0：事实与来源
 
 - [ ] PostgreSQL `conversation_events` 仍是唯一原始事实源。
@@ -323,6 +368,11 @@
 - [x] 失败文字轮次不进入模型历史，也不会永久阻塞 checkpoint 水位。
 - [x] 并发文字请求不会回拨 epoch 的最后用户输入时间。
 - [x] 视觉工具的中间取消不会阻止 grounded 最终回答落账。
+- [x] Core 重启后会终止化遗留的 user-only 轮次，运行时失败标记写入失败会持续重试。
+- [x] Core 关闭会先有界排空 Realtime 会话和持久化队列，再关闭数据库。
+- [x] 同一数据库只允许一个生产 Core 持有 advisory lease。
+- [x] 同一 turn 的重试由 attempt ID 隔离，旧 attempt 的迟到输出不会污染当前轮次。
+- [x] Qwen 文字重试不会重复创建 provider item 或已成功请求的 response。
 - [x] 关闭 checkpoint 后不读取或写入此前持久化的 checkpoint。
 - [x] Release 1C 的视觉新鲜度、取消和隐私行为无回归。
 
@@ -465,6 +515,8 @@ docker compose -f infra/compose/compose.yaml config
   `d311e1a-release-1d-phase1-final`。
 - [x] Phase 1 第三轮审查修复已提交、复审、合入双主线并重新部署，运行版本为
   `a6389f6-release-1d-phase1-review3`。
+- [ ] Phase 1 第四轮审查修复已完成本地实现与复审，仍待双主线合入、exact-main 构建、
+  加密备份、生产部署和部署后验证。
 - [ ] 用户明确批准后，生产自动记忆才开启。
 
 关闭自动提取、记忆注入或 checkpoint 可以回滚能力；任何回滚都不得降低

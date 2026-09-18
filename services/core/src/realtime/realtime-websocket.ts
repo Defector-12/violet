@@ -9,10 +9,17 @@ import type { WebSocket } from "ws";
 import { RealtimeSession, type RealtimeSessionOptions } from "./realtime-session.js";
 import { recordTestTrace, type TestTrace, withTestTrace, withTestTraceIds } from "./test-trace.js";
 
+const shutdownTimeoutMs = 5_000;
+
+export interface RealtimeWebSocketHandle {
+  readonly close: () => Promise<void>;
+  readonly closed: Promise<void>;
+}
+
 export function handleRealtimeWebSocket(
   socket: WebSocket,
   options: RealtimeSessionOptions & { readonly testTrace?: TestTrace },
-): void {
+): RealtimeWebSocketHandle {
   const session = new RealtimeSession(options);
   const abortController = new AbortController();
   let inputQueue = Promise.resolve();
@@ -20,6 +27,11 @@ export function handleRealtimeWebSocket(
   let sendQueue = Promise.resolve();
   let sessionId: string | undefined;
   let traceClosed = false;
+  let resolveClosed = () => {};
+  const closed = new Promise<void>((resolve) => {
+    resolveClosed = resolve;
+  });
+  let shutdownPromise: Promise<void> | undefined;
 
   const closeTrace = () => {
     if (traceClosed) return;
@@ -132,10 +144,48 @@ export function handleRealtimeWebSocket(
       .catch(fail);
   });
 
+  const close = (): Promise<void> => {
+    shutdownPromise ??= (async () => {
+      removeFailureListener?.();
+      closeTrace();
+      abortController.abort();
+      if (socket.readyState === socket.OPEN) {
+        socket.close(1001, "SERVER_SHUTDOWN");
+      }
+      const operations = Promise.allSettled([
+        session.close(),
+        inputQueue,
+        outputPump ?? Promise.resolve(),
+        sendQueue,
+      ]);
+      let timeout: NodeJS.Timeout | undefined;
+      const results = await Promise.race([
+        operations,
+        new Promise<null>((resolve) => {
+          timeout = setTimeout(() => resolve(null), shutdownTimeoutMs);
+        }),
+      ]).finally(() => {
+        if (timeout) clearTimeout(timeout);
+      });
+      if (!results) {
+        fail(new Error("Realtime session shutdown timed out"));
+        if (socket.readyState !== socket.CLOSED) {
+          socket.terminate();
+        }
+        resolveClosed();
+        return;
+      }
+      for (const result of results) {
+        if (result.status === "rejected") {
+          fail(result.reason);
+        }
+      }
+      resolveClosed();
+    })();
+    return shutdownPromise;
+  };
   socket.once("close", () => {
-    removeFailureListener?.();
-    closeTrace();
-    abortController.abort();
-    void session.close().catch(fail);
+    void close();
   });
+  return { close, closed };
 }

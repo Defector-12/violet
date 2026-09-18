@@ -21,7 +21,11 @@ import type { ChatService } from "../conversation/chat-service.js";
 import type { ContextAssembler } from "../conversation/context-assembler.js";
 import type { ContextEpochManager } from "../conversation/context-epoch-manager.js";
 import type { ConversationEndIntentPort } from "../realtime/conversation-end-intent.js";
-import { handleRealtimeWebSocket } from "../realtime/realtime-websocket.js";
+import type { RealtimeTurnFailureRecoveryPort } from "../realtime/realtime-turn-failure-recovery.js";
+import {
+  handleRealtimeWebSocket,
+  type RealtimeWebSocketHandle,
+} from "../realtime/realtime-websocket.js";
 import {
   recordTestTrace,
   type TestTrace,
@@ -44,6 +48,7 @@ export interface CoreAppOptions {
   readonly contextService: ContextService;
   readonly now?: () => Date;
   readonly realtimeConversationPort: RealtimeConversationPort;
+  readonly realtimeFailureRecovery?: RealtimeTurnFailureRecoveryPort;
   readonly realtimeLedger: ConversationLedger;
   readonly sealed: boolean;
   readonly version: string;
@@ -54,9 +59,27 @@ export function buildCoreApp(options: CoreAppOptions): FastifyInstance {
   const app = Fastify({
     logger: false,
   });
+  const realtimeConnections = new Set<RealtimeWebSocketHandle>();
   app.register(websocket, {
     options: {
       maxPayload: maximumRealtimePayloadBytes,
+    },
+    async preClose() {
+      await Promise.allSettled([...realtimeConnections].map((connection) => connection.close()));
+      for (const socket of app.websocketServer.clients) {
+        if (socket.readyState !== socket.CLOSED) {
+          socket.terminate();
+        }
+      }
+      await new Promise<void>((resolve, reject) => {
+        app.websocketServer.close((error?: Error) => {
+          if (error) {
+            reject(error);
+          } else {
+            resolve();
+          }
+        });
+      });
     },
   });
   const now = options.now ?? (() => new Date());
@@ -378,16 +401,21 @@ export function buildCoreApp(options: CoreAppOptions): FastifyInstance {
           socket.close(1011, "TEST_TRACE_UNAVAILABLE");
           return;
         }
-        handleRealtimeWebSocket(socket, {
+        const connection = handleRealtimeWebSocket(socket, {
           conversationEndIntent: options.conversationEndIntent,
           conversationPort: options.realtimeConversationPort,
           contextAssembler: options.contextAssembler,
           contextService: options.contextService,
           epochManager: options.contextEpochManager,
+          ...(options.realtimeFailureRecovery
+            ? { failureRecovery: options.realtimeFailureRecovery }
+            : {}),
           generateId: randomUUID,
           ledger: options.realtimeLedger,
           ...(testTrace ? { testTrace } : {}),
         });
+        realtimeConnections.add(connection);
+        void connection.closed.then(() => realtimeConnections.delete(connection));
       },
     );
   });

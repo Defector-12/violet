@@ -1,5 +1,6 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
+import { connect } from "node:net";
 import { resolve } from "node:path";
 import type {
   ContextUnderstandingPort,
@@ -645,6 +646,61 @@ describe("Core HTTP API", () => {
       code: 1003,
       reason: "INVALID_REALTIME_EVENT",
     });
+  });
+
+  it("closes even when a raw websocket client does not answer the close frame", async () => {
+    const { app, baseUrl } = await startCore(false);
+    const url = new URL(baseUrl);
+    const socket = connect({
+      host: url.hostname,
+      port: Number(url.port),
+    });
+    try {
+      await new Promise<void>((resolve, reject) => {
+        socket.once("connect", resolve);
+        socket.once("error", reject);
+      });
+      const upgraded = new Promise<void>((resolve, reject) => {
+        let response = "";
+        const onData = (chunk: Buffer) => {
+          response += chunk.toString();
+          if (!response.includes("\r\n\r\n")) return;
+          socket.off("data", onData);
+          if (response.startsWith("HTTP/1.1 101")) {
+            resolve();
+          } else {
+            reject(new Error(`WebSocket upgrade failed: ${response}`));
+          }
+        };
+        socket.on("data", onData);
+        socket.once("error", reject);
+      });
+      socket.write(
+        [
+          "GET /v1/realtime HTTP/1.1",
+          `Host: ${url.host}`,
+          "Connection: Upgrade",
+          "Upgrade: websocket",
+          `Sec-WebSocket-Key: ${randomBytes(16).toString("base64")}`,
+          "Sec-WebSocket-Version: 13",
+          `Authorization: Bearer ${deviceToken}`,
+          "",
+          "",
+        ].join("\r\n"),
+      );
+      await upgraded;
+
+      await expect(
+        Promise.race([
+          app.close().then(() => "closed"),
+          new Promise<string>((resolve) => setTimeout(() => resolve("timed-out"), 1_000)),
+        ]),
+      ).resolves.toBe("closed");
+    } finally {
+      socket.destroy();
+      await app.close();
+      openApps.splice(openApps.indexOf(app), 1);
+    }
   });
 });
 

@@ -24,10 +24,12 @@ import { ModelConversationEndIntent } from "./realtime/conversation-end-intent.j
 import { DeterministicRealtimeConversationPort } from "./realtime/deterministic-realtime-conversation.js";
 import { PipelineRealtimeConversationPort } from "./realtime/pipeline-realtime-conversation.js";
 import { QwenAudioRealtimeConversationPort } from "./realtime/qwen-audio-realtime-conversation.js";
+import { RealtimeTurnFailureRecovery } from "./realtime/realtime-turn-failure-recovery.js";
 import { TestTraceStore } from "./realtime/test-trace.js";
 import { PostgresContextCheckpointRepository } from "./storage/postgres-context-checkpoint-repository.js";
 import { PostgresConversationLedger } from "./storage/postgres-conversation-ledger.js";
 
+const coreAdvisoryLock = [0x5649_4f4c, 0x4554_434f];
 const config = loadCoreRuntimeConfig(process.env);
 const testTraceDirectory = process.env["VIOLET_TEST_TRACE_DIR"]?.trim();
 const testTraces = testTraceDirectory ? new TestTraceStore(testTraceDirectory) : undefined;
@@ -37,7 +39,17 @@ const pool =
   config.contentKey && config.databaseUrl
     ? new Pool({
         connectionString: config.databaseUrl,
+        connectionTimeoutMillis: 10_000,
         max: 10,
+        query_timeout: 30_000,
+      })
+    : null;
+const leasePool =
+  config.contentKey && config.databaseUrl
+    ? new Pool({
+        connectionString: config.databaseUrl,
+        connectionTimeoutMillis: 10_000,
+        max: 1,
       })
     : null;
 const cipher = config.contentKey
@@ -46,6 +58,18 @@ const cipher = config.contentKey
       keyVersion: config.contentKeyVersion,
     })
   : null;
+const coreLease = leasePool ? await leasePool.connect() : null;
+if (coreLease) {
+  const lease = await coreLease.query<{ acquired: boolean }>(
+    "SELECT pg_try_advisory_lock($1, $2) AS acquired",
+    coreAdvisoryLock,
+  );
+  if (lease.rows[0]?.acquired !== true) {
+    coreLease.release();
+    await Promise.all([leasePool?.end(), pool?.end()]);
+    throw new Error("Another Violet Core process already owns the database lease");
+  }
+}
 const ledger =
   pool && cipher
     ? new PostgresConversationLedger({
@@ -55,6 +79,8 @@ const ledger =
         pool,
       })
     : new InMemoryConversationLedger();
+await ledger.recoverIncompleteRequests(new Date());
+const realtimeFailureRecovery = new RealtimeTurnFailureRecovery({ ledger });
 const modelGateway: ModelGateway =
   config.model.provider === "deepseek"
     ? new DeepSeekModelGateway({
@@ -158,23 +184,30 @@ const app = buildCoreApp({
   contextEpochManager,
   contextService,
   realtimeConversationPort,
+  realtimeFailureRecovery,
   realtimeLedger: ledger,
   sealed: !config.contentKey,
   version: config.version,
   ...(testTraces ? { testTraces } : {}),
 });
-app.addHook("onClose", async () => {
-  if (traceCleanup) clearInterval(traceCleanup);
-  await pool?.end();
-});
-
 await app.listen({
   host: config.host,
   port: config.port,
 });
 
+let shuttingDown = false;
 const shutdown = async () => {
+  if (shuttingDown) return;
+  shuttingDown = true;
   await app.close();
+  if (traceCleanup) clearInterval(traceCleanup);
+  await realtimeFailureRecovery.stop();
+  await pool?.end();
+  if (coreLease) {
+    await coreLease.query("SELECT pg_advisory_unlock($1, $2)", coreAdvisoryLock);
+    coreLease.release();
+  }
+  await leasePool?.end();
 };
 process.once("SIGINT", shutdown);
 process.once("SIGTERM", shutdown);
