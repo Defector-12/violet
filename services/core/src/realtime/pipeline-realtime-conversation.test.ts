@@ -1,6 +1,11 @@
 import type { ModelGateway, ModelRequest, ModelStreamEvent } from "@violet/domain";
 import { describe, expect, it } from "vitest";
 
+import { ContextAssembler } from "../conversation/context-assembler.js";
+import { ContextEpochManager } from "../conversation/context-epoch-manager.js";
+import { InMemoryContextCheckpointRepository } from "../conversation/in-memory-context-checkpoint-repository.js";
+import { InMemoryConversationLedger } from "../conversation/in-memory-conversation-ledger.js";
+import { createPipelineContextAssembler } from "../conversation/pipeline-context.js";
 import {
   type DashScopeRealtimeMessage,
   type DashScopeRealtimeTransport,
@@ -14,6 +19,7 @@ describe("PipelineRealtimeConversationPort", () => {
     let observedHeaders: Readonly<Record<string, string>> | undefined;
     const port = new PipelineRealtimeConversationPort({
       apiKey: "test-dashscope-key",
+      assembleContext: async (input) => [input.currentMessage],
       asrModel: "paraformer-realtime-v2",
       createAsrTransport: (url, headers) => {
         observedUrl = url;
@@ -90,9 +96,36 @@ describe("PipelineRealtimeConversationPort", () => {
       jsonEvent("task-finished", "tts-task"),
     ]);
     const model = new StreamingModelGateway();
+    const ledger = new InMemoryConversationLedger();
+    const epochManager = new ContextEpochManager({ generateId: () => "epoch-1" });
+    const now = new Date("2026-09-19T00:00:00.000Z");
+    for (const [role, content] of [
+      ["user", "Earlier question"],
+      ["assistant", "Earlier answer"],
+    ] as const) {
+      await ledger.append({
+        content,
+        contextEpoch: epochManager.acceptUserInput(now),
+        id: `earlier-${role}`,
+        occurredAt: now,
+        requestId: "earlier",
+        role,
+      });
+    }
     const generatedIds = ["asr-task", "turn-1", "response-1", "tts-task"];
     const port = new PipelineRealtimeConversationPort({
       apiKey: "test-dashscope-key",
+      assembleContext: createPipelineContextAssembler({
+        contextAssembler: new ContextAssembler({
+          checkpoints: new InMemoryContextCheckpointRepository(),
+          ledger,
+          model,
+        }),
+        epochManager,
+        generateId: () => "current-user",
+        ledger,
+        now: () => now,
+      }),
       asrModel: "paraformer-realtime-v2",
       createAsrTransport: () => asr,
       createTtsTransport: () => tts,
@@ -102,13 +135,7 @@ describe("PipelineRealtimeConversationPort", () => {
       voice: "longanyang",
       workspaceId: "ws-testworkspace",
     });
-    const conversation = await port.open({
-      ...configuration(),
-      history: [
-        { content: "Earlier question", role: "user" },
-        { content: "Earlier answer", role: "assistant" },
-      ],
-    });
+    const conversation = await port.open(configuration());
     const outputPromise = take(conversation.outputs(), 8);
 
     await conversation.send({
@@ -249,6 +276,7 @@ describe("PipelineRealtimeConversationPort", () => {
     const generatedIds = ["asr-task", "response-1", "tts-task"];
     const port = new PipelineRealtimeConversationPort({
       apiKey: "test-dashscope-key",
+      assembleContext: async (input) => [input.currentMessage],
       asrModel: "paraformer-realtime-v2",
       createAsrTransport: () => asr,
       createTtsTransport: () => tts,

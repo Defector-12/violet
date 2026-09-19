@@ -280,12 +280,20 @@ export class ChatService {
       if (failureGeneration === null) {
         throw new ChatRequestInProgressError();
       }
-      const concurrentAssistant = await this.#ledger.findByRequest(request.requestId, "assistant");
-      if (concurrentAssistant) {
-        await this.#failureRecovery.complete(request.requestId, failureGeneration);
-        return { assistant: concurrentAssistant, message, requestedEpoch };
+      try {
+        const concurrentAssistant = await this.#ledger.findByRequest(
+          request.requestId,
+          "assistant",
+        );
+        if (concurrentAssistant) {
+          await this.#failureRecovery.complete(request.requestId, failureGeneration);
+          return { assistant: concurrentAssistant, message, requestedEpoch };
+        }
+        return { assistant: null, failureGeneration, message, requestedEpoch };
+      } catch (error) {
+        await this.#terminalize(request.requestId, message, failureGeneration);
+        throw error;
       }
-      return { assistant: null, failureGeneration, message, requestedEpoch };
     } finally {
       release();
     }

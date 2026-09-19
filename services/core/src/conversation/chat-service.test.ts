@@ -1,5 +1,5 @@
 import type { ModelGateway, ModelRequest } from "@violet/domain";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { RealtimeTurnFailureRecovery } from "../realtime/realtime-turn-failure-recovery.js";
 import { ChatService } from "./chat-service.js";
 import { ContextAssembler } from "./context-assembler.js";
@@ -308,6 +308,61 @@ describe("ChatService context assembly", () => {
     ]);
     expect(model.requests).toHaveLength(1);
   });
+
+  it.each([false, true])(
+    "terminalizes a claimed request when admission lookup fails (reopened=%s)",
+    async (reopened) => {
+      const ledger = new InMemoryConversationLedger();
+      const model = new RecordingModel();
+      const recovery = new RealtimeTurnFailureRecovery({ ledger });
+      const service = createService(ledger, model, recovery);
+      const request = {
+        message: "Retry admission",
+        requestId: "00000000-0000-4000-8000-000000000001",
+      };
+      if (reopened) {
+        const occurredAt = new Date("2026-09-16T00:00:00.000Z");
+        await ledger.append({
+          content: request.message,
+          contextEpoch: { id: "epoch-1", startedAt: occurredAt },
+          id: "original-user",
+          occurredAt,
+          requestId: request.requestId,
+          role: "user",
+        });
+        await ledger.markRequestFailed(request.requestId, "epoch-1", occurredAt);
+      }
+      const existing = await ledger.findByRequest(request.requestId, "user");
+      const lookup = vi
+        .spyOn(ledger, "findByRequest")
+        .mockResolvedValueOnce(existing)
+        .mockResolvedValueOnce(null)
+        .mockRejectedValueOnce(new Error("Temporary post-claim read failure"));
+      try {
+        await expect(collect(service.stream(request))).resolves.toMatchObject([
+          { error: { code: "MODEL_GATEWAY_FAILED" }, type: "error" },
+        ]);
+        await expect(ledger.listTurns({ contextEpochId: "epoch-1" })).resolves.toMatchObject([
+          { completed: false, failed: true, requestId: request.requestId },
+        ]);
+        await expect(ledger.isCompletePrefix("epoch-1", 1)).resolves.toBe(true);
+        expect(model.requests).toHaveLength(0);
+
+        await expect(collect(service.stream(request))).resolves.toMatchObject([
+          { type: "start" },
+          { content: "Test answer", type: "delta" },
+          { type: "complete" },
+        ]);
+        expect(model.requests).toHaveLength(1);
+        await expect(ledger.listTurns({ contextEpochId: "epoch-1" })).resolves.toMatchObject([
+          { completed: true, failed: false, requestId: request.requestId },
+        ]);
+      } finally {
+        lookup.mockRestore();
+        await recovery.stop();
+      }
+    },
+  );
 
   it("rejects a request ID reused with different content", async () => {
     const ledger = new InMemoryConversationLedger();

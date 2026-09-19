@@ -187,7 +187,7 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
   readonly #retiredPendingTurnIds = new Set<string>();
   readonly #submittedTextTurns = new Map<
     string,
-    { attemptId?: number; readonly text: string; responseRequested: boolean }
+    { readonly text: string; responseRequested: boolean }
   >();
   readonly #suppressedProviderResponseIds = new Set<string>();
   readonly #toolResponseIds = new Set<string>();
@@ -389,11 +389,6 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
       this.#submittedTextTurns.set(key, submitted);
     }
     if (!submitted.responseRequested) {
-      if (attemptId === undefined) {
-        delete submitted.attemptId;
-      } else {
-        submitted.attemptId = attemptId;
-      }
       submitted.responseRequested = true;
       try {
         await this.#requestResponse(turnId, attemptId);

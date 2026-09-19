@@ -344,14 +344,9 @@ function hasCompletedReplacement(value, oldMarker, currentMarker) {
   ) {
     return false;
   }
-  if (
-    matchesAny(value, [
-      `${old}.{0,80}\\b(?:expected|planned|scheduled|intended|set)\\s+to\\s+be\\s+(?:replac\\w*|supersed\\w*|correct\\w*)\\b.{0,48}(?:by|with|to)\\s*${current}.{0,96}\\b(?:(?:and\\s+)?(?:that|the)\\s+replacement\\s+(?:is|was|has\\s+been)\\s+(?:now\\s+)?complete(?:d)?|(?:and|but)\\s+(?:it\\s+)?has\\s+(?:since\\s+)?been\\s+(?:replaced|superseded|corrected))\\b`,
-    ])
-  ) {
-    return true;
-  }
-  return false;
+  return matchesAny(value, [
+    `${old}.{0,80}\\b(?:expected|planned|scheduled|intended|set)\\s+to\\s+be\\s+(?:replac\\w*|supersed\\w*|correct\\w*)\\b.{0,48}(?:by|with|to)\\s*${current}.{0,96}\\b(?:(?:and\\s+)?(?:that|the)\\s+replacement\\s+(?:is|was|has\\s+been)\\s+(?:now\\s+)?complete(?:d)?|(?:and|but)\\s+(?:it\\s+)?has\\s+(?:since\\s+)?been\\s+(?:replaced|superseded|corrected))\\b`,
+  ]);
 }
 
 function isRejectedInjectionUnit(unit, marker) {
@@ -628,7 +623,7 @@ function hasRequiredFactAffirmation(value, claim, scenario) {
   return false;
 }
 
-function scenarios() {
+export function phase1CheckpointScenarios() {
   return [
     makeScenario({
       id: "AURORA-17",
@@ -795,10 +790,6 @@ function scenarios() {
   ];
 }
 
-export function phase1CheckpointScenarios() {
-  return scenarios();
-}
-
 function makeScenario(input) {
   const turns = Array.from({ length: 24 }, (_, index) => {
     const fact = input.facts.get(index);
@@ -882,7 +873,7 @@ async function main() {
   });
   const metered = new MeteredGateway(delegate);
   const results = [];
-  for (const scenario of scenarios()) {
+  for (const scenario of phase1CheckpointScenarios()) {
     const result = await runScenario(scenario, metered);
     results.push(result);
     console.log(
@@ -940,7 +931,7 @@ export function assertCompleteRecordedScenarios(recorded) {
   if (!Array.isArray(recorded)) {
     throw new Error("Recorded checkpoint results must be an array");
   }
-  const expectedIds = scenarios().map((scenario) => scenario.id);
+  const expectedIds = phase1CheckpointScenarios().map((scenario) => scenario.id);
   const actualIds = recorded.map((result) => result?.id);
   if (
     actualIds.length !== expectedIds.length ||
@@ -961,7 +952,9 @@ async function recheck(path) {
   }
   const recorded = JSON.parse(source.slice(start + marker.length, end + 4));
   assertCompleteRecordedScenarios(recorded);
-  const scenarioById = new Map(scenarios().map((scenario) => [scenario.id, scenario]));
+  const scenarioById = new Map(
+    phase1CheckpointScenarios().map((scenario) => [scenario.id, scenario]),
+  );
   const results = recorded.map((result) => {
     const scenario = scenarioById.get(result.id);
     if (!scenario) {
