@@ -28,6 +28,7 @@ export function handleRealtimeWebSocket(
   let sessionId: string | undefined;
   let traceClosed = false;
   let resolveClosed = () => {};
+  let firstFailure: unknown;
   const closed = new Promise<void>((resolve) => {
     resolveClosed = resolve;
   });
@@ -43,6 +44,7 @@ export function handleRealtimeWebSocket(
     }
   };
   const fail = (error: unknown) => {
+    firstFailure ??= error;
     try {
       options.testTrace?.record("realtime.failed", {
         sessionId,
@@ -94,7 +96,11 @@ export function handleRealtimeWebSocket(
           socket.close(1011, "REALTIME_SESSION_FAILED");
         }
       }),
-    ).catch(fail);
+    ).catch((error) => {
+      fail(error);
+      throw error;
+    });
+    void outputPump.catch(() => undefined);
   };
 
   socket.on("message", (data, isBinary) => {
@@ -141,7 +147,11 @@ export function handleRealtimeWebSocket(
           }
         }),
       )
-      .catch(fail);
+      .catch((error) => {
+        fail(error);
+        throw error;
+      });
+    void inputQueue.catch(() => undefined);
   });
 
   const close = (): Promise<void> => {
@@ -168,12 +178,13 @@ export function handleRealtimeWebSocket(
         if (timeout) clearTimeout(timeout);
       });
       if (!results) {
-        fail(new Error("Realtime session shutdown timed out"));
+        const error = new Error("Realtime session shutdown timed out");
+        fail(error);
         if (socket.readyState !== socket.CLOSED) {
           socket.terminate();
         }
         resolveClosed();
-        return;
+        throw error;
       }
       for (const result of results) {
         if (result.status === "rejected") {
@@ -181,11 +192,14 @@ export function handleRealtimeWebSocket(
         }
       }
       resolveClosed();
+      if (firstFailure) {
+        throw firstFailure;
+      }
     })();
     return shutdownPromise;
   };
   socket.once("close", () => {
-    void close();
+    void close().catch(fail);
   });
   return { close, closed };
 }

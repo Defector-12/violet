@@ -75,6 +75,7 @@ describe("ContextAssembler", () => {
     expect(model.requests).toHaveLength(1);
     expect(model.requests[0]?.maximumOutputTokens).toBe(1_024);
     expect(model.requests[0]?.thinking).toBe(false);
+    expect(model.requests[0]?.messages[0]?.content).toContain("label it as correction provenance");
     expect(context.checkpoint).toMatchObject({
       content: "Bounded checkpoint.",
       contextEpochId: epoch.id,

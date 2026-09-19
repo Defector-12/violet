@@ -1,7 +1,7 @@
 # Release 1D：Violet Continuity 最终规格
 
-> 状态：方案已批准；Phase 1 第四轮审查修复已提交、复审、合入双主线并重新部署；
-> Phase 2/3 未开始。本文是 Release 1D 的产品与技术事实源。
+> 状态：方案已批准；Phase 1 第五轮最终门禁修复已完成本地验证，等待提交、复审、
+> 合入双主线并重新部署；Phase 2/3 未开始。本文是 Release 1D 的产品与技术事实源。
 > 实施顺序见 [任务拆分](./release-1d-tasks.md)，放行条件见
 > [验收清单](./release-1d-acceptance.md)。
 
@@ -138,6 +138,10 @@ checkpoint 水位必须是连续的完整逻辑轮次前缀：任何更早但尚
 文字请求在用户事件落账后失败或取消时，Core 写入不含正文的终止标记。终止轮次不进入
 模型历史，但不再永久阻塞后续完整前缀；相同 `request_id` 重试时先清除标记。并发文字
 请求的 epoch 分配按输入到达顺序串行化，时间水位只能单调前进。
+
+带临时 Context 的文字用户事件只额外保存 `context_source_id`（当前 Context session）
+与 `context_event_id` 复合引用，不保存 Context 正文；同一 `request_id` 重试必须同时
+匹配用户正文和这两个引用。该引用只允许出现在用户事件，旧事件在迁移后保持空值。
 
 Integrated Realtime 会话除了绑定 epoch，也绑定建立连接时的账本水位。同一 epoch
 若被文字入口或其他连接写入新轮次，下一次输入在到达持有旧历史的供应商前必须失败并

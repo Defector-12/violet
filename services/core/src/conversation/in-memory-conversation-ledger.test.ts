@@ -196,4 +196,30 @@ describe("InMemoryConversationLedger", () => {
       { completed: false, failed: true, requestId: "request-interrupted" },
     ]);
   });
+
+  it("requires paired context references on user events", async () => {
+    const ledger = new InMemoryConversationLedger();
+    const base = {
+      content: "Context-bound question",
+      id: "event-a",
+      occurredAt: new Date(),
+      requestId: "request-a",
+    };
+
+    await expect(
+      ledger.append({
+        ...base,
+        contextEventId: "00000000-0000-4000-8000-000000000001",
+        role: "user",
+      }),
+    ).rejects.toThrow("Context references require a user event ID and source ID");
+    await expect(
+      ledger.append({
+        ...base,
+        contextEventId: "00000000-0000-4000-8000-000000000001",
+        contextSourceId: "00000000-0000-4000-8000-000000000002",
+        role: "assistant",
+      }),
+    ).rejects.toThrow("Context references require a user event ID and source ID");
+  });
 });

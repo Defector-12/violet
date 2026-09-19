@@ -8,6 +8,8 @@ export interface ContextEpoch {
 export interface LedgerMessage {
   readonly content: string;
   readonly contextEpochId?: string;
+  readonly contextEventId?: string;
+  readonly contextSourceId?: string;
   readonly id: string;
   readonly occurredAt: Date;
   readonly requestId: string;
@@ -18,6 +20,8 @@ export interface LedgerMessage {
 export interface AppendLedgerMessage {
   readonly content: string;
   readonly contextEpoch?: ContextEpoch;
+  readonly contextEventId?: string;
+  readonly contextSourceId?: string;
   readonly id: string;
   readonly occurredAt: Date;
   readonly requestId: string;
@@ -42,9 +46,13 @@ export interface ListConversationTurns {
 
 export interface ConversationLedger {
   append(message: AppendLedgerMessage): Promise<LedgerMessage>;
-  clearRequestFailure(requestId: string): Promise<void>;
+  clearRequestFailure(requestId: string): Promise<boolean>;
   findByRequest(requestId: string, role: ConversationRole): Promise<LedgerMessage | null>;
-  isCompletePrefix(contextEpochId: string, throughSequence: number): Promise<boolean>;
+  isCompletePrefix(
+    contextEpochId: string,
+    throughSequence: number,
+    allowedIncompleteRequestIds?: readonly string[],
+  ): Promise<boolean>;
   latestSequence(contextEpochId: string): Promise<number>;
   list(): Promise<readonly LedgerMessage[]>;
   listTurns(options: ListConversationTurns): Promise<readonly ConversationTurn[]>;

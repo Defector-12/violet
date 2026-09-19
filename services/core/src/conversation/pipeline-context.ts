@@ -26,13 +26,15 @@ export function createPipelineContextAssembler(options: {
         role: "user",
       });
     }
-    await options.ledger.clearRequestFailure(input.requestId);
     return (
       await options.contextAssembler.assemble({
         additionalSystemInstructions: input.additionalSystemInstructions,
         beforeSequence: userMessage.sequence,
         ...(userMessage.contextEpochId ? { contextEpochId: userMessage.contextEpochId } : {}),
-        currentMessage: input.currentMessage,
+        currentMessage: {
+          content: userMessage.content,
+          role: "user",
+        },
         ...(signal ? { signal } : {}),
       })
     ).messages;

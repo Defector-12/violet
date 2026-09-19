@@ -28,6 +28,7 @@ integration("PostgreSQL conversation context", () => {
       "0001_violet_seed.sql",
       "0002_context_checkpoints.sql",
       "0002b_context_turn_failures.sql",
+      "0002c_context_event_ids.sql",
     ]) {
       await pool.query(
         await readFile(
@@ -61,10 +62,14 @@ integration("PostgreSQL conversation context", () => {
     };
     const firstRequest = randomUUID();
     const secondRequest = randomUUID();
+    const contextEventId = randomUUID();
+    const contextSourceId = randomUUID();
     await Promise.all([
       ledger.append({
         content: "Question one",
         contextEpoch,
+        contextEventId,
+        contextSourceId,
         id: randomUUID(),
         occurredAt: contextEpoch.startedAt,
         requestId: firstRequest,
@@ -107,6 +112,21 @@ integration("PostgreSQL conversation context", () => {
     expect(turns.map((turn) => new Set(turn.messages.map((message) => message.requestId)))).toEqual(
       [new Set([turns[0]?.requestId]), new Set([turns[1]?.requestId])],
     );
+    await expect(ledger.findByRequest(firstRequest, "user")).resolves.toMatchObject({
+      contextEventId,
+      contextSourceId,
+    });
+    await expect(
+      ledger.append({
+        content: "Invalid assistant context",
+        contextEventId,
+        contextSourceId,
+        id: randomUUID(),
+        occurredAt: contextEpoch.startedAt,
+        requestId: randomUUID(),
+        role: "assistant",
+      }),
+    ).rejects.toThrow("Context references require a user event ID and source ID");
 
     const checkpoints = new PostgresContextCheckpointRepository({ cipher, pool });
     const saved = await checkpoints.save({
@@ -192,6 +212,9 @@ integration("PostgreSQL conversation context", () => {
     await expect(
       ledger.isCompletePrefix(concurrentEpoch.id, laterAssistant.sequence),
     ).resolves.toBe(false);
+    await expect(
+      ledger.isCompletePrefix(concurrentEpoch.id, laterAssistant.sequence, [pendingRequest]),
+    ).resolves.toBe(true);
     const pendingAssistant = await ledger.append({
       content: "Pending answer",
       contextEpoch: concurrentEpoch,
@@ -200,6 +223,9 @@ integration("PostgreSQL conversation context", () => {
       requestId: pendingRequest,
       role: "assistant",
     });
+    await expect(
+      ledger.isCompletePrefix(concurrentEpoch.id, laterAssistant.sequence, [pendingRequest]),
+    ).resolves.toBe(true);
     await expect(
       checkpoints.save({
         content: "Complete contiguous prefix",
@@ -304,12 +330,46 @@ integration("PostgreSQL conversation context", () => {
           "utf8",
         ),
       );
+      await upgradePool.query(
+        await readFile(
+          new URL("../../../../infra/migrations/0002c_context_event_ids.sql", import.meta.url),
+          "utf8",
+        ),
+      );
 
       await expect(
         upgradePool.query<{ request_id: string }>(
           "SELECT request_id FROM conversation_turn_failures",
         ),
       ).resolves.toMatchObject({ rows: [{ request_id: requestId }] });
+      await expect(
+        upgradePool.query<{ column_name: string }>(
+          `
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_schema = $1
+              AND table_name = 'conversation_events'
+              AND column_name IN ('context_event_id', 'context_source_id')
+            ORDER BY column_name
+          `,
+          [upgradeSchema],
+        ),
+      ).resolves.toMatchObject({
+        rows: [{ column_name: "context_event_id" }, { column_name: "context_source_id" }],
+      });
+      await expect(
+        upgradePool.query<{ convalidated: boolean }>(
+          `
+            SELECT constraint_record.convalidated
+            FROM pg_constraint AS constraint_record
+            JOIN pg_namespace AS namespace
+              ON namespace.oid = constraint_record.connamespace
+            WHERE namespace.nspname = $1
+              AND constraint_record.conname = 'conversation_events_context_event_user_only'
+          `,
+          [upgradeSchema],
+        ),
+      ).resolves.toMatchObject({ rows: [{ convalidated: false }] });
     } finally {
       await upgradePool.end();
       await admin.query(`DROP SCHEMA IF EXISTS "${upgradeSchema}" CASCADE`);
@@ -414,4 +474,94 @@ integration("PostgreSQL conversation context", () => {
       ]),
     ).resolves.toMatchObject({ rowCount: 0 });
   });
+
+  it("waits for a concurrent failure-marker clear before validating a checkpoint prefix", async () => {
+    const cipher = new EnvelopeCipher({
+      key: randomBytes(32),
+      keyVersion: "test-content-v1",
+    });
+    const ledger = new PostgresConversationLedger({
+      cipher,
+      constitutionVersion: "test",
+      instanceId: randomUUID(),
+      pool,
+    });
+    const contextEpoch = {
+      id: randomUUID(),
+      startedAt: new Date("2026-09-16T00:20:00.000Z"),
+    };
+    const failedRequestId = randomUUID();
+    const completedRequestId = randomUUID();
+    await ledger.append({
+      content: "Failed question",
+      contextEpoch,
+      id: randomUUID(),
+      occurredAt: contextEpoch.startedAt,
+      requestId: failedRequestId,
+      role: "user",
+    });
+    await ledger.markRequestFailed(failedRequestId, contextEpoch.id, contextEpoch.startedAt);
+    await ledger.append({
+      content: "Later question",
+      contextEpoch,
+      id: randomUUID(),
+      occurredAt: contextEpoch.startedAt,
+      requestId: completedRequestId,
+      role: "user",
+    });
+    const laterAssistant = await ledger.append({
+      content: "Later answer",
+      contextEpoch,
+      id: randomUUID(),
+      occurredAt: contextEpoch.startedAt,
+      requestId: completedRequestId,
+      role: "assistant",
+    });
+
+    const clearClient = await pool.connect();
+    try {
+      await clearClient.query("BEGIN");
+      await clearClient.query("SELECT id FROM violet_instances WHERE singleton = true FOR UPDATE");
+      await clearClient.query("DELETE FROM conversation_turn_failures WHERE request_id = $1", [
+        failedRequestId,
+      ]);
+      let validationSettled = false;
+      const validation = ledger
+        .isCompletePrefix(contextEpoch.id, laterAssistant.sequence)
+        .finally(() => {
+          validationSettled = true;
+        });
+
+      await waitUntil(async () => {
+        const waiting = await admin.query<{ waiting: boolean }>(
+          `
+            SELECT EXISTS (
+              SELECT 1
+              FROM pg_stat_activity
+              WHERE datname = current_database()
+                AND query LIKE '%FROM violet_instances WHERE singleton = true FOR SHARE%'
+                AND wait_event_type = 'Lock'
+            ) AS waiting
+          `,
+        );
+        return waiting.rows[0]?.waiting === true;
+      });
+      expect(validationSettled).toBe(false);
+      await clearClient.query("COMMIT");
+      await expect(validation).resolves.toBe(false);
+    } finally {
+      await clearClient.query("ROLLBACK").catch(() => undefined);
+      clearClient.release();
+    }
+  });
 });
+
+async function waitUntil(condition: () => Promise<boolean>): Promise<void> {
+  const deadline = Date.now() + 2_000;
+  while (!(await condition())) {
+    if (Date.now() >= deadline) {
+      throw new Error("Database lock wait was not observed");
+    }
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
