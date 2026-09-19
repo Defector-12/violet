@@ -1,7 +1,7 @@
 # Release 1D：验收清单
 
-> 状态：Phase 1 第五轮最终门禁修复已完成本地验证，等待提交、复审、合入双主线并
-> 重新部署；Phase 2/3 未开始。
+> 状态：Phase 1 第五轮最终门禁修复已提交、复审、合入双主线并重新部署；Phase 2/3
+> 未开始。
 > 本文记录 Release 1D 的实际版本、失败、证据和剩余门禁。规格见
 > [最终规格](./release-1d-spec.md)，实施顺序见 [任务拆分](./release-1d-tasks.md)。
 
@@ -391,7 +391,30 @@
 - 分组、修复复核和跨组审查当前未发现未解决 P0-P2。全仓冗余审计仅删除未使用的
   `submittedContextCount` 与可重建的 SwiftPM 临时树；公共 SDK 和 provider transport
   等跨模块重构不混入本轮。
-- 当前本地修复等待提交、双主线合并和生产重新部署；Phase 2 在这些步骤完成前不启动。
+- 修复提交为 `608cbbf43c3b7ee2784cf08d75c80cca5204a9d6`；Codebase MR
+  [!29](https://code.byted.org/user/violet/merge_requests/29) 合入
+  `main@66ead8109015237de8dd46c3efcfd2f233625227`，GitHub PR
+  [#12](https://github.com/Defector-12/violet/pull/12) 合入
+  `main@093b5eb283c407ed7e2b49b41905028eba373c50`；两个主线与修复提交 tree 均为
+  `d555250294b158a67b99340e13f700b702e9403d`。
+- exact-main Core 构建通过，run `d893f6da-3f0a-4cf8-a965-705c75d1d109`。部署前加密
+  PostgreSQL 备份为
+  `20260919T115315Z-b1353d56-5ff6-43c4-a34f-364096904c34.vltbk`，密文 SHA-256
+  `660d9f7a78f51e07aca7a9507dd19ac5f94b53869c02d58af24d6e95d680c948`；bytedcli
+  在远端备份成功后因沙箱禁止更新本机 known_hosts 返回非零，run
+  `291b6451-7ff8-45b8-a275-b6d3d918f91d`，固定主机键的独立 hash 复核 run
+  `4327ee37-8b5b-4ab6-8583-bc568fc427e5` 通过。
+- Core 部署 run `b4098c30-d980-48d0-ab93-48d403b0b9b5`：发布归档 SHA-256
+  `1e041c8e080cca3449189af59cb307d9890e071e65b0142ff3306db90b0d4d8a`，运行镜像
+  `sha256:4eef56e4f3daee4e3174285491732cd16ffe444509f28e37682b6039a0b7bb02`，
+  版本为 `66ead81-release-1d-phase1-final-gate`。
+- 部署后验证 run `1633cef1-5665-4a98-a94b-43c422b335d3`：健康、零重启、四项迁移、
+  Context 两列及零非法引用、checkpoint 开关、`deepseek-flash`、零未终止请求、单活锁、
+  备份、发布归档、回滚镜像和本地/远端 dist hash
+  `b42ecfb3ff6566e3a92fd4d87c4387c2f6ada1c41c36f6f630a9bc5db43e6d55`
+  均通过。Mac SSH 隧道下健康及认证状态 `ready`，run
+  `41ffbdc1-7354-48f3-9a9e-a0e3856468a0`。Phase 1 第五轮修复已重新放行，
+  Phase 2 可开始。
 
 ## 3. P0：事实与来源
 
@@ -580,7 +603,8 @@ docker compose -f infra/compose/compose.yaml config
   `a6389f6-release-1d-phase1-review3`。
 - [x] Phase 1 第四轮审查修复已提交、复审、合入双主线并重新部署，运行版本为
   `1ee90fe-release-1d-phase1-review4`。
-- [ ] Phase 1 第五轮最终门禁修复已提交、复审、合入双主线并重新部署。
+- [x] Phase 1 第五轮最终门禁修复已提交、复审、合入双主线并重新部署，运行版本为
+  `66ead81-release-1d-phase1-final-gate`。
 - [ ] 用户明确批准后，生产自动记忆才开启。
 
 关闭自动提取、记忆注入或 checkpoint 可以回滚能力；任何回滚都不得降低
