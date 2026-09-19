@@ -1191,14 +1191,12 @@ export class RealtimeSession {
       if (!attempt) {
         return "already-in-progress";
       }
-      if (existing.contextEpochId) {
-        this.#turnEpochs.set(turnKey, {
-          id: existing.contextEpochId,
-          startedAt: existing.occurredAt,
-        });
-        this.#sessionEpochId ??= existing.contextEpochId;
-        this.#trackSessionSequence(existing.contextEpochId, existing.sequence);
-      }
+      this.#turnEpochs.set(turnKey, {
+        id: existing.contextEpochId,
+        startedAt: existing.occurredAt,
+      });
+      this.#sessionEpochId ??= existing.contextEpochId;
+      this.#trackSessionSequence(existing.contextEpochId, existing.sequence);
       this.#persistedTurns.add(turnKey);
       this.#rejectedTurnIds.delete(turnKey);
       if (attempt === "reopened" && existing.sequence <= (this.#sessionSnapshotSequence ?? -1)) {

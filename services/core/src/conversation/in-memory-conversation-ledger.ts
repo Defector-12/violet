@@ -1,9 +1,11 @@
-import type {
-  AppendLedgerMessage,
-  ConversationLedger,
-  ConversationTurn,
-  LedgerMessage,
-  ListConversationTurns,
+import {
+  type AppendLedgerMessage,
+  assertContextReference,
+  type ConversationLedger,
+  type ConversationTurn,
+  groupConversationTurns,
+  type LedgerMessage,
+  type ListConversationTurns,
 } from "@violet/domain";
 
 export class InMemoryConversationLedger implements ConversationLedger {
@@ -101,13 +103,15 @@ export class InMemoryConversationLedger implements ConversationLedger {
   }
 
   async listTurns(options: ListConversationTurns): Promise<readonly ConversationTurn[]> {
-    return groupTurns(
-      this.#messages.filter(
-        (message) =>
-          message.contextEpochId === options.contextEpochId &&
-          (options.afterSequence === undefined || message.sequence > options.afterSequence) &&
-          (options.beforeSequence === undefined || message.sequence < options.beforeSequence),
-      ),
+    return groupConversationTurns(
+      this.#messages
+        .filter(
+          (message) =>
+            message.contextEpochId === options.contextEpochId &&
+            (options.afterSequence === undefined || message.sequence > options.afterSequence) &&
+            (options.beforeSequence === undefined || message.sequence < options.beforeSequence),
+        )
+        .map((message) => ({ ...message, occurredAt: new Date(message.occurredAt) })),
       options.completeOnly ?? false,
       new Set(
         [...this.#failedRequests]
@@ -160,43 +164,4 @@ export class InMemoryConversationLedger implements ConversationLedger {
     }
     return recovered;
   }
-}
-
-function assertContextReference(input: AppendLedgerMessage): void {
-  const hasEvent = input.contextEventId !== undefined;
-  const hasSource = input.contextSourceId !== undefined;
-  if (hasEvent !== hasSource || (hasEvent && input.role !== "user")) {
-    throw new Error("Context references require a user event ID and source ID");
-  }
-}
-
-function groupTurns(
-  messages: readonly LedgerMessage[],
-  completeOnly: boolean,
-  failedRequests: ReadonlySet<string>,
-): readonly ConversationTurn[] {
-  const grouped = new Map<string, LedgerMessage[]>();
-  for (const message of messages) {
-    const turn = grouped.get(message.requestId) ?? [];
-    turn.push({ ...message, occurredAt: new Date(message.occurredAt) });
-    grouped.set(message.requestId, turn);
-  }
-
-  return [...grouped.entries()]
-    .map(([requestId, turnMessages]): ConversationTurn => {
-      turnMessages.sort((left, right) => left.sequence - right.sequence);
-      const completed =
-        turnMessages.some((message) => message.role === "user") &&
-        turnMessages.some((message) => message.role === "assistant");
-      return {
-        completed,
-        failed: !completed && failedRequests.has(requestId),
-        messages: turnMessages,
-        requestId,
-        startSequence: turnMessages[0]?.sequence ?? 0,
-        throughSequence: turnMessages.at(-1)?.sequence ?? 0,
-      };
-    })
-    .filter((turn) => !completeOnly || turn.completed)
-    .sort((left, right) => left.startSequence - right.startSequence);
 }
