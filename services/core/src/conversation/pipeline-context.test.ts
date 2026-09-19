@@ -69,6 +69,58 @@ describe("createPipelineContextAssembler", () => {
       sequence: 1,
     });
   });
+
+  it("does not clear a terminal marker after cancellation wins an assembly race", async () => {
+    const ledger = new DelayedExistingLedger();
+    await append(ledger, "current", "user", "Cancelled transcript");
+    const assemble = createPipelineContextAssembler({
+      contextAssembler: new ContextAssembler({
+        checkpoints: new InMemoryContextCheckpointRepository(),
+        ledger,
+        model: new DeterministicModelGateway(),
+      }),
+      epochManager: new ContextEpochManager({ generateId: () => epoch.id }),
+      generateId: () => "generated",
+      ledger,
+    });
+
+    const assembling = assemble({
+      additionalSystemInstructions: [],
+      currentMessage: { content: "Cancelled transcript", role: "user" },
+      requestId: "current",
+    });
+    await ledger.findStarted;
+    await ledger.markRequestFailed("current", epoch.id, epoch.startedAt);
+    ledger.releaseFind();
+    await assembling;
+
+    await expect(ledger.listTurns({ contextEpochId: epoch.id })).resolves.toMatchObject([
+      { completed: false, failed: true, requestId: "current" },
+    ]);
+  });
+
+  it("uses the persisted user content for an idempotent request", async () => {
+    const ledger = new InMemoryConversationLedger();
+    await append(ledger, "current", "user", "Original transcript");
+    const assemble = createPipelineContextAssembler({
+      contextAssembler: new ContextAssembler({
+        checkpoints: new InMemoryContextCheckpointRepository(),
+        ledger,
+        model: new DeterministicModelGateway(),
+      }),
+      epochManager: new ContextEpochManager({ generateId: () => epoch.id }),
+      generateId: () => "generated",
+      ledger,
+    });
+
+    const messages = await assemble({
+      additionalSystemInstructions: [],
+      currentMessage: { content: "Changed retry", role: "user" },
+      requestId: "current",
+    });
+
+    expect(messages.at(-1)).toEqual({ content: "Original transcript", role: "user" });
+  });
 });
 
 class InjectingLedger extends InMemoryConversationLedger {
@@ -82,6 +134,36 @@ class InjectingLedger extends InMemoryConversationLedger {
       await append(this, "future", "assistant", "Future answer");
     }
     return message;
+  }
+}
+
+class DelayedExistingLedger extends InMemoryConversationLedger {
+  readonly findStarted: Promise<void>;
+  #notifyFindStarted = () => {};
+  #release = () => {};
+  #waitForRelease: Promise<void>;
+
+  constructor() {
+    super();
+    this.findStarted = new Promise((resolve) => {
+      this.#notifyFindStarted = resolve;
+    });
+    this.#waitForRelease = new Promise((resolve) => {
+      this.#release = resolve;
+    });
+  }
+
+  override async findByRequest(requestId: string, role: "assistant" | "user") {
+    const message = await super.findByRequest(requestId, role);
+    if (requestId === "current" && role === "user") {
+      this.#notifyFindStarted();
+      await this.#waitForRelease;
+    }
+    return message;
+  }
+
+  releaseFind(): void {
+    this.#release();
   }
 }
 

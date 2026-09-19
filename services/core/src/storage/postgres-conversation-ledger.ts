@@ -14,6 +14,8 @@ interface EventRow {
   readonly content_nonce: Buffer;
   readonly content_tag: Buffer;
   readonly context_epoch_id: string | null;
+  readonly context_event_id: string | null;
+  readonly context_source_id: string | null;
   readonly id: string;
   readonly key_nonce: Buffer;
   readonly key_tag: Buffer;
@@ -48,6 +50,7 @@ export class PostgresConversationLedger implements ConversationLedger {
   }
 
   async append(input: AppendLedgerMessage): Promise<LedgerMessage> {
+    assertContextReference(input);
     const client = await this.#pool.connect();
     try {
       await client.query("BEGIN");
@@ -110,14 +113,15 @@ export class PostgresConversationLedger implements ConversationLedger {
         `
           INSERT INTO conversation_events (
             id, instance_id, request_id, sequence, role, context_epoch_id,
+            context_event_id, context_source_id,
             algorithm, key_version,
             ciphertext, content_nonce, content_tag, wrapped_key, key_nonce, key_tag,
             occurred_at
           )
           VALUES (
             $1, $2, $3, $4, $5, $6, $7, $8,
-            $9, $10, $11, $12, $13, $14,
-            $15
+            $9, $10, $11, $12, $13, $14, $15, $16,
+            $17
           )
           RETURNING *
         `,
@@ -128,6 +132,8 @@ export class PostgresConversationLedger implements ConversationLedger {
           sequence,
           input.role,
           input.contextEpoch?.id ?? null,
+          input.contextEventId ?? null,
+          input.contextSourceId ?? null,
           envelope.algorithm,
           envelope.keyVersion,
           envelope.ciphertext,
@@ -156,7 +162,7 @@ export class PostgresConversationLedger implements ConversationLedger {
     }
   }
 
-  async clearRequestFailure(requestId: string): Promise<void> {
+  async clearRequestFailure(requestId: string): Promise<boolean> {
     const client = await this.#pool.connect();
     try {
       await client.query("BEGIN");
@@ -164,16 +170,20 @@ export class PostgresConversationLedger implements ConversationLedger {
         "SELECT id FROM violet_instances WHERE singleton = true FOR UPDATE",
       );
       const instanceId = instance.rows[0]?.id;
+      let cleared = false;
       if (instanceId) {
-        await client.query(
+        const result = await client.query(
           `
             DELETE FROM conversation_turn_failures
             WHERE instance_id = $1 AND request_id = $2
+            RETURNING request_id
           `,
           [instanceId, requestId],
         );
+        cleared = result.rowCount === 1;
       }
       await client.query("COMMIT");
+      return cleared;
     } catch (error) {
       await client.query("ROLLBACK");
       throw error;
@@ -214,52 +224,73 @@ export class PostgresConversationLedger implements ConversationLedger {
     return row ? this.#toMessage(row) : null;
   }
 
-  async isCompletePrefix(contextEpochId: string, throughSequence: number): Promise<boolean> {
-    const result = await this.#pool.query<{ valid: boolean }>(
-      `
-        WITH current_instance AS (
-          SELECT id
-          FROM violet_instances
-          WHERE singleton = true
-        ),
-        invalid_turn AS (
-          SELECT events.request_id
-          FROM conversation_events AS events
-          JOIN current_instance AS instance ON instance.id = events.instance_id
-          WHERE events.context_epoch_id = $1
-          GROUP BY events.instance_id, events.request_id
-          HAVING MIN(events.sequence) <= $2
-            AND (
-              MAX(events.sequence) > $2
-              OR (
-                (
-                  COUNT(*) FILTER (WHERE events.role = 'user') = 0
-                  OR COUNT(*) FILTER (WHERE events.role = 'assistant') = 0
-                )
-                AND NOT EXISTS (
-                  SELECT 1
-                  FROM conversation_turn_failures AS failure
-                  WHERE failure.instance_id = events.instance_id
-                    AND failure.context_epoch_id = $1
-                    AND failure.request_id = events.request_id
+  async isCompletePrefix(
+    contextEpochId: string,
+    throughSequence: number,
+    allowedIncompleteRequestIds: readonly string[] = [],
+  ): Promise<boolean> {
+    const client = await this.#pool.connect();
+    try {
+      await client.query("BEGIN");
+      const instance = await client.query<{ id: string }>(
+        "SELECT id FROM violet_instances WHERE singleton = true FOR SHARE",
+      );
+      const instanceId = instance.rows[0]?.id;
+      if (!instanceId) {
+        await client.query("COMMIT");
+        return false;
+      }
+      const result = await client.query<{ valid: boolean }>(
+        `
+          WITH invalid_turn AS (
+            SELECT events.request_id
+            FROM conversation_events AS events
+            WHERE events.instance_id = $1
+              AND events.context_epoch_id = $2
+            GROUP BY events.instance_id, events.request_id
+            HAVING MIN(events.sequence) <= $3
+              AND NOT (events.request_id = ANY($4::uuid[]))
+              AND (
+                MAX(events.sequence) > $3
+                OR COUNT(*) FILTER (WHERE events.role = 'user') = 0
+                OR (
+                  COUNT(*) FILTER (WHERE events.role = 'assistant') = 0
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM conversation_turn_failures AS failure
+                    WHERE failure.instance_id = events.instance_id
+                      AND failure.context_epoch_id = $2
+                      AND failure.request_id = events.request_id
+                  )
                 )
               )
-            )
-          LIMIT 1
-        )
-        SELECT
-          EXISTS (
-            SELECT 1
-            FROM conversation_events AS events
-            JOIN current_instance AS instance ON instance.id = events.instance_id
-            WHERE events.context_epoch_id = $1
-              AND events.sequence = $2
+            LIMIT 1
           )
-          AND NOT EXISTS (SELECT 1 FROM invalid_turn) AS valid
-      `,
-      [contextEpochId, throughSequence],
-    );
-    return result.rows[0]?.valid ?? false;
+          SELECT
+            EXISTS (
+              SELECT 1
+              FROM conversation_events AS events
+              WHERE events.instance_id = $1
+                AND events.context_epoch_id = $2
+                AND events.sequence = $3
+            )
+            AND NOT EXISTS (SELECT 1 FROM invalid_turn) AS valid
+        `,
+        [
+          instanceId,
+          contextEpochId,
+          throughSequence,
+          allowedIncompleteRequestIds.map((value) => value.toLowerCase()),
+        ],
+      );
+      await client.query("COMMIT");
+      return result.rows[0]?.valid ?? false;
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async latestSequence(contextEpochId: string): Promise<number> {
@@ -483,12 +514,22 @@ export class PostgresConversationLedger implements ConversationLedger {
     return {
       content: this.#cipher.decrypt(envelope).toString("utf8"),
       ...(row.context_epoch_id ? { contextEpochId: row.context_epoch_id } : {}),
+      ...(row.context_event_id ? { contextEventId: row.context_event_id } : {}),
+      ...(row.context_source_id ? { contextSourceId: row.context_source_id } : {}),
       id: row.id,
       occurredAt: row.occurred_at,
       requestId: row.request_id,
       role: row.role,
       sequence: Number(row.sequence),
     };
+  }
+}
+
+function assertContextReference(input: AppendLedgerMessage): void {
+  const hasEvent = input.contextEventId !== undefined;
+  const hasSource = input.contextSourceId !== undefined;
+  if (hasEvent !== hasSource || (hasEvent && input.role !== "user")) {
+    throw new Error("Context references require a user event ID and source ID");
   }
 }
 

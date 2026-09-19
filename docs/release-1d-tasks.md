@@ -1,7 +1,7 @@
 # Release 1D：任务拆分
 
-> 状态：方案已批准；Phase 1 第四轮审查修复已提交、复审、合入双主线并重新部署；
-> Phase 2/3 未开始。
+> 状态：方案已批准；Phase 1 第五轮最终门禁修复已完成本地验证，等待提交、复审、
+> 合入双主线并重新部署；Phase 2/3 未开始。
 > 产品合同见 [最终规格](./release-1d-spec.md)，放行条件见
 > [验收清单](./release-1d-acceptance.md)。
 
@@ -31,6 +31,7 @@
 - `packages/domain/src/index.ts`
 - `infra/migrations/0002_context_checkpoints.sql`
 - `infra/migrations/0002b_context_turn_failures.sql`
+- `infra/migrations/0002c_context_event_ids.sql`
 - `services/core/src/conversation/context-epoch-manager.ts`
 
 新增最小合同：
@@ -49,6 +50,8 @@
 - 文字请求失败或取消后写入无正文终止标记；终止轮次不进入历史，也不再阻塞水位。
 - 相同 request 重试会清除终止标记，成功助手事件也会原子清除标记。
 - 并发文字请求按输入到达顺序分配 epoch，时间水位不能回拨。
+- 带临时 Context 的文字请求持久化 context session/event 复合身份；相同 request
+  不得改用另一份 Context。
 
 ### 1D-02 ContextAssembler
 
@@ -303,6 +306,7 @@ Mac 窗口只覆盖：
 
 ```sh
 fnm exec --using=.node-version -- pnpm check:ci
+fnm exec --using=.node-version -- pnpm eval:phase1-checkpoints
 fnm exec --using=.node-version -- pnpm eval:memory
 fnm exec --using=.node-version -- pnpm macos:test
 fnm exec --using=.node-version -- pnpm macos:app

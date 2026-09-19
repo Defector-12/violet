@@ -11,6 +11,7 @@ export class InMemoryConversationLedger implements ConversationLedger {
   readonly #messages: LedgerMessage[] = [];
 
   async append(input: AppendLedgerMessage): Promise<LedgerMessage> {
+    assertContextReference(input);
     const existing = this.#messages.find(
       (message) => message.requestId === input.requestId && message.role === input.role,
     );
@@ -21,6 +22,8 @@ export class InMemoryConversationLedger implements ConversationLedger {
     const message: LedgerMessage = {
       content: input.content,
       ...(input.contextEpoch ? { contextEpochId: input.contextEpoch.id } : {}),
+      ...(input.contextEventId ? { contextEventId: input.contextEventId } : {}),
+      ...(input.contextSourceId ? { contextSourceId: input.contextSourceId } : {}),
       id: input.id,
       occurredAt: new Date(input.occurredAt),
       requestId: input.requestId,
@@ -34,8 +37,8 @@ export class InMemoryConversationLedger implements ConversationLedger {
     return message;
   }
 
-  async clearRequestFailure(requestId: string): Promise<void> {
-    this.#failedRequests.delete(requestId);
+  async clearRequestFailure(requestId: string): Promise<boolean> {
+    return this.#failedRequests.delete(requestId);
   }
 
   async findByRequest(
@@ -48,8 +51,15 @@ export class InMemoryConversationLedger implements ConversationLedger {
     return message ? { ...message, occurredAt: new Date(message.occurredAt) } : null;
   }
 
-  async isCompletePrefix(contextEpochId: string, throughSequence: number): Promise<boolean> {
+  async isCompletePrefix(
+    contextEpochId: string,
+    throughSequence: number,
+    allowedIncompleteRequestIds: readonly string[] = [],
+  ): Promise<boolean> {
     const messages = this.#messages.filter((message) => message.contextEpochId === contextEpochId);
+    const allowedIncomplete = new Set(
+      allowedIncompleteRequestIds.map((value) => value.toLowerCase()),
+    );
     if (!messages.some((message) => message.sequence === throughSequence)) {
       return false;
     }
@@ -59,6 +69,9 @@ export class InMemoryConversationLedger implements ConversationLedger {
         .map((message) => message.requestId),
     );
     for (const requestId of requestIds) {
+      if (allowedIncomplete.has(requestId.toLowerCase())) {
+        continue;
+      }
       const turn = messages.filter((message) => message.requestId === requestId);
       if (
         turn.some((message) => message.sequence > throughSequence) ||
@@ -146,6 +159,14 @@ export class InMemoryConversationLedger implements ConversationLedger {
       recovered += 1;
     }
     return recovered;
+  }
+}
+
+function assertContextReference(input: AppendLedgerMessage): void {
+  const hasEvent = input.contextEventId !== undefined;
+  const hasSource = input.contextSourceId !== undefined;
+  if (hasEvent !== hasSource || (hasEvent && input.role !== "user")) {
+    throw new Error("Context references require a user event ID and source ID");
   }
 }
 

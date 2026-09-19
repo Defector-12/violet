@@ -1,7 +1,7 @@
 # Release 1D：验收清单
 
-> 状态：Phase 1 第四轮审查修复已提交、复审、合入双主线并重新部署；Phase 2/3
-> 未开始。
+> 状态：Phase 1 第五轮最终门禁修复已完成本地验证，等待提交、复审、合入双主线并
+> 重新部署；Phase 2/3 未开始。
 > 本文记录 Release 1D 的实际版本、失败、证据和剩余门禁。规格见
 > [最终规格](./release-1d-spec.md)，实施顺序见 [任务拆分](./release-1d-tasks.md)。
 
@@ -17,7 +17,7 @@
 
 ## 2. 验收前置
 
-- [x] 用户已批准 1D 规格和任务拆分（2026-09-16）；Phase 1 已完成第四轮本地实现与审查。
+- [x] 用户已批准 1D 规格和任务拆分（2026-09-16）；Phase 1 已完成第五轮本地实现与审查。
 - [x] 已部署 Phase 1 版本的 commit、Core 版本和 Mac 二进制 hash 已记录。
 - [x] Phase 1 第三轮修复的验收 commit、Core 版本和重新部署 hash 已记录。
 - [x] Phase 1 第四轮修复的验收 commit、双主线 merge commit、Core 版本、备份和
@@ -351,6 +351,48 @@
   `904fb9a6-cccc-405a-8b6f-cf494aad684f`。Phase 1 第四轮修复已重新放行，
   Phase 2 仍保持未开始。
 
+### 2.6 Phase 1 第五轮最终门禁修复（2026-09-19）
+
+- 第五轮从 HTTP 断流、跨入口幂等、Realtime 重试与关闭、PostgreSQL 前缀线性化和
+  checkpoint 评估器重新审查 Phase 1，修复了客户端提前关闭后 user-only 轮次遗留、
+  Pipeline 取消后误清 failure marker、相同 request 改写正文或视觉证据、已完成请求
+  重复调用模型，以及否定/反转措辞绕过评估门禁。
+- 文字请求现在按规范化 request ID 串行；完成结果直接从账本重放。临时 Context 的
+  `context_source_id`（当前 Context session）与 `context_event_id` 复合身份随用户
+  事件持久化且不保存 Context 正文；正文或任一引用变化都会返回冲突。
+- Realtime 使用 generation 隔离旧 attempt；失败 marker 的 start/reopen/complete/fail
+  串行化，服务关闭对既有队列和最终排空使用统一 5 秒 deadline，错误由 WebSocket、
+  Fastify 和进程 signal handler 显式传播。
+- 新增 `0002c_context_event_ids.sql`。新增列为空且无默认值，约束使用 `NOT VALID`
+  避免部署时扫描历史事件表；新写入仍强制 Context 引用成对且只属于用户事件。
+- checkpoint evaluator 改为 typed claim，并覆盖否定、双重否定、关系方向、未来时态、
+  跨句反转、负责人状态、来源关联和注入拒绝。最终 evaluator 回归 90/90，通过 run
+  `1ebcad7b-92ec-4925-811b-fdb7d9eb1475`。
+- 最新 prompt 与 evaluator 下的新鲜 DeepSeek 三组 24 轮评估直接 3/3，通过 run
+  `5793b6dc-6643-4f14-ae08-e0435f40bc03`；三次调用实际 usage 的费用上界为
+  0.118898 元，余额检查前后均为 8.39 元；当前最终规则对该原始输出零调用复核仍为
+  3/3，run `edefae5c-c6b9-42ba-9276-6a02680e7186`。中间规则假阴性 run 均保留。
+- 隔离 pgvector PostgreSQL 5/5 通过，run
+  `dd71d0be-75b2-4e7f-9ce2-c065fd0c6e56`；八个关键竞态连续 20 次共 160/160
+  通过，run `c54ccde0-af88-4257-a785-92b4c66d8b8e`。
+- 隔离 PostgreSQL 下最终 `pnpm check:ci` 的生成一致性、Biome、全仓构建和类型检查
+  均通过，35 个文件共 347/347 且无跳过；run
+  `0451cc53-b316-4574-bf35-7f26a0ce2a99`，测试子 run
+  `0ef59349-89df-4be7-ae35-a1e3489564b9`。
+- 受控 trace 验证 116 个事件、3 个完整轮次且无缺口，run
+  `dbeeba29-e55f-461c-925c-a9c6f6cd4da5`；Compose 配置通过，run
+  `d41f56b4-b681-4a5a-b04f-8a8e3b14e724`。
+- Mac 首轮 95 项因测试在 `responseText` 与 `responseCompleted` 之间过早断言而失败，
+  run `1264c83d-8655-495a-b799-f521bf11f7e2`；修正同步点后 95/95 通过，run
+  `9842e333-c6e0-456d-8cc0-175124b58569`。App 构建通过，run
+  `49f05a30-5de5-4ac6-97fc-1972fe90e9d2`；签名与 plist 校验通过，二进制 SHA-256
+  为 `9e243259d1bf61e8fdab32cbe926d461d1b7c997429971b773421e9586b6f982`，run
+  `ba113b72-4554-42e1-b5a9-740660d3a79d`。
+- 分组、修复复核和跨组审查当前未发现未解决 P0-P2。全仓冗余审计仅删除未使用的
+  `submittedContextCount` 与可重建的 SwiftPM 临时树；公共 SDK 和 provider transport
+  等跨模块重构不混入本轮。
+- 当前本地修复等待提交、双主线合并和生产重新部署；Phase 2 在这些步骤完成前不启动。
+
 ## 3. P0：事实与来源
 
 - [ ] PostgreSQL `conversation_events` 仍是唯一原始事实源。
@@ -489,6 +531,7 @@
 
 ```sh
 fnm exec --using=.node-version -- pnpm check:ci
+fnm exec --using=.node-version -- pnpm eval:phase1-checkpoints
 fnm exec --using=.node-version -- pnpm eval:memory
 fnm exec --using=.node-version -- pnpm macos:test
 fnm exec --using=.node-version -- pnpm macos:app
@@ -497,8 +540,8 @@ docker compose -f infra/compose/compose.yaml config
 
 另有独立记录证明：
 
-- [ ] `0001 → 0002 → 0003 → 0004` 和空库迁移均通过。当前 Phase 1 已验证空库
-  `0001 → 0002` 及已有 `0001 → 0002`；`0003/0004` 尚未实现。
+- [ ] `0001 → 0002 → 0003 → 0004` 和空库迁移均通过。当前 Phase 1 已验证空库及已有
+  数据库从 `0001 → 0002 → 0002b → 0002c`；`0003/0004` 尚未实现。
 - [ ] PostgreSQL 并发、回滚、重启恢复和删除竞态通过。
 - [ ] OpenAPI 生成前后工作树一致。
 - [ ] backup 旧/新格式、TOS 清理和官方恢复脚本通过。
@@ -537,6 +580,7 @@ docker compose -f infra/compose/compose.yaml config
   `a6389f6-release-1d-phase1-review3`。
 - [x] Phase 1 第四轮审查修复已提交、复审、合入双主线并重新部署，运行版本为
   `1ee90fe-release-1d-phase1-review4`。
+- [ ] Phase 1 第五轮最终门禁修复已提交、复审、合入双主线并重新部署。
 - [ ] 用户明确批准后，生产自动记忆才开启。
 
 关闭自动提取、记忆注入或 checkpoint 可以回滚能力；任何回滚都不得降低

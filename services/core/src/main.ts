@@ -178,6 +178,7 @@ const app = buildCoreApp({
     generateId: randomUUID,
     ledger,
     modelGateway,
+    turnFailureRecovery: realtimeFailureRecovery,
   }),
   conversationEndIntent: new ModelConversationEndIntent(modelGateway),
   contextAssembler,
@@ -199,15 +200,46 @@ let shuttingDown = false;
 const shutdown = async () => {
   if (shuttingDown) return;
   shuttingDown = true;
-  await app.close();
+  let failure: unknown;
+  try {
+    await app.close();
+  } catch (error) {
+    failure = error;
+  }
   if (traceCleanup) clearInterval(traceCleanup);
-  await realtimeFailureRecovery.stop();
-  await pool?.end();
+  try {
+    await realtimeFailureRecovery.stop();
+  } catch (error) {
+    failure ??= error;
+  }
+  try {
+    await pool?.end();
+  } catch (error) {
+    failure ??= error;
+  }
   if (coreLease) {
-    await coreLease.query("SELECT pg_advisory_unlock($1, $2)", coreAdvisoryLock);
+    try {
+      await coreLease.query("SELECT pg_advisory_unlock($1, $2)", coreAdvisoryLock);
+    } catch (error) {
+      failure ??= error;
+    }
     coreLease.release();
   }
-  await leasePool?.end();
+  try {
+    await leasePool?.end();
+  } catch (error) {
+    failure ??= error;
+  }
+  if (failure) {
+    throw failure;
+  }
 };
-process.once("SIGINT", shutdown);
-process.once("SIGTERM", shutdown);
+const handleShutdownSignal = () => {
+  void shutdown().catch((error) => {
+    const message = error instanceof Error ? error.message : "unknown error";
+    process.stderr.write(`Violet shutdown failed: ${message}\n`);
+    process.exitCode = 1;
+  });
+};
+process.once("SIGINT", handleShutdownSignal);
+process.once("SIGTERM", handleShutdownSignal);

@@ -118,8 +118,6 @@ public protocol ContextClientPort: Sendable {
 }
 
 public actor SilentContextClient: ContextClientPort {
-  public private(set) var submittedContextCount = 0
-
   public init() {}
 
   public func submitContext(
@@ -127,7 +125,6 @@ public actor SilentContextClient: ContextClientPort {
     deviceId: UUID,
     sessionId: UUID
   ) async throws -> ContextReceipt {
-    submittedContextCount += 1
     return ContextReceipt(
       expiresAt: Date().addingTimeInterval(300),
       sessionId: sessionId
