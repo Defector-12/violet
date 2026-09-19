@@ -1,7 +1,7 @@
 # Release 1D：验收清单
 
-> 状态：Phase 1 第五轮最终门禁修复已提交、复审、合入双主线并重新部署；Phase 2/3
-> 未开始。
+> 状态：Phase 1 已部署；请求清理修复与代码精简已完成本地验证，尚未部署
+> （见 2.7）。Phase 2/3 未开始。
 > 本文记录 Release 1D 的实际版本、失败、证据和剩余门禁。规格见
 > [最终规格](./release-1d-spec.md)，实施顺序见 [任务拆分](./release-1d-tasks.md)。
 
@@ -416,6 +416,37 @@
   `41ffbdc1-7354-48f3-9a9e-a0e3856468a0`。Phase 1 第五轮修复已重新放行，
   Phase 2 可开始。
 
+### 2.7 复盘后的运行时修复与精简（2026-09-19，本地）
+
+- 基线为 `main@c2d7d4f`。Chat 请求认领成功后，第二次助手事件查询若抛错，外层尚未
+  收到用户事件和 generation，原先无法清理该请求。现在由认领所在作用域调用已有
+  terminalize，保留失败标记重试机制，解除 checkpoint 前缀阻塞。首次请求和失败后
+  重开两条回归均验证错误后终止、前缀可推进、同 ID 重试成功；初始聚焦 41/41，
+  run `7905142e-0ef6-45d6-aca4-4d60d50704e7`。
+- Pipeline 强制使用生产入口已有的共享 assembler，删除另一套本地历史、系统提示和
+  回复累积路径；适配器测试改用真实共享组装链路，保留历史内容断言。
+- 内存与 PostgreSQL 账本共用领域层的 Context 引用校验、完整轮次分组；有序输入无需
+  再排序，内存读取仍复制事件与时间。PostgreSQL 失败标记删除复用现有事务内方法，
+  原事务和锁不变。删除 Qwen 只写不读的 submitted attempt 字段与重复 epoch 判断。
+- 评估测试改为逐例表格，删除脚本的单次转发函数与恒等布尔分支。对比改动前后的
+  117 条输入和断言完全一致，run `fb4ed2d4-3625-43a0-b5f7-e65822c9fa64`；
+  用例从 90 到 93 是拆开三个复合用例，没有增加语义规则或减少反例。
+- 盘点 210 个受 Git 管理的文件后，未确认可整文件删除的废弃入口；定时备份安装、
+  手动 trace 验证、Vitest 自动发现配置仍有用途。保留 SDK、Port、备份隔离与历史证据。
+  本轮实现和测试净减少 216 行（不含本文）：运行时代码减少 76 行、评估脚本减少
+  7 行、测试净减少 133 行；没有新增文件或依赖。
+- 独立临时 pgvector PostgreSQL 下聚焦 231/231，通过 run
+  `e3d94b9e-fc7d-44ff-ac5a-86a7aab3a421`。完整 `pnpm check:ci` 的生成一致性、
+  Biome、构建和类型检查通过，35 文件 352/352 且无跳过；run
+  `bc008f2c-63a8-4be8-911b-064e202f4691`，测试子 run
+  `42f67ed5-3519-4a9e-8db0-53dcb768ba80`。上述验证后仅追加本文；Mac 源码与协议
+  未改变，未重复构建 App，也未新增付费模型调用。
+- 上次复盘已记录的评估器假通过、两份非原样录制夹具和 Qwen 取消后同 ID 重试 P2
+  仍为独立已知项，本轮未扩大到这些修复。评估器的 `passed` 不能单独作为任意新输出
+  的语义证明；保留对真实原始输出的人工判定，不以增加措辞覆盖为 Phase 2 新门禁。
+- Phase 2 开发可开始；本轮修改随本提交保存，尚未推送或部署。线上已记录版本仍为
+  `66ead81-release-1d-phase1-final-gate`，本地回归不代表线上已经包含本次修复。
+
 ## 3. P0：事实与来源
 
 - [ ] PostgreSQL `conversation_events` 仍是唯一原始事实源。
@@ -553,12 +584,12 @@
 每条命令必须生成独立 test-run，退出码为 0：
 
 ```sh
-fnm exec --using=.node-version -- pnpm check:ci
-fnm exec --using=.node-version -- pnpm eval:phase1-checkpoints
-fnm exec --using=.node-version -- pnpm eval:memory
+fnm exec --using=.node-version -- pnpm test:record pnpm check:ci
+fnm exec --using=.node-version -- pnpm test:record pnpm eval:phase1-checkpoints
+fnm exec --using=.node-version -- pnpm test:record pnpm eval:memory
 fnm exec --using=.node-version -- pnpm macos:test
-fnm exec --using=.node-version -- pnpm macos:app
-docker compose -f infra/compose/compose.yaml config
+fnm exec --using=.node-version -- pnpm test:record pnpm macos:app
+fnm exec --using=.node-version -- pnpm test:record docker compose -f infra/compose/compose.yaml config
 ```
 
 另有独立记录证明：

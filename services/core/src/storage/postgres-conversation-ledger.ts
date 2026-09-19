@@ -1,10 +1,12 @@
 import type { EncryptedEnvelope, EnvelopeCipher } from "@violet/crypto";
-import type {
-  AppendLedgerMessage,
-  ConversationLedger,
-  ConversationTurn,
-  LedgerMessage,
-  ListConversationTurns,
+import {
+  type AppendLedgerMessage,
+  assertContextReference,
+  type ConversationLedger,
+  type ConversationTurn,
+  groupConversationTurns,
+  type LedgerMessage,
+  type ListConversationTurns,
 } from "@violet/domain";
 import type { Pool, PoolClient } from "pg";
 
@@ -170,18 +172,9 @@ export class PostgresConversationLedger implements ConversationLedger {
         "SELECT id FROM violet_instances WHERE singleton = true FOR UPDATE",
       );
       const instanceId = instance.rows[0]?.id;
-      let cleared = false;
-      if (instanceId) {
-        const result = await client.query(
-          `
-            DELETE FROM conversation_turn_failures
-            WHERE instance_id = $1 AND request_id = $2
-            RETURNING request_id
-          `,
-          [instanceId, requestId],
-        );
-        cleared = result.rowCount === 1;
-      }
+      const cleared = instanceId
+        ? await this.#clearRequestFailureInTransaction(client, instanceId, requestId)
+        : false;
       await client.query("COMMIT");
       return cleared;
     } catch (error) {
@@ -331,7 +324,7 @@ export class PostgresConversationLedger implements ConversationLedger {
     const failedRequests = new Set(
       result.rows.filter((row) => row.request_failed).map((row) => row.request_id),
     );
-    return groupTurns(
+    return groupConversationTurns(
       result.rows.map((row) => this.#toMessage(row)),
       options.completeOnly ?? false,
       failedRequests,
@@ -452,14 +445,15 @@ export class PostgresConversationLedger implements ConversationLedger {
     client: PoolClient,
     instanceId: string,
     requestId: string,
-  ): Promise<void> {
-    await client.query(
+  ): Promise<boolean> {
+    const result = await client.query(
       `
         DELETE FROM conversation_turn_failures
         WHERE instance_id = $1 AND request_id = $2
       `,
       [instanceId, requestId],
     );
+    return result.rowCount === 1;
   }
 
   async #findByRequestInTransaction(
@@ -523,41 +517,4 @@ export class PostgresConversationLedger implements ConversationLedger {
       sequence: Number(row.sequence),
     };
   }
-}
-
-function assertContextReference(input: AppendLedgerMessage): void {
-  const hasEvent = input.contextEventId !== undefined;
-  const hasSource = input.contextSourceId !== undefined;
-  if (hasEvent !== hasSource || (hasEvent && input.role !== "user")) {
-    throw new Error("Context references require a user event ID and source ID");
-  }
-}
-
-function groupTurns(
-  messages: readonly LedgerMessage[],
-  completeOnly: boolean,
-  failedRequests: ReadonlySet<string>,
-): readonly ConversationTurn[] {
-  const grouped = new Map<string, LedgerMessage[]>();
-  for (const message of messages) {
-    const turn = grouped.get(message.requestId) ?? [];
-    turn.push(message);
-    grouped.set(message.requestId, turn);
-  }
-
-  return [...grouped.entries()]
-    .map(([requestId, turnMessages]): ConversationTurn => {
-      const completed =
-        turnMessages.some((message) => message.role === "user") &&
-        turnMessages.some((message) => message.role === "assistant");
-      return {
-        completed,
-        failed: !completed && failedRequests.has(requestId),
-        messages: turnMessages,
-        requestId,
-        startSequence: turnMessages[0]?.sequence ?? 0,
-        throughSequence: turnMessages.at(-1)?.sequence ?? 0,
-      };
-    })
-    .filter((turn) => !completeOnly || turn.completed);
 }

@@ -24,6 +24,7 @@ export type {
   LedgerMessage,
   ListConversationTurns,
 } from "./conversation-ledger.js";
+export { assertContextReference, groupConversationTurns } from "./conversation-ledger.js";
 export type {
   ModelContextProfile,
   ModelGateway,
