@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type {
   ContextEpoch,
   ConversationLedger,
+  LedgerMessage,
   RealtimeConversation,
   RealtimeConversationInput,
   RealtimeConversationOutput,
@@ -52,6 +53,15 @@ interface PendingAssistantTurn {
 }
 
 class RealtimeEpochExpiredError extends Error {}
+class RealtimeTurnContentMismatchError extends Error {}
+
+type PersistUserTurnResult =
+  | "accepted"
+  | "reopened"
+  | "already-completed"
+  | "already-in-progress"
+  | "expired";
+type TurnAttemptResult = "reopened" | "started" | null;
 
 export interface RealtimeSessionOptions {
   readonly conversationEndIntent: ConversationEndIntentPort;
@@ -94,12 +104,14 @@ export class RealtimeSession {
   readonly #pendingFailedTurns = new Set<string>();
   readonly #persistedTurns = new Set<string>();
   readonly #rejectedResponseIds = new Set<string>();
+  readonly #rejectedTurnIds = new Set<string>();
   readonly #responseTurnIds = new Map<string, string>();
   readonly #turnPersistenceOperations = new Set<Promise<unknown>>();
   readonly #turnPersistenceTails = new Map<string, Promise<void>>();
   readonly #turnEpochs = new Map<string, ContextEpoch>();
   readonly #turnGenerations = new Map<string, number>();
   readonly #turnsRequiringAttemptId = new Set<string>();
+  readonly #snapshotReopenedTurns = new Set<string>();
   readonly #visibleResponseIds = new Set<string>();
   readonly #visualRequestedTurns = new Set<string>();
   #automaticAudioInputAccepted = false;
@@ -114,6 +126,7 @@ export class RealtimeSession {
   #serverSequence = 1;
   #sessionEpochId: string | null = null;
   #sessionLedgerSequence: number | null = null;
+  #sessionSnapshotSequence: number | null = null;
   #sessionId: string | null = null;
 
   constructor(options: RealtimeSessionOptions) {
@@ -193,10 +206,12 @@ export class RealtimeSession {
     this.#pendingFailedTurns.clear();
     this.#persistedTurns.clear();
     this.#rejectedResponseIds.clear();
+    this.#rejectedTurnIds.clear();
     this.#responseTurnIds.clear();
     this.#turnEpochs.clear();
     this.#turnGenerations.clear();
     this.#turnsRequiringAttemptId.clear();
+    this.#snapshotReopenedTurns.clear();
     this.#visibleResponseIds.clear();
     this.#visualRequestedTurns.clear();
     this.#contextSnapshotStale = false;
@@ -204,6 +219,7 @@ export class RealtimeSession {
     this.#requiresStableContextSnapshot = false;
     this.#sessionEpochId = null;
     this.#sessionLedgerSequence = null;
+    this.#sessionSnapshotSequence = null;
     if (closeError) {
       throw closeError;
     }
@@ -337,6 +353,7 @@ export class RealtimeSession {
       this.#requiresStableContextSnapshot =
         this.#conversation.capabilities.runtimeKind === "integrated";
       this.#sessionLedgerSequence = epoch ? assembled.sourceThroughSequence : null;
+      this.#sessionSnapshotSequence = this.#sessionLedgerSequence;
       this.#onDemandContext =
         event.configuration.onDemandContext === true &&
         this.#conversationPort.supportsContextLookup === true;
@@ -454,15 +471,24 @@ export class RealtimeSession {
     }
 
     if (event.type === "input.text") {
-      this.#activeTurnId = event.turnId;
-      this.#cancelPendingContextCaptures(event.turnId);
-      this.#recordFinalText(event.turnId, event.text, signal);
-      if (
-        !(await this.#trackTurnPersistence(
+      let persistence: PersistUserTurnResult;
+      try {
+        persistence = await this.#trackTurnPersistence(
           () => this.#persistUserTurn(event.turnId, event.text, true),
           event.turnId,
-        ))
-      ) {
+        );
+      } catch (error) {
+        if (error instanceof RealtimeTurnContentMismatchError) {
+          yield this.#error(
+            event.sessionId,
+            "REALTIME_TURN_CONTENT_MISMATCH",
+            "A realtime turn ID cannot be reused with different content",
+          );
+          return;
+        }
+        throw error;
+      }
+      if (persistence === "expired") {
         yield this.#error(
           event.sessionId,
           "CONTEXT_EPOCH_EXPIRED",
@@ -471,7 +497,23 @@ export class RealtimeSession {
         await this.close();
         return;
       }
+      if (persistence !== "accepted" && persistence !== "reopened") {
+        yield this.#error(
+          event.sessionId,
+          persistence === "already-completed"
+            ? "REALTIME_TURN_ALREADY_COMPLETED"
+            : "REALTIME_TURN_ALREADY_ACTIVE",
+          persistence === "already-completed"
+            ? "The realtime turn is already complete"
+            : "The realtime turn is already in progress",
+        );
+        return;
+      }
+      this.#activeTurnId = event.turnId;
+      this.#cancelPendingContextCaptures(event.turnId);
+      this.#recordFinalText(event.turnId, event.text, signal);
       if (this.#closed) {
+        await this.#trackTurnPersistence(() => this.#markTurnFailed(event.turnId), event.turnId);
         return;
       }
       const contextError = await this.#contextAdmissionError();
@@ -641,6 +683,15 @@ export class RealtimeSession {
               this.#sessionId,
               "CONTEXT_EPOCH_EXPIRED",
               "The realtime context expired after thirty minutes of inactivity",
+            );
+            await this.close();
+            return;
+          }
+          if (error instanceof RealtimeTurnContentMismatchError && this.#sessionId) {
+            yield this.#error(
+              this.#sessionId,
+              "REALTIME_TURN_CONTENT_MISMATCH",
+              "A realtime turn ID cannot be reused with different content",
             );
             await this.close();
             return;
@@ -955,8 +1006,13 @@ export class RealtimeSession {
         break;
       case "transcript":
         if (output.final) {
-          if (!(await this.#persistUserTurn(output.turnId, output.text))) {
+          const persistence = await this.#persistUserTurn(output.turnId, output.text);
+          if (persistence === "expired") {
             throw new RealtimeEpochExpiredError();
+          }
+          if (persistence !== "accepted" && persistence !== "reopened") {
+            this.#rejectedTurnIds.add(canonicalId(output.turnId));
+            return false;
           }
           await this.#persistPendingAssistantTurn(output.turnId);
           const turnKey = canonicalId(output.turnId);
@@ -1044,6 +1100,9 @@ export class RealtimeSession {
       return false;
     }
     const turnId = this.#outputTurnId(output);
+    if (turnId && this.#rejectedTurnIds.has(canonicalId(turnId))) {
+      return false;
+    }
     if (output.attemptId === undefined) {
       return turnId === undefined || !this.#turnsRequiringAttemptId.has(canonicalId(turnId));
     }
@@ -1068,20 +1127,33 @@ export class RealtimeSession {
     return undefined;
   }
 
-  async #persistUserTurn(turnId: string, content: string, retry = false): Promise<boolean> {
+  async #persistUserTurn(
+    turnId: string,
+    content: string,
+    retry = false,
+  ): Promise<PersistUserTurnResult> {
     const turnKey = canonicalId(turnId);
     if (this.#persistedTurns.has(turnKey)) {
+      const existing = await this.#ledger.findByRequest(turnKey, "user");
+      if (!existing?.contextEpochId) {
+        return "expired";
+      }
+      if (existing.content !== content) {
+        throw new RealtimeTurnContentMismatchError();
+      }
+      if (await this.#ledger.findByRequest(turnKey, "assistant")) {
+        return "already-completed";
+      }
       if (retry && this.#failedTurnIds.has(turnKey)) {
-        const existing = await this.#ledger.findByRequest(turnKey, "user");
-        if (!existing?.contextEpochId) {
-          return false;
-        }
         const matchesSession =
           this.#sessionEpochId === null || existing.contextEpochId === this.#sessionEpochId;
         if (!matchesSession) {
-          return false;
+          return "expired";
         }
-        await this.#beginTurnAttempt(turnKey);
+        const attempt = await this.#beginTurnAttempt(turnKey, true);
+        if (!attempt) {
+          return "already-in-progress";
+        }
         this.#failedTurnIds.delete(turnKey);
         this.#turnEpochs.set(turnKey, {
           id: existing.contextEpochId,
@@ -1089,17 +1161,36 @@ export class RealtimeSession {
         });
         this.#sessionEpochId ??= existing.contextEpochId;
         this.#trackSessionSequence(existing.contextEpochId, existing.sequence);
+        this.#rejectedTurnIds.delete(turnKey);
+        if (attempt === "reopened" && existing.sequence <= (this.#sessionSnapshotSequence ?? -1)) {
+          this.#snapshotReopenedTurns.add(turnKey);
+          return "reopened";
+        }
+        return "accepted";
       }
-      return true;
+      return "already-in-progress";
     }
     const existing = await this.#ledger.findByRequest(turnKey, "user");
     if (existing) {
+      if (!existing.contextEpochId) {
+        return "expired";
+      }
+      if (existing.content !== content) {
+        throw new RealtimeTurnContentMismatchError();
+      }
       const matchesSession =
         this.#sessionEpochId === null || existing.contextEpochId === this.#sessionEpochId;
       if (!matchesSession) {
-        return false;
+        return "expired";
       }
-      await this.#beginTurnAttempt(turnKey);
+      if (await this.#ledger.findByRequest(turnKey, "assistant")) {
+        this.#persistedTurns.add(turnKey);
+        return "already-completed";
+      }
+      const attempt = await this.#beginTurnAttempt(turnKey, true);
+      if (!attempt) {
+        return "already-in-progress";
+      }
       if (existing.contextEpochId) {
         this.#turnEpochs.set(turnKey, {
           id: existing.contextEpochId,
@@ -1109,19 +1200,35 @@ export class RealtimeSession {
         this.#trackSessionSequence(existing.contextEpochId, existing.sequence);
       }
       this.#persistedTurns.add(turnKey);
-      return true;
+      this.#rejectedTurnIds.delete(turnKey);
+      if (attempt === "reopened" && existing.sequence <= (this.#sessionSnapshotSequence ?? -1)) {
+        this.#snapshotReopenedTurns.add(turnKey);
+        return "reopened";
+      }
+      return "accepted";
     }
-    await this.#beginTurnAttempt(turnKey);
     const occurredAt = this.#now();
     const contextEpoch = this.#epochManager.acceptUserInput(occurredAt);
-    const message = await this.#ledger.append({
+    const messageId = this.#generateId();
+    const message: LedgerMessage = await this.#ledger.append({
       content,
       contextEpoch,
-      id: this.#generateId(),
+      id: messageId,
       occurredAt,
       requestId: turnKey,
       role: "user",
     });
+    if (message.content !== content) {
+      throw new RealtimeTurnContentMismatchError();
+    }
+    if (await this.#ledger.findByRequest(turnKey, "assistant")) {
+      this.#persistedTurns.add(turnKey);
+      return "already-completed";
+    }
+    const attempt = await this.#beginTurnAttempt(turnKey, message.id !== messageId);
+    if (!attempt) {
+      return "already-in-progress";
+    }
     this.#turnEpochs.set(turnKey, {
       id: message.contextEpochId ?? contextEpoch.id,
       startedAt: contextEpoch.startedAt,
@@ -1129,7 +1236,14 @@ export class RealtimeSession {
     this.#sessionEpochId ??= message.contextEpochId ?? contextEpoch.id;
     this.#trackSessionSequence(message.contextEpochId ?? contextEpoch.id, message.sequence);
     this.#persistedTurns.add(turnKey);
-    return this.#sessionEpochId === (message.contextEpochId ?? contextEpoch.id);
+    this.#rejectedTurnIds.delete(turnKey);
+    if (attempt === "reopened" && message.sequence <= (this.#sessionSnapshotSequence ?? -1)) {
+      this.#snapshotReopenedTurns.add(turnKey);
+      return "reopened";
+    }
+    return this.#sessionEpochId === (message.contextEpochId ?? contextEpoch.id)
+      ? "accepted"
+      : "expired";
   }
 
   async #persistPendingAssistantTurn(turnId: string): Promise<void> {
@@ -1231,14 +1345,25 @@ export class RealtimeSession {
     this.#pendingFailedTurns.delete(turnKey);
   }
 
-  async #beginTurnAttempt(turnId: string): Promise<void> {
+  async #beginTurnAttempt(turnId: string, reopen = false): Promise<TurnAttemptResult> {
     const turnKey = canonicalId(turnId);
     const retried = this.#turnGenerations.has(turnKey);
-    const generation = await this.#failureRecovery.begin(turnKey);
+    let result: Exclude<TurnAttemptResult, null> = reopen ? "reopened" : "started";
+    let generation = reopen
+      ? await this.#failureRecovery.reopen(turnKey)
+      : await this.#failureRecovery.start(turnKey);
+    if (reopen && generation === null && !retried) {
+      generation = await this.#failureRecovery.start(turnKey);
+      result = "started";
+    }
+    if (generation === null) {
+      return null;
+    }
     if (retried) {
       this.#turnsRequiringAttemptId.add(turnKey);
     }
     this.#turnGenerations.set(turnKey, generation);
+    return result;
   }
 
   async #trackTurnPersistence<T>(work: () => Promise<T>, turnId?: string): Promise<T> {
@@ -1301,6 +1426,20 @@ export class RealtimeSession {
       this.#sessionEpochId &&
       this.#sessionLedgerSequence !== null &&
       (await this.#ledger.latestSequence(this.#sessionEpochId)) !== this.#sessionLedgerSequence
+    ) {
+      return {
+        code: "CONTEXT_SNAPSHOT_STALE",
+        message: "The realtime context changed and requires a fresh session",
+      };
+    }
+    if (
+      this.#requiresStableContextSnapshot &&
+      this.#sessionEpochId &&
+      this.#sessionSnapshotSequence !== null &&
+      this.#sessionSnapshotSequence > 0 &&
+      !(await this.#ledger.isCompletePrefix(this.#sessionEpochId, this.#sessionSnapshotSequence, [
+        ...this.#snapshotReopenedTurns,
+      ]))
     ) {
       return {
         code: "CONTEXT_SNAPSHOT_STALE",

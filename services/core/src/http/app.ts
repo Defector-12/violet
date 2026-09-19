@@ -65,7 +65,9 @@ export function buildCoreApp(options: CoreAppOptions): FastifyInstance {
       maxPayload: maximumRealtimePayloadBytes,
     },
     async preClose() {
-      await Promise.allSettled([...realtimeConnections].map((connection) => connection.close()));
+      const connectionResults = await Promise.allSettled(
+        [...realtimeConnections].map((connection) => connection.close()),
+      );
       for (const socket of app.websocketServer.clients) {
         if (socket.readyState !== socket.CLOSED) {
           socket.terminate();
@@ -80,6 +82,12 @@ export function buildCoreApp(options: CoreAppOptions): FastifyInstance {
           }
         });
       });
+      const failure = connectionResults.find(
+        (result): result is PromiseRejectedResult => result.status === "rejected",
+      );
+      if (failure) {
+        throw failure.reason;
+      }
     },
   });
   const now = options.now ?? (() => new Date());
@@ -318,12 +326,17 @@ export function buildCoreApp(options: CoreAppOptions): FastifyInstance {
         abortController.abort();
       }
     });
-    let contextEvidence: string | undefined;
+    let contextEvidence:
+      | { readonly content: string; readonly eventId: string; readonly sourceId: string }
+      | undefined;
     if (request.body.contextSessionId) {
       try {
-        contextEvidence = formatVisualResult(
-          await options.contextService.get(request.body.contextSessionId),
-        );
+        const context = await options.contextService.get(request.body.contextSessionId);
+        contextEvidence = {
+          content: formatVisualResult(context),
+          eventId: context.eventId,
+          sourceId: request.body.contextSessionId,
+        };
       } catch (error) {
         if (error instanceof ContextServiceError) {
           return reply.code(error.status).send(
@@ -339,13 +352,7 @@ export function buildCoreApp(options: CoreAppOptions): FastifyInstance {
     }
     const stream = Readable.from(
       serializeEvents(
-        options.chatService.stream(
-          request.body,
-          abortController.signal,
-          contextEvidence && request.body.contextSessionId
-            ? { content: contextEvidence, sourceId: request.body.contextSessionId }
-            : undefined,
-        ),
+        options.chatService.stream(request.body, abortController.signal, contextEvidence),
         request.body.requestId,
       ),
     );

@@ -185,6 +185,8 @@ try {
   let sequence = 1;
   let turn = 0;
   const answers = [];
+  const questions = [];
+  const turnIds = [];
   socket = new WebSocket(`${base.replace("http:", "ws:")}/v1/realtime`, {
     headers: {
       authorization: `Bearer ${token}`,
@@ -196,14 +198,19 @@ try {
     socket.send(
       JSON.stringify({ ...event, sequence: sequence++, eventId: randomUUID(), sessionId }),
     );
+  const sendQuestion = (text) => {
+    const turnId = randomUUID();
+    questions.push(text);
+    turnIds.push(turnId);
+    send({ type: "input.text", turnId, text });
+  };
   const completed = new Promise((resolve, reject) => {
     socket.on("error", reject);
     socket.on("message", (raw) => {
       try {
         const event = JSON.parse(raw.toString());
         if (event.type === "error") throw new Error(event.code);
-        if (event.type === "session.ready")
-          send({ type: "input.text", turnId: randomUUID(), text: "Read fixture one." });
+        if (event.type === "session.ready") sendQuestion("Read fixture one.");
         if (event.type === "response.text") answers.push(event.text);
         if (event.type === "context.capture.requested") {
           const common = { requestId: event.requestId, turnId: event.turnId };
@@ -255,8 +262,7 @@ try {
         if (event.type === "response.completed") {
           turn++;
           if (turn === 3) resolve();
-          else
-            send({ type: "input.text", turnId: randomUUID(), text: `Read fixture ${turn + 1}.` });
+          else sendQuestion(`Read fixture ${turn + 1}.`);
         }
       } catch (error) {
         reject(error);
@@ -299,6 +305,10 @@ try {
     403,
   );
   await writeFile(join(directory, "core.ndjson"), snapshot.body, { flag: "wx", mode: 0o600 });
+  const trace = snapshot.body
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
   for (const type of [
     "qwen.send",
     "qwen.receive",
@@ -319,8 +329,57 @@ try {
   const persisted = await ledger.list();
   assert.equal(persisted.filter((message) => message.role === "user").length, 3);
   assert.equal(persisted.filter((message) => message.role === "assistant").length, 3);
+  assert.equal(turnIds.length, 3);
+  for (const [index, turnId] of turnIds.entries()) {
+    const messages = persisted.filter(
+      (message) => message.requestId.toLowerCase() === turnId.toLowerCase(),
+    );
+    assert.deepEqual(
+      messages.map((message) => message.role),
+      ["user", "assistant"],
+    );
+    assert.equal(messages[0].content, questions[index]);
+    assert.equal(messages[0].contextEpochId, messages[1].contextEpochId);
+    assert.equal(messages[1].content, answers[index]);
+    const input = trace.filter(
+      (event) =>
+        event.type === "core.receive" &&
+        event.turnId === turnId &&
+        event.data?.type === "input.text",
+    );
+    const capture = trace.filter(
+      (event) => event.type === "capture.requested" && event.data?.turnId === turnId,
+    );
+    const captureResult = trace.filter(
+      (event) =>
+        event.type === "core.receive" &&
+        event.turnId === turnId &&
+        (event.data?.type === "context.capture.succeeded" ||
+          event.data?.type === "context.capture.failed") &&
+        event.data?.requestId === capture[0]?.data?.requestId,
+    );
+    const toolResult = trace.filter(
+      (event) =>
+        event.type === "tool.result" &&
+        event.data?.turnId === turnId &&
+        event.data?.requestId === capture[0]?.data?.requestId,
+    );
+    const answer = trace.filter(
+      (event) =>
+        event.type === "answer.completed" &&
+        event.data?.turnId === turnId &&
+        event.data?.text === answers[index],
+    );
+    assert.equal(input.length, 1, `Missing input trace for ${turnId}`);
+    assert.equal(input[0].data.text, questions[index], `Input text mismatch for ${turnId}`);
+    assert.equal(capture.length, 1, `Missing capture request for ${turnId}`);
+    assert.equal(captureResult.length, 1, `Missing capture result for ${turnId}`);
+    assert.equal(toolResult.length, 1, `Missing tool result for ${turnId}`);
+    assert.equal(answer.length, 1, `Missing completed answer for ${turnId}`);
+  }
   const result = {
     persistedMessages: persisted.length,
+    persistedTurns: turnIds.length,
     scope: "controlled transport integration, NOT visual acceptance",
     visionCalls,
     answers,

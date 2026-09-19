@@ -557,6 +557,99 @@ describe("RealtimeSession", () => {
     expect(session.closed).toBe(true);
   });
 
+  it("closes an integrated session when a snapshot failure marker is cleared", async () => {
+    const sessionId = randomUUID();
+    const epochManager = new ContextEpochManager({ generateId: randomUUID });
+    const now = new Date("2026-09-16T00:00:00.000Z");
+    const epoch = epochManager.acceptUserInput(now);
+    const ledger = new InMemoryConversationLedger();
+    const failedRequestId = randomUUID();
+    const completedRequestId = randomUUID();
+    await ledger.append({
+      content: "Retryable earlier question",
+      contextEpoch: epoch,
+      id: randomUUID(),
+      occurredAt: now,
+      requestId: failedRequestId,
+      role: "user",
+    });
+    await ledger.markRequestFailed(failedRequestId, epoch.id, now);
+    await ledger.append({
+      content: "Later question",
+      contextEpoch: epoch,
+      id: randomUUID(),
+      occurredAt: now,
+      requestId: completedRequestId,
+      role: "user",
+    });
+    await ledger.append({
+      content: "Later answer",
+      contextEpoch: epoch,
+      id: randomUUID(),
+      occurredAt: now,
+      requestId: completedRequestId,
+      role: "assistant",
+    });
+    const sent: RealtimeConversationInput[] = [];
+    const session = new RealtimeSession({
+      conversationEndIntent: neverEndsConversation,
+      conversationPort: {
+        async open() {
+          return {
+            capabilities: {
+              inputModalities: ["text"],
+              interruption: true,
+              outputModalities: ["text"],
+              runtimeKind: "integrated",
+              transcription: true,
+              turnDetection: "manual",
+              voiceKind: "preset",
+            } as const,
+            async close() {},
+            async *outputs() {},
+            async send(input) {
+              sent.push(input);
+            },
+          };
+        },
+      },
+      contextService: createContextService(),
+      epochManager,
+      generateId: randomUUID,
+      ledger,
+      now: () => now,
+    });
+    await collect(
+      session.handle({
+        configuration: {
+          inputModalities: ["text"],
+          outputModalities: ["text"],
+          protocolVersion: "1",
+        },
+        eventId: randomUUID(),
+        sequence: 1,
+        sessionId,
+        type: "session.configure",
+      }),
+    );
+    await ledger.clearRequestFailure(failedRequestId);
+
+    const output = await collect(
+      session.handle({
+        eventId: randomUUID(),
+        sequence: 2,
+        sessionId,
+        text: "Must reconnect after retry state changes",
+        turnId: randomUUID(),
+        type: "input.text",
+      }),
+    );
+
+    expect(output).toMatchObject([{ code: "CONTEXT_SNAPSHOT_STALE", type: "error" }]);
+    expect(sent).toEqual([]);
+    expect(session.closed).toBe(true);
+  });
+
   it("suppresses an automatic VAD response when another entry point advances the epoch", async () => {
     const sessionId = randomUUID();
     const clientAudioTurnId = randomUUID();
@@ -927,6 +1020,374 @@ describe("RealtimeSession", () => {
     expect(sendAttempts).toBe(2);
   });
 
+  it("allows an integrated session to reopen a failed turn from its initial snapshot", async () => {
+    const sessionId = randomUUID();
+    const turnId = randomUUID();
+    const now = new Date("2026-09-16T00:00:00.000Z");
+    const epochManager = new ContextEpochManager({ generateId: randomUUID });
+    const contextEpoch = epochManager.acceptUserInput(now);
+    const ledger = new InMemoryConversationLedger();
+    const outputQueue = new AsyncQueue<RealtimeConversationOutput>();
+    const responseId = randomUUID();
+    await ledger.append({
+      content: "Retry across sessions",
+      contextEpoch,
+      id: randomUUID(),
+      occurredAt: now,
+      requestId: turnId,
+      role: "user",
+    });
+    await ledger.markRequestFailed(turnId, contextEpoch.id, now);
+    const sent: RealtimeConversationInput[] = [];
+    const session = new RealtimeSession({
+      conversationEndIntent: neverEndsConversation,
+      conversationPort: {
+        async open() {
+          return {
+            capabilities: {
+              inputModalities: ["text"],
+              interruption: true,
+              outputModalities: ["text"],
+              runtimeKind: "integrated",
+              transcription: true,
+              turnDetection: "manual",
+              voiceKind: "preset",
+            } as const,
+            async close() {
+              outputQueue.close();
+            },
+            async *outputs(signal) {
+              while (true) {
+                const output = await outputQueue.next(signal);
+                if (!output) return;
+                yield output;
+              }
+            },
+            async send(input) {
+              sent.push(input);
+              if (input.type !== "text" || sent.length !== 1) return;
+              outputQueue.push({
+                responseId,
+                turnId: input.turnId,
+                type: "response-started",
+              });
+              outputQueue.push({
+                responseId,
+                text: "Recovered answer",
+                turnId: input.turnId,
+                type: "response-text",
+              });
+              outputQueue.push({
+                inputTokens: 1,
+                outputTokens: 1,
+                responseId,
+                turnId: input.turnId,
+                type: "response-completed",
+              });
+            },
+          };
+        },
+      },
+      contextService: createContextService(),
+      epochManager,
+      generateId: randomUUID,
+      ledger,
+      now: () => now,
+    });
+    await collect(
+      session.handle({
+        configuration: {
+          inputModalities: ["text"],
+          outputModalities: ["text"],
+          protocolVersion: "1",
+        },
+        eventId: randomUUID(),
+        sequence: 1,
+        sessionId,
+        type: "session.configure",
+      }),
+    );
+
+    await expect(
+      collect(
+        session.handle({
+          eventId: randomUUID(),
+          sequence: 2,
+          sessionId,
+          text: "Retry across sessions",
+          turnId,
+          type: "input.text",
+        }),
+      ),
+    ).resolves.toEqual([]);
+    await take(session.outputs(), 3);
+    const nextTurnId = randomUUID();
+    await expect(
+      collect(
+        session.handle({
+          eventId: randomUUID(),
+          sequence: 3,
+          sessionId,
+          text: "Continue after retry",
+          turnId: nextTurnId,
+          type: "input.text",
+        }),
+      ),
+    ).resolves.toEqual([]);
+
+    expect(sent).toMatchObject([
+      { text: "Retry across sessions", turnId, type: "text" },
+      { text: "Continue after retry", turnId: nextTurnId, type: "text" },
+    ]);
+    await expect(ledger.listTurns({ contextEpochId: contextEpoch.id })).resolves.toMatchObject([
+      { completed: true, failed: false, requestId: turnId },
+      { completed: false, failed: false, requestId: nextTurnId },
+    ]);
+  });
+
+  it("rejects a failed turn retried with different content", async () => {
+    const sessionId = randomUUID();
+    const turnId = randomUUID();
+    const ledger = new InMemoryConversationLedger();
+    let sendAttempts = 0;
+    const session = new RealtimeSession({
+      conversationEndIntent: neverEndsConversation,
+      conversationPort: {
+        async open() {
+          return {
+            capabilities: {
+              inputModalities: ["text"],
+              interruption: true,
+              outputModalities: ["text"],
+              runtimeKind: "integrated",
+              transcription: true,
+              turnDetection: "manual",
+              voiceKind: "preset",
+            } as const,
+            async close() {},
+            async *outputs() {},
+            async send() {
+              sendAttempts += 1;
+              throw new Error("Provider rejected the request");
+            },
+          };
+        },
+      },
+      contextService: createContextService(),
+      generateId: randomUUID,
+      ledger,
+    });
+    await collect(
+      session.handle({
+        configuration: {
+          inputModalities: ["text"],
+          outputModalities: ["text"],
+          protocolVersion: "1",
+        },
+        eventId: randomUUID(),
+        sequence: 1,
+        sessionId,
+        type: "session.configure",
+      }),
+    );
+    await collect(
+      session.handle({
+        eventId: randomUUID(),
+        sequence: 2,
+        sessionId,
+        text: "Original request",
+        turnId,
+        type: "input.text",
+      }),
+    );
+
+    await expect(
+      collect(
+        session.handle({
+          eventId: randomUUID(),
+          sequence: 3,
+          sessionId,
+          text: "Changed request",
+          turnId,
+          type: "input.text",
+        }),
+      ),
+    ).resolves.toMatchObject([
+      {
+        code: "REALTIME_TURN_CONTENT_MISMATCH",
+        type: "error",
+      },
+    ]);
+    expect(sendAttempts).toBe(1);
+    const user = await ledger.findByRequest(turnId, "user");
+    await expect(
+      ledger.listTurns({ contextEpochId: user?.contextEpochId ?? "" }),
+    ).resolves.toMatchObject([{ completed: false, failed: true, requestId: turnId }]);
+  });
+
+  it("releases the turn claim when the user event append fails", async () => {
+    const sessionId = randomUUID();
+    const turnId = randomUUID();
+    const ledger = new InMemoryConversationLedger();
+    const append = ledger.append.bind(ledger);
+    let failUserAppend = true;
+    vi.spyOn(ledger, "append").mockImplementation((input) => {
+      if (failUserAppend && input.role === "user") {
+        failUserAppend = false;
+        return Promise.reject(new Error("Temporary user append failure"));
+      }
+      return append(input);
+    });
+    const sent: RealtimeConversationInput[] = [];
+    const session = new RealtimeSession({
+      conversationEndIntent: neverEndsConversation,
+      conversationPort: {
+        async open() {
+          return {
+            capabilities: {
+              inputModalities: ["text"],
+              interruption: true,
+              outputModalities: ["text"],
+              runtimeKind: "integrated",
+              transcription: true,
+              turnDetection: "manual",
+              voiceKind: "preset",
+            } as const,
+            async close() {},
+            async *outputs() {},
+            async send(input) {
+              sent.push(input);
+            },
+          };
+        },
+      },
+      contextService: createContextService(),
+      generateId: randomUUID,
+      ledger,
+    });
+    await collect(
+      session.handle({
+        configuration: {
+          inputModalities: ["text"],
+          outputModalities: ["text"],
+          protocolVersion: "1",
+        },
+        eventId: randomUUID(),
+        sequence: 1,
+        sessionId,
+        type: "session.configure",
+      }),
+    );
+
+    await expect(
+      collect(
+        session.handle({
+          eventId: randomUUID(),
+          sequence: 2,
+          sessionId,
+          text: "Retry persistence",
+          turnId,
+          type: "input.text",
+        }),
+      ),
+    ).rejects.toThrow("Temporary user append failure");
+    await expect(
+      collect(
+        session.handle({
+          eventId: randomUUID(),
+          sequence: 3,
+          sessionId,
+          text: "Retry persistence",
+          turnId,
+          type: "input.text",
+        }),
+      ),
+    ).resolves.toEqual([]);
+
+    expect(sent).toMatchObject([{ text: "Retry persistence", turnId, type: "text" }]);
+  });
+
+  it("suppresses every provider output when the turn claim is rejected", async () => {
+    const sessionId = randomUUID();
+    const turnId = randomUUID();
+    const responseId = randomUUID();
+    const ledger = new InMemoryConversationLedger();
+    const session = new RealtimeSession({
+      conversationEndIntent: neverEndsConversation,
+      conversationPort: {
+        async open() {
+          return {
+            capabilities: {
+              inputModalities: ["audio"],
+              interruption: true,
+              outputModalities: ["text"],
+              runtimeKind: "integrated",
+              transcription: true,
+              turnDetection: "server_vad",
+              voiceKind: "preset",
+            } as const,
+            async close() {},
+            async *outputs() {
+              yield {
+                final: true,
+                text: "Unclaimed transcript",
+                turnId,
+                type: "transcript",
+              } as const;
+              yield { responseId, turnId, type: "response-started" } as const;
+              yield {
+                responseId,
+                text: "Must stay hidden",
+                turnId,
+                type: "response-text",
+              } as const;
+              yield {
+                inputTokens: 1,
+                outputTokens: 1,
+                responseId,
+                turnId,
+                type: "response-completed",
+              } as const;
+            },
+            async send() {},
+          };
+        },
+      },
+      contextService: createContextService(),
+      failureRecovery: {
+        async complete() {},
+        async fail() {},
+        async reopen() {
+          return null;
+        },
+        async start() {
+          return null;
+        },
+      },
+      generateId: randomUUID,
+      ledger,
+    });
+    await collect(
+      session.handle({
+        configuration: {
+          inputModalities: ["audio"],
+          outputModalities: ["text"],
+          protocolVersion: "1",
+          turnDetection: "server_vad",
+        },
+        eventId: randomUUID(),
+        sequence: 1,
+        sessionId,
+        type: "session.configure",
+      }),
+    );
+
+    await expect(collect(session.outputs())).resolves.toEqual([]);
+    await expect(ledger.list()).resolves.toMatchObject([
+      { content: "Unclaimed transcript", requestId: turnId, role: "user" },
+    ]);
+  });
+
   it("persists the assistant after retrying an asynchronously failed turn", async () => {
     const sessionId = randomUUID();
     const turnId = randomUUID();
@@ -1111,7 +1572,7 @@ describe("RealtimeSession", () => {
     });
     vi.spyOn(ledger, "clearRequestFailure").mockImplementation(async (requestId) => {
       clearCalls += 1;
-      if (clearCalls === 2) {
+      if (clearCalls === 1) {
         reportRetryClearStarted();
         await retryClearReleased;
       }

@@ -702,6 +702,54 @@ describe("Core HTTP API", () => {
       openApps.splice(openApps.indexOf(app), 1);
     }
   });
+
+  it("propagates a realtime session drain failure during app shutdown", async () => {
+    const { app } = await startCore(false, {
+      async open() {
+        return {
+          capabilities: {
+            inputModalities: ["text"],
+            interruption: true,
+            outputModalities: ["text"],
+            runtimeKind: "integrated",
+            transcription: true,
+            turnDetection: "manual",
+            voiceKind: "preset",
+          } as const,
+          async close() {
+            throw new Error("Synthetic session drain failure");
+          },
+          async *outputs() {},
+          async send() {},
+        };
+      },
+    });
+    const socket = await app.injectWS("/v1/realtime", {
+      headers: { authorization: `Bearer ${deviceToken}` },
+    });
+    const sessionId = randomUUID();
+    const ready = receiveEvents(socket, 1);
+    socket.send(
+      JSON.stringify({
+        configuration: {
+          inputModalities: ["text"],
+          outputModalities: ["text"],
+          protocolVersion: "1",
+        },
+        eventId: randomUUID(),
+        sequence: 1,
+        sessionId,
+        type: "session.configure",
+      }),
+    );
+    await ready;
+
+    await expect(app.close()).rejects.toThrow("Synthetic session drain failure");
+
+    socket.terminate();
+    openApps.splice(openApps.indexOf(app), 1);
+    await app.close().catch(() => undefined);
+  });
 });
 
 async function startCore(

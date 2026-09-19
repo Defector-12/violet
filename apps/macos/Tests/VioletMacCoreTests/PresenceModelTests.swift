@@ -386,7 +386,9 @@ struct PresenceModelTests {
     await model.refresh()
 
     model.startAudioSession()
-    try await waitUntil { model.messages.count == 4 }
+    try await waitUntil {
+      model.messages.count == 4 && model.audioState == .listening
+    }
 
     #expect(await realtime.connectCount == 1)
     #expect(audio.stopPlaybackCount == 2)
