@@ -1,7 +1,7 @@
 # Release 1D：任务拆分
 
-> 状态：方案已批准；Phase 1 第五轮最终门禁修复已提交、复审、合入双主线并重新部署；
-> Phase 2 可开始，Phase 3 未开始。
+> 状态：方案已批准；Phase 1 复盘修复已合入双主线并重新部署；Phase 2 开发准备
+> 已完成，功能实现未开始；Phase 3 未开始。当前版本见验收清单 2.7—2.8。
 > 产品合同见 [最终规格](./release-1d-spec.md)，放行条件见
 > [验收清单](./release-1d-acceptance.md)。
 
@@ -243,6 +243,94 @@ Mac 窗口只覆盖：
 - 删除后在线召回为 0，删除前备份被官方恢复拒绝。
 - 普通陈述不会自动产生记忆。
 - 回滚可以关闭记忆注入；已有记忆和删除能力必须继续可用。
+
+### Phase 2 开工顺序与接入说明
+
+沿用已批准的 1D-04—08，不重新设计记忆体系。以下是同一 Phase 内的开发顺序，
+不是可以单独上线的产品阶段；明确写入、治理和恢复防复活一起通过合并门。
+本阶段涉及超过 8 个文件，横跨 Core、协议、Mac 和既有备份程序，不增加服务或依赖。
+
+```text
+Mac 文字 / 语音 / 记忆窗口
+             ↓ /v1
+Core：明确记忆与治理 → PostgreSQL 事件、记忆、来源、revision
+             ↓
+共享 ContextAssembler / recall_memory → DeepSeek / Pipeline / Qwen
+
+Mac Keychain 最低恢复纪元 → 删除确认 → PostgreSQL restore_epoch
+                                           ↓
+                                既有备份程序 → 本地 / TOS
+Mac Keychain 最低恢复纪元 → 官方恢复校验 ← 备份认证纪元
+```
+
+| 顺序 | 对应任务 | 可检查产物 |
+|---|---|---|
+| 1 | 1D-04、1D-08 数据事务、1D-07 协议合同 | `0003`、领域合同、加密存储及来源校验；纠正和整轮删除事务；版本、幂等、删除预览与确认的 Schema/OpenAPI |
+| 2 | 1D-05—06、文字/语音接入 | 同步明确记忆、确定性 summary、同一 `recall_memory`；三条对话路径只使用 Core 确认的结果 |
+| 3 | 1D-07 Mac | 独立窗口、来源、纠正、删除预览、清空、变化标记；Keychain 写入失败不发送删除确认 |
+| 4 | 1D-08 备份与恢复 | 认证恢复纪元、干净备份验证、旧版本清理及清理状态；旧备份拒绝、新备份隔离恢复 |
+| 5 | Phase 2 合并门 | 聚焦与跨模块回归、真实模型样本、Mac 十步故事及各自 test-run |
+
+**在原任务文件清单上补齐这些接入点**
+
+- `services/core/src/main.ts`、`config.ts`：组装共享记忆服务，提供规格要求的记忆注入
+  回滚开关；关闭注入不关闭管理和删除。
+- `services/core/src/conversation/chat-service.ts`、`pipeline-context.ts`、
+  `context-assembler.ts` 与 `realtime/realtime-session.ts`：同步写入和治理结果进入
+  现有请求生命周期；summary 纳入既有预算与不可信数据边界。保留请求终止化、
+  attempt 隔离、完整轮次和 snapshot 校验。
+- `packages/domain/src/model-gateway.ts` 当前只有文本消息及 delta/complete；
+  DeepSeek 尚无工具调用合同。实现 `recall_memory` 时补齐请求、工具调用与结果回传，
+  同步更新 deterministic adapter；不再建立另一条聊天运行时。
+- Qwen 当前仅有 `inspect_current_view` 的专用请求/结果路径。新增召回必须按工具名
+  分派，保留视觉行为和 `max_history_turns = 20`。明确记忆应在成功措辞及音频对用户
+  可见前得到 Core 结果，不能只在 `response.completed` 后补写。
+- `packages/protocol/src/validation.ts`、`index.ts`、两个 stream event Schema：
+  增加校验与导出；先更新 Schema/OpenAPI，再生成 TypeScript 和 Swift 输入文档。
+- `apps/macos/Sources/VioletMacCore/CoreClient.swift`、`RealtimeSessionClient.swift`、
+  `PresenceModel.swift`：现有文字客户端只向上提供文本，不能仅在服务器添加
+  `memoryChanges`；需把不含正文的变化和删除预览引用传到管理模型与记忆入口。
+- 新增 `apps/macos/Sources/VioletMacCore/RestoreEpochStore.swift`，沿用
+  `RuntimeConfiguration.swift` 的 Security.framework 用法；最低恢复纪元与设备 Token
+  分项保存，按实例绑定，只允许增加。
+
+**必须随实现一起闭合的约束**
+
+- 存储沿用现有实例行锁及 `EnvelopeCipher`；`memory_revision` 用于记忆视图，
+  `deletion_revision` 用于派生内容失效，`restore_epoch` 用于恢复防复活，职责不混用。
+  来源只存最终用户事件引用和 UTF-8 byte offset，解密后逐字验证；多字节中文和
+  emoji 必须覆盖。
+- 明确写入失败必须反馈失败；相同 request 重试不能增加重复版本。普通陈述、
+  助手推断、工具和视觉结果不能进入本阶段写入路径。敏感内容在提取模型调用前校验；
+  明确受控敏感记忆按原话保存，不额外调用提取模型。
+- 纠正和删除不仅使下一次 summary 失效，也须阻止已打开的 Qwen 连接和正在生成的
+  旧回答继续使用被废止内容。沿用现有取消、关闭、重连装配机制，覆盖在途召回、
+  checkpoint 与迟到写入。
+- 删除预览绑定版本与完整影响范围；Mac 先保存最低恢复纪元再确认。确认请求失败后
+  保留已经增加的本地纪元，以同一删除 ID 查询/重试；不降低纪元来掩盖失败。
+- 备份的纪元必须与 dump 属于同一数据库快照，不能给删除前 dump 标记删除后纪元。
+  旧格式按纪元 0 处理；最低纪元缺失或认证失败时，官方恢复明确失败。通过认证和
+  最低纪元检查前不得写出明文 dump。
+- 删除完成后的清理状态可查询、失败可重试；先验证干净备份，再清理受管旧副本、
+  TOS versions、delete markers 和 multipart uploads。清理失败不撤销在线删除。
+- 独立“清空已学习记忆”属于本阶段治理，复用删除预览与确认。自动提取任务、
+  自动记忆开关及其默认开启仍属于 1D-09—10；Phase 2 普通轮次新增记忆必须为 0。
+
+**验证安排**
+
+先验证存储事务、来源、版本和秘密负例，再验证三条对话路径、协议、Mac 与备份。
+复用现有 PostgreSQL 集成测试方式，使用独立 `pgvector` 测试库；扩展名来自 `0001`
+迁移，不代表启用向量检索。迁移覆盖空库及 `0001 → 0002 → 0002b → 0002c → 0003`。
+
+提前使用 1D-10 中属于 Phase 2 的明确记住、历史召回、纠正、删除和敏感负例；
+真实模型每例 3 次保留全部输出，语义结果按事实和来源核对。不要通过继续增加
+checkpoint 评估器措辞规则来证明记忆正确。`eval:memory` 当前尚不存在，必须实现后
+才可列为已执行命令；自动提取指标留到 Phase 3。
+
+开发验证使用第 5 节命令及 `pnpm test:record`，Mac 测试与 App 构建串行运行。
+真实模型、TOS 和恢复验证各自记录，不以 mock 替代真实通过。发布前完成验收清单
+第 11 节故事；数据库恢复使用隔离库。回滚保留治理 API、删除能力与全部单调纪元，
+不回退到不理解 `0003` 和恢复纪元的旧二进制。
 
 ## 4. Phase 3：自动记忆和评估
 

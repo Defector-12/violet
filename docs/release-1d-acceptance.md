@@ -1,7 +1,7 @@
 # Release 1D：验收清单
 
-> 状态：Phase 1 已部署；请求清理修复与代码精简已完成本地验证，尚未部署
-> （见 2.7）。Phase 2/3 未开始。
+> 状态：Phase 1 请求清理修复与代码精简已合入双主线并重新部署（见 2.7）。
+> Phase 2 开发准备已完成，功能实现未开始；Phase 3 未开始。
 > 本文记录 Release 1D 的实际版本、失败、证据和剩余门禁。规格见
 > [最终规格](./release-1d-spec.md)，实施顺序见 [任务拆分](./release-1d-tasks.md)。
 
@@ -416,7 +416,7 @@
   `41ffbdc1-7354-48f3-9a9e-a0e3856468a0`。Phase 1 第五轮修复已重新放行，
   Phase 2 可开始。
 
-### 2.7 复盘后的运行时修复与精简（2026-09-19，本地）
+### 2.7 复盘后的运行时修复与精简（2026-09-19—20）
 
 - 基线为 `main@c2d7d4f`。Chat 请求认领成功后，第二次助手事件查询若抛错，外层尚未
   收到用户事件和 generation，原先无法清理该请求。现在由认领所在作用域调用已有
@@ -444,8 +444,54 @@
 - 上次复盘已记录的评估器假通过、两份非原样录制夹具和 Qwen 取消后同 ID 重试 P2
   仍为独立已知项，本轮未扩大到这些修复。评估器的 `passed` 不能单独作为任意新输出
   的语义证明；保留对真实原始输出的人工判定，不以增加措辞覆盖为 Phase 2 新门禁。
-- Phase 2 开发可开始；本轮修改随本提交保存，尚未推送或部署。线上已记录版本仍为
-  `66ead81-release-1d-phase1-final-gate`，本地回归不代表线上已经包含本次修复。
+- 修复提交为 `82b3167e7283c89307e9d9f465b1d92c66cd6d9b`；Codebase MR
+  [!31](https://code.byted.org/user/violet/merge_requests/31) 合入
+  `main@414fd541994d09d4116d4b5ec22bbeb9f7168330`，GitHub PR
+  [#14](https://github.com/Defector-12/violet/pull/14) 合入
+  `main@5b446be9528159b7b5898637f064569fe47c2f3d`；两个主线和修复提交 tree
+  均为 `39a110282be09e26f92dfac7b484aeee7d100d47`。Codebase 自动检查和 Aime
+  复审通过；主线 review 规则按既有个人仓库流程记录 `no_need_for_review` 后合入。
+- exact-main Core 与共享包构建通过，run
+  `cdc8ab55-9d5a-4930-8a23-a8047c72eb18`。部署前加密 PostgreSQL 备份为
+  `20260919T132419Z-968ee8a6-758a-43db-a57b-aa91aeab42da.vltbk`，密文 SHA-256
+  `daa096a9769af397a30bddb0421beb8300c05a9300f76080aa915bd328b01192`，且已上传
+  TOS。首次命令在备份和上传成功后误用容器内路径校验宿主机文件而退出 1，run
+  `047278b4-f898-4a43-8609-511bac0f9b31`；同一密文的宿主机独立校验 run
+  `16c583e7-78f0-4e7c-9b1a-7bd3f6639454` 通过，没有重复生成备份。
+- 首次部署 run `cdf21940-7e19-4d37-bcf9-84f74cc9c238` 未通过健康门禁：旧发布脚本
+  只替换 Core `dist`，遗漏本次新增运行时导出的 `@violet/domain` 产物。自动回滚恢复
+  `66ead81`，旧镜像健康、零重启；清理失败候选并确认回滚的 run
+  `7b08c07e-762c-4487-b687-cb6b1e22123c` 通过。修正一次性发布包后，Core 与 domain
+  产物共同部署成功，run `42804adb-78a0-4068-8bca-2a7417f3694d`。
+- 最终发布归档 SHA-256 为
+  `7a38a63d4ce58013d5b3ee7e14b163e199cc2f257da4fc14cdd1a537d1e0f678`，运行镜像
+  `sha256:14bdc1ac4199d1b84b9cd99a210b6eb18eb914a0fcdd994165294d5d8ede1cf6`，
+  版本为 `414fd54-release-1d-phase1-runtime-fix`。独立验证 run
+  `2477fae0-9df1-4cd3-b02f-135a9344d868` 确认 Core/domain 本地与远端 hash 一致、
+  新 domain 导出可加载、健康且零重启、四项迁移、Context 引用、checkpoint 开关、
+  `deepseek-flash`、零未终止请求、单活锁、备份、发布归档和回滚镜像均通过。
+- Mac 和协议源码未变化，因此未重复构建 App；临时 SSH 隧道下认证状态为 `ready`
+  且返回新版本，run `e9617af4-1e9a-4fb2-b7c4-0a2f27b05170`。Phase 2 开发可开始。
+
+### 2.8 Phase 2 开发准备（2026-09-19）
+
+- 开工基线为本地 `main@82b3167`，工作树在准备前干净；相对本地追踪的 `bits/main`
+  领先一个提交。本次没有刷新远端或重新探测生产环境，部署状态沿用 2.6—2.7 的证据。
+- 已核对 2.7 的完整检查、测试子 run 和聚焦 run：记录目录及退出码 0 均存在，
+  原始 stdout 分别确认完整测试 352/352、聚焦测试 231/231；本次没有重复执行测试。
+- 已对照产品宪法、规格和代码完成接入盘点。长期记忆表、管理 API、记忆窗口、
+  `recall_memory` 和恢复纪元尚未实现；现有 `deletion_revision`、共享上下文、
+  加密信封、生成客户端和备份程序可复用。
+- 开工顺序、补充接入文件、在途上下文失效、Keychain 确认顺序、备份快照一致性及
+  验证安排已补入[任务拆分](./release-1d-tasks.md)第 3 节。1D-04—08 作为完整闭环
+  验收；自动提取和开关仍归 Phase 3，清空记忆属于 Phase 2 治理。
+- 本机版本查询确认 Node `22.23.2`、pnpm `11.21.0`、Swift `6.4` 可调用。
+  Docker 查询返回服务端版本 `29.4.3`，但因沙箱限制访问 Docker Desktop 日志而非零
+  退出；本次未建立隔离数据库，不能据此宣称数据库测试环境就绪。
+- 本次只更新准备文档，未修改运行时代码、安装依赖、提交、推送或部署。
+  DeepSeek、Qwen、TOS 和 Keychain 复用既有集成；本次未进行真实模型调用、
+  TOS 权限探测或 Keychain 写入，外部集成就绪和真人 recorder ready 仍由各自
+  后续验收记录证明。Phase 1 已知 P2 沿用 2.7 的处理，不新增一轮全面加固门禁。
 
 ## 3. P0：事实与来源
 
@@ -636,6 +682,8 @@ fnm exec --using=.node-version -- pnpm test:record docker compose -f infra/compo
   `1ee90fe-release-1d-phase1-review4`。
 - [x] Phase 1 第五轮最终门禁修复已提交、复审、合入双主线并重新部署，运行版本为
   `66ead81-release-1d-phase1-final-gate`。
+- [x] Phase 1 复盘后的请求清理修复与精简已合入双主线并重新部署，运行版本为
+  `414fd54-release-1d-phase1-runtime-fix`。
 - [ ] 用户明确批准后，生产自动记忆才开启。
 
 关闭自动提取、记忆注入或 checkpoint 可以回滚能力；任何回滚都不得降低
