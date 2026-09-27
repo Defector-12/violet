@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import type { MemoryService } from "../memory/memory-service.js";
 import { DeterministicModelGateway } from "../model/deterministic-model-gateway.js";
 import { ContextAssembler } from "./context-assembler.js";
 import { ContextEpochManager } from "./context-epoch-manager.js";
@@ -29,7 +30,7 @@ describe("createPipelineContextAssembler", () => {
       ledger,
     });
 
-    const messages = await assemble({
+    const { messages } = await assemble({
       additionalSystemInstructions: [],
       currentMessage: { content: "Current question", role: "user" },
       requestId: "current",
@@ -57,7 +58,7 @@ describe("createPipelineContextAssembler", () => {
       now: () => epoch.startedAt,
     });
 
-    const messages = await assemble({
+    const { messages } = await assemble({
       additionalSystemInstructions: [],
       currentMessage: { content: "Final transcript", role: "user" },
       requestId: "current",
@@ -113,13 +114,51 @@ describe("createPipelineContextAssembler", () => {
       ledger,
     });
 
-    const messages = await assemble({
+    const { messages } = await assemble({
       additionalSystemInstructions: [],
       currentMessage: { content: "Changed retry", role: "user" },
       requestId: "current",
     });
 
     expect(messages.at(-1)).toEqual({ content: "Original transcript", role: "user" });
+  });
+
+  it("retains the memory revision of each assembled context", async () => {
+    let revision = 7;
+    let nextId = 0;
+    const memory = {
+      repository: { state: async () => ({ revision }) },
+      async context() {
+        return { revision, summary: "", excludedRequests: new Set<string>() };
+      },
+    } as unknown as MemoryService;
+    const ledger = new InMemoryConversationLedger();
+    const assemble = createPipelineContextAssembler({
+      contextAssembler: new ContextAssembler({
+        checkpoints: new InMemoryContextCheckpointRepository(),
+        ledger,
+        memoryService: memory,
+        model: new DeterministicModelGateway(),
+      }),
+      epochManager: new ContextEpochManager({ generateId: () => epoch.id }),
+      generateId: () => `generated-${nextId++}`,
+      ledger,
+      now: () => epoch.startedAt,
+    });
+    const first = await assemble({
+      additionalSystemInstructions: [],
+      currentMessage: { content: "First question", role: "user" },
+      requestId: "first",
+    });
+    revision = 8;
+    const second = await assemble({
+      additionalSystemInstructions: [],
+      currentMessage: { content: "Second question", role: "user" },
+      requestId: "second",
+    });
+    expect(first.memoryRevision).toBe(7);
+    expect(second.memoryRevision).toBe(8);
+    expect(second.messages.at(-1)?.content).toBe("Second question");
   });
 });
 

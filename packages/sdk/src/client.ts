@@ -4,12 +4,25 @@ import {
   assertContextReceipt,
   assertCoreStatus,
   assertHealth,
+  assertMemoryDeletionPreview,
+  assertMemoryDeletionStatus,
+  assertMemoryDetail,
+  assertMemoryList,
+  assertMemoryMutation,
   type ChatRequest,
   type ChatStreamEvent,
   type ContextEnvelope,
   type ContextReceipt,
   type CoreStatus,
   type Health,
+  type MemoryCorrection,
+  type MemoryDeletionConfirmation,
+  type MemoryDeletionPreview,
+  type MemoryDeletionPreviewRequest,
+  type MemoryDeletionStatus,
+  type MemoryDetail,
+  type MemoryList,
+  type MemoryMutation,
 } from "@violet/protocol";
 
 export interface VioletClientOptions {
@@ -91,6 +104,114 @@ export class VioletClient {
     if (!response.ok) {
       throw await this.#apiError(response);
     }
+  }
+
+  async listMemories(signal?: AbortSignal): Promise<MemoryList> {
+    const value = await this.#memoryRequest("/v1/memories", "GET", undefined, signal);
+    assertMemoryList(value);
+    return value;
+  }
+
+  async getMemory(id: string, reveal = false, signal?: AbortSignal): Promise<MemoryDetail> {
+    const value = await this.#memoryRequest(
+      `/v1/memories/${encodeURIComponent(id)}?reveal=${reveal}`,
+      "GET",
+      undefined,
+      signal,
+    );
+    assertMemoryDetail(value);
+    return value;
+  }
+
+  async correctMemory(
+    id: string,
+    input: MemoryCorrection,
+    signal?: AbortSignal,
+  ): Promise<MemoryMutation> {
+    const value = await this.#memoryRequest(
+      `/v1/memories/${encodeURIComponent(id)}/corrections`,
+      "POST",
+      input,
+      signal,
+    );
+    assertMemoryMutation(value);
+    return value;
+  }
+
+  async previewMemoryDeletion(
+    input: MemoryDeletionPreviewRequest,
+    signal?: AbortSignal,
+  ): Promise<MemoryDeletionPreview> {
+    const value = await this.#memoryRequest("/v1/memory-deletions/previews", "POST", input, signal);
+    assertMemoryDeletionPreview(value);
+    return value;
+  }
+
+  async getMemoryDeletionPreview(id: string, signal?: AbortSignal): Promise<MemoryDeletionPreview> {
+    const value = await this.#memoryRequest(
+      `/v1/memory-deletions/${encodeURIComponent(id)}/preview`,
+      "GET",
+      undefined,
+      signal,
+    );
+    assertMemoryDeletionPreview(value);
+    return value;
+  }
+
+  async confirmMemoryDeletion(
+    id: string,
+    input: MemoryDeletionConfirmation,
+    signal?: AbortSignal,
+  ): Promise<MemoryDeletionStatus> {
+    const value = await this.#memoryRequest(
+      `/v1/memory-deletions/${encodeURIComponent(id)}/confirm`,
+      "POST",
+      input,
+      signal,
+    );
+    assertMemoryDeletionStatus(value);
+    return value;
+  }
+
+  async getMemoryDeletionStatus(id: string, signal?: AbortSignal): Promise<MemoryDeletionStatus> {
+    const value = await this.#memoryRequest(
+      `/v1/memory-deletions/${encodeURIComponent(id)}`,
+      "GET",
+      undefined,
+      signal,
+    );
+    assertMemoryDeletionStatus(value);
+    return value;
+  }
+
+  async retryMemoryBackupCleanup(id: string, signal?: AbortSignal): Promise<MemoryDeletionStatus> {
+    const value = await this.#memoryRequest(
+      `/v1/memory-deletions/${encodeURIComponent(id)}/retry`,
+      "POST",
+      undefined,
+      signal,
+    );
+    assertMemoryDeletionStatus(value);
+    return value;
+  }
+
+  async #memoryRequest(
+    path: string,
+    method: "GET" | "POST",
+    body?: unknown,
+    signal?: AbortSignal,
+  ): Promise<unknown> {
+    return this.#json(
+      await this.#fetch(this.#url(path), {
+        method,
+        headers: {
+          ...this.#headers(),
+          ...(body === undefined ? {} : { "content-type": "application/json" }),
+        },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+        ...(signal ? { signal } : {}),
+      }),
+    );
   }
 
   async *streamChat(request: ChatRequest, signal?: AbortSignal): AsyncGenerator<ChatStreamEvent> {

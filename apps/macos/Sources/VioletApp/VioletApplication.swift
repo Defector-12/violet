@@ -18,6 +18,7 @@ enum VioletApplication {
 private final class VioletApplicationDelegate: NSObject, NSApplicationDelegate {
   private var acceptanceRecorder: (any RealtimeAcceptanceRecording)?
   private var model: PresenceModel?
+  private var memoryWindow: MemoryWindowController?
   private var portForwarder: (any PortForwarderPort)?
   private var statusController: StatusItemController?
   private var wakeWord: WakeWordCoordinator?
@@ -25,6 +26,7 @@ private final class VioletApplicationDelegate: NSObject, NSApplicationDelegate {
   func applicationDidFinishLaunching(_ notification: Notification) {
     var acceptanceRecorder = configuredRealtimeAcceptanceRecorder()
     var testTrace: TestTraceRecorder?
+    var memoryModel: MemoryManagementModel?
     let dependencies:
       (
         configuration: VioletRuntimeConfiguration,
@@ -36,12 +38,18 @@ private final class VioletApplicationDelegate: NSObject, NSApplicationDelegate {
       testTrace = try TestTraceRecorder.configured()
       let configuration = try VioletRuntimeConfiguration()
       let token = try RuntimeDeviceTokenProvider().deviceToken()
+      let memory = MemoryManagementModel(
+        client: GeneratedMemoryClient(serverURL: configuration.coreURL, deviceToken: token, testTrace: testTrace),
+        epochs: KeychainRestoreEpochStore()
+      )
+      memoryModel = memory
       dependencies = (
         configuration,
         GeneratedVioletCoreClient(
           serverURL: configuration.coreURL,
           deviceToken: token,
-          testTrace: testTrace
+          testTrace: testTrace,
+          onMemoryCompletion: { [weak memory] in memory?.receive($0) }
         ),
         configuration.testMode
           ? SilentContextClient()
@@ -55,7 +63,8 @@ private final class VioletApplicationDelegate: NSObject, NSApplicationDelegate {
           : URLSessionRealtimeClient(
             coreURL: configuration.coreURL,
             deviceToken: token,
-            testTrace: testTrace
+            testTrace: testTrace,
+            onMemoryCompletion: { [weak memory] in memory?.receive($0) }
           )
       )
     } catch {
@@ -133,17 +142,22 @@ private final class VioletApplicationDelegate: NSObject, NSApplicationDelegate {
     )
 
     self.model = model
+    memoryModel?.onDeletionConfirmed = { [weak model] in
+      model?.invalidateDeletedConversation()
+    }
     (acceptanceRecorder as? TestTraceRealtimeAcceptanceRecorder)?.onFailure = { [weak model] in
       model?.stop(reason: .failure)
     }
     self.acceptanceRecorder = acceptanceRecorder
     self.portForwarder = portForwarder
     self.wakeWord = wakeWord
+    memoryWindow = memoryModel.map(MemoryWindowController.init)
     statusController = StatusItemController(
       model: model,
       shortcut: shortcut,
       wakeWord: wakeWord,
-      acceptanceRecorder: acceptanceRecorder
+      acceptanceRecorder: acceptanceRecorder,
+      memoryWindow: memoryWindow
     )
     registerSystemLifecycleObservers()
     model.prepareSelectedTextCapture()
@@ -200,6 +214,7 @@ private final class VioletApplicationDelegate: NSObject, NSApplicationDelegate {
 
   @objc
   private func stopSensitiveActivity(_ notification: Notification) {
+    memoryWindow?.model.hideDetails()
     guard
       let reason = wakeWordSuspension(for: notification.name),
       statusController?.suspendSensitiveActivity(for: reason) == true

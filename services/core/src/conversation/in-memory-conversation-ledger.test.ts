@@ -3,6 +3,42 @@ import { describe, expect, it } from "vitest";
 import { InMemoryConversationLedger } from "./in-memory-conversation-ledger.js";
 
 describe("InMemoryConversationLedger", () => {
+  it("checks cancellation and a bound revision synchronously without persisting control fields", async () => {
+    let revision = 1;
+    const ledger = new InMemoryConversationLedger(() => revision);
+    const controller = new AbortController();
+    const message = {
+      content: "Synthetic answer",
+      id: "answer-a",
+      occurredAt: new Date(),
+      requestId: "request-a",
+      role: "assistant" as const,
+      expectedMemoryRevision: revision,
+      signal: controller.signal,
+    };
+    revision++;
+    await expect(ledger.append(message)).rejects.toThrow("Memory changed");
+    controller.abort(new Error("Cancelled before insertion"));
+    await expect(ledger.append({ ...message, expectedMemoryRevision: revision })).rejects.toThrow(
+      "Cancelled",
+    );
+    expect(await ledger.list()).toEqual([]);
+    const saved = await ledger.append({
+      ...message,
+      signal: new AbortController().signal,
+      expectedMemoryRevision: revision,
+    });
+    expect(saved).not.toHaveProperty("signal");
+    expect(saved).not.toHaveProperty("expectedMemoryRevision");
+    await expect(
+      new InMemoryConversationLedger().append({
+        ...message,
+        signal: new AbortController().signal,
+        expectedMemoryRevision: 0,
+      }),
+    ).resolves.toMatchObject({ content: message.content });
+  });
+
   it("keeps concurrent retries idempotent", async () => {
     const ledger = new InMemoryConversationLedger();
     const message = {

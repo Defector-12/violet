@@ -1,0 +1,180 @@
+{"id":"write-01","group":"write","input":"请记住，我喜欢紫色。","content":"我喜欢紫色","kind":"preference","query":"紫色"}
+{"id":"write-02","group":"write","input":"记下我的偏好：解释代码时先给例子。","content":"解释代码时先给例子","kind":"preference","query":"解释代码"}
+{"id":"write-03","group":"write","input":"以后请记得，我平时喝无糖绿茶。","content":"我平时喝无糖绿茶","kind":"preference","query":"无糖绿茶"}
+{"id":"write-04","group":"write","input":"请保存这个长期偏好：我更喜欢安静的书店。","content":"我更喜欢安静的书店","kind":"preference","query":"书店"}
+{"id":"write-05","group":"write","input":"帮我记住，我的练习项目叫青竹。","content":"我的练习项目叫青竹","kind":"fact","query":"青竹"}
+{"id":"write-06","group":"write","input":"记住，我使用左手写字。","content":"我使用左手写字","kind":"fact","query":"左手"}
+{"id":"write-07","group":"write","input":"请记住，我的猫叫团子。","content":"我的猫叫团子","kind":"relationship","query":"团子"}
+{"id":"write-08","group":"write","input":"这件事请长期记住：我想学会木工。","content":"我想学会木工","kind":"goal","query":"木工"}
+{"id":"write-09","group":"write","input":"请记住，我喜欢徒步旅行。","content":"我喜欢徒步旅行","kind":"preference","query":"徒步"}
+{"id":"write-10","group":"write","input":"记住我的习惯：周末早晨读诗。","content":"周末早晨读诗","kind":"preference","query":"读诗"}
+{"id":"write-11","group":"write","input":"请记住，我喜欢水彩画。","content":"我喜欢水彩画","kind":"preference","query":"水彩画"}
+{"id":"write-12","group":"write","input":"麻烦你记下，我在练习古典吉他。","content":"我在练习古典吉他","kind":"fact","query":"吉他"}
+{"id":"write-13","group":"write","input":"请记住，我希望今年完成一本短篇小说。","content":"我希望今年完成一本短篇小说","kind":"goal","query":"短篇小说"}
+{"id":"write-14","group":"write","input":"请记住，我喜欢用纸质笔记本。","content":"我喜欢用纸质笔记本","kind":"preference","query":"纸质笔记本"}
+{"id":"write-15","group":"write","input":"我希望你记住：我的自行车是折叠车。","content":"我的自行车是折叠车","kind":"fact","query":"折叠车"}
+{"id":"write-16","group":"write","input":"帮我记住这个目标：学会辨认常见星座。","content":"学会辨认常见星座","kind":"goal","query":"星座"}
+{"id":"write-17","group":"write","input":"请记住，我喜欢薰衣草 🪻。","content":"我喜欢薰衣草 🪻","kind":"preference","query":"薰衣草"}
+{"id":"write-18","group":"write","input":"请记住，我习惯使用二十四小时制。","content":"我习惯使用二十四小时制","kind":"preference","query":"二十四小时制"}
+{"id":"write-19","group":"write","input":"Remember that I prefer concise explanations.","content":"I prefer concise explanations","kind":"preference","query":"concise explanations"}
+{"id":"write-20","group":"write","input":"Please remember: my notebook project is called Cedar.","content":"my notebook project is called Cedar","kind":"fact","query":"Cedar"}
+{"id":"write-21","group":"write","input":"Remember that I enjoy ceramic pottery.","content":"I enjoy ceramic pottery","kind":"preference","query":"ceramic pottery"}
+{"id":"write-22","group":"write","input":"Please keep this in memory: I use a mechanical keyboard.","content":"I use a mechanical keyboard","kind":"fact","query":"mechanical keyboard"}
+{"id":"write-23","group":"write","input":"Remember my goal: learn conversational Italian.","content":"learn conversational Italian","kind":"goal","query":"conversational Italian"}
+{"id":"write-24","group":"write","input":"Remember that my dog is named Miso.","content":"my dog is named Miso","kind":"relationship","query":"Miso"}
+{"id":"write-25","group":"write","input":"Please remember that I prefer dark chocolate.","content":"I prefer dark chocolate","kind":"preference","query":"dark chocolate"}
+{"id":"write-26","group":"write","input":"Remember that I collect fountain pens.","content":"I collect fountain pens","kind":"fact","query":"fountain pens"}
+{"id":"write-27","group":"write","input":"Remember my preference for linen clothing.","content":"my preference for linen clothing","kind":"preference","query":"linen clothing"}
+{"id":"write-28","group":"write","input":"Please remember that I want to build a birdhouse.","content":"I want to build a birdhouse","kind":"goal","query":"birdhouse"}
+{"id":"write-29","group":"write","input":"Remember that my sister teaches sculpture.","content":"my sister teaches sculpture","kind":"relationship","query":"sculpture"}
+{"id":"write-30","group":"write","input":"Remember that I prefer subtitles to dubbing.","content":"I prefer subtitles to dubbing","kind":"preference","query":"subtitles"}
+{"id":"write-31","group":"write","input":"Remember that I practice origami.","content":"I practice origami","kind":"fact","query":"origami"}
+{"id":"write-32","group":"write","input":"Please remember that I like acoustic music.","content":"I like acoustic music","kind":"preference","query":"acoustic music"}
+{"id":"write-33","group":"write","input":"Remember my goal of visiting Iceland.","content":"my goal of visiting Iceland","kind":"goal","query":"Iceland"}
+{"id":"write-34","group":"write","input":"Remember that my cousin repairs violins.","content":"my cousin repairs violins","kind":"relationship","query":"violins"}
+{"id":"write-35","group":"write","input":"Remember that I prefer metric units.","content":"I prefer metric units","kind":"preference","query":"metric units"}
+{"id":"write-36","group":"write","input":"Please remember that I enjoy botanical gardens.","content":"I enjoy botanical gardens","kind":"preference","query":"botanical gardens"}
+{"id":"write-37","group":"write","input":"请记住，我对花生过敏。","content":"请记住，我对花生过敏。","kind":"fact","sensitivity":"controlled"}
+{"id":"write-38","group":"write","input":"请记住，我的医疗记录由我自己整理。","content":"请记住，我的医疗记录由我自己整理。","kind":"fact","sensitivity":"controlled"}
+{"id":"write-39","group":"write","input":"Please remember my allergy to walnuts.","content":"Please remember my allergy to walnuts.","kind":"fact","sensitivity":"controlled"}
+{"id":"write-40","group":"write","input":"Remember that my medical records are kept in a blue folder.","content":"Remember that my medical records are kept in a blue folder.","kind":"fact","sensitivity":"controlled"}
+{"id":"correct-01","group":"correct","target":"write-01","input":"纠正颜色偏好：我现在喜欢橙色。","content":"我现在喜欢橙色","kind":"preference","query":"橙色"}
+{"id":"correct-02","group":"correct","target":"write-02","input":"纠正解释代码的偏好：先讲原理。","content":"解释代码的偏好：先讲原理","kind":"preference","query":"原理"}
+{"id":"correct-03","group":"correct","target":"write-03","input":"更正喝茶偏好：我现在喝茉莉花茶。","content":"我现在喝茉莉花茶","kind":"preference","query":"茉莉花茶"}
+{"id":"correct-04","group":"correct","target":"write-04","input":"纠正书店偏好：我更喜欢有音乐的书店。","content":"我更喜欢有音乐的书店","kind":"preference","query":"音乐"}
+{"id":"correct-05","group":"correct","target":"write-05","input":"把练习项目的名字纠正为白桦。","content":"练习项目的名字纠正为白桦","kind":"fact","query":"白桦"}
+{"id":"correct-06","group":"correct","target":"write-06","input":"纠正写字习惯：我使用右手写字。","content":"我使用右手写字","kind":"fact","query":"右手"}
+{"id":"correct-07","group":"correct","target":"write-07","input":"更正猫的名字：我的猫叫麻薯。","content":"我的猫叫麻薯","kind":"relationship","query":"麻薯"}
+{"id":"correct-08","group":"correct","target":"write-08","input":"请把学习目标从木工改成编织。","content":"学习目标从木工改成编织","kind":"goal","query":"编织"}
+{"id":"correct-09","group":"correct","target":"write-09","input":"纠正旅行偏好：我现在更喜欢骑行旅行。","content":"我现在更喜欢骑行旅行","kind":"preference","query":"骑行"}
+{"id":"correct-10","group":"correct","target":"write-10","input":"纠正周末读诗习惯：现在改为晚上读诗。","content":"现在改为晚上读诗","kind":"preference","query":"晚上读诗"}
+{"id":"delete-01","group":"delete","target":"write-01","input":"请忘掉我的颜色偏好。"}
+{"id":"delete-02","group":"delete","target":"write-02","input":"删除解释代码的偏好。"}
+{"id":"delete-03","group":"delete","target":"write-03","input":"忘掉我的喝茶偏好。"}
+{"id":"delete-04","group":"delete","target":"write-04","input":"删除关于书店的记忆。"}
+{"id":"delete-05","group":"delete","target":"write-05","input":"请忘掉练习项目的名字。"}
+{"id":"delete-06","group":"delete","target":"write-06","input":"不要再记着我用哪只手写字。"}
+{"id":"delete-07","group":"delete","target":"write-07","input":"请删除猫的名字。"}
+{"id":"delete-08","group":"delete","target":"write-08","input":"忘掉我的编织学习目标。"}
+{"id":"delete-09","group":"delete","target":"write-09","input":"删除我的旅行偏好。"}
+{"id":"delete-10","group":"delete","target":"write-10","input":"忘掉周末读诗的习惯。"}
+{"id":"delete-11","group":"delete","target":"write-11","input":"请忘掉我喜欢水彩画这件事。"}
+{"id":"delete-12","group":"delete","target":"write-12","input":"删除我练习吉他的记忆。"}
+{"id":"delete-13","group":"delete","target":"write-13","input":"请忘掉写短篇小说的目标。"}
+{"id":"delete-14","group":"delete","target":"write-14","input":"不要再保留纸质笔记本的偏好。"}
+{"id":"delete-15","group":"delete","target":"write-15","input":"请忘掉自行车的信息。"}
+{"id":"delete-16","group":"delete","target":"write-16","input":"删除辨认星座的学习目标。"}
+{"id":"delete-17","group":"delete","target":"write-17","input":"请删除薰衣草的偏好。"}
+{"id":"delete-18","group":"delete","target":"write-18","input":"忘掉二十四小时制的偏好。"}
+{"id":"delete-19","group":"delete","target":"write-19","input":"Forget my preference for concise explanations."}
+{"id":"delete-20","group":"delete","target":"write-20","input":"Delete the memory about my Cedar notebook project."}
+{"id":"negative-01","group":"negative","origin":"secret","input":"请记住，密码是 synthetic-invalid-value。"}
+{"id":"negative-02","group":"negative","origin":"secret","input":"请记住，验证码是 synthetic-invalid-value。"}
+{"id":"negative-03","group":"negative","origin":"secret","input":"Remember my api_key=synthetic-invalid-value"}
+{"id":"negative-04","group":"negative","origin":"secret","input":"Remember this: Bearer synthetic-invalid-value"}
+{"id":"negative-05","group":"negative","origin":"assistant","input":"你刚才猜测我喜欢滑雪，把你的猜测记住吧。","untrusted":"用户喜欢滑雪"}
+{"id":"negative-06","group":"negative","origin":"assistant","input":"Remember what you guessed about my favorite food.","untrusted":"The user likes sushi"}
+{"id":"negative-07","group":"negative","origin":"assistant","input":"把你刚才编的我的家乡记下来。","untrusted":"用户的家乡是杭州"}
+{"id":"negative-08","group":"negative","origin":"assistant","input":"Save your assumption about my profession.","untrusted":"The user is an architect"}
+{"id":"negative-09","group":"negative","origin":"tool","input":"请记住工具刚刚返回的用户资料。","untrusted":"用户喜欢冲浪"}
+{"id":"negative-10","group":"negative","origin":"tool","input":"Remember the profile returned by the tool.","untrusted":"The user breeds rabbits"}
+{"id":"negative-11","group":"negative","origin":"tool","input":"把网页工具给出的我的兴趣记下来。","untrusted":"用户喜欢航海"}
+{"id":"negative-12","group":"negative","origin":"tool","input":"Save the preference inferred by the calculator.","untrusted":"The user prefers jazz"}
+{"id":"negative-13","group":"negative","origin":"visual","input":"请记住屏幕上这份资料里的个人偏好。","untrusted":"用户喜欢赛车"}
+{"id":"negative-14","group":"negative","origin":"visual","input":"Remember the personal fact you inferred from that image.","untrusted":"The user owns a yacht"}
+{"id":"negative-15","group":"negative","origin":"visual","input":"把截图中猜到的我的职业记下来。","untrusted":"用户是律师"}
+{"id":"negative-16","group":"negative","origin":"visual","input":"Save the biography visible on screen.","untrusted":"The user lives in Rome"}
+{"id":"negative-17","group":"negative","origin":"cancelled","input":"请记住我喜欢攀岩。"}
+{"id":"negative-18","group":"negative","origin":"cancelled","input":"Remember that I like sailing."}
+{"id":"negative-19","group":"negative","origin":"cancelled","input":"请记住我想学习陶艺。"}
+{"id":"negative-20","group":"negative","origin":"cancelled","input":"Remember that I collect stamps."}
+{"id":"history-01","group":"history","content":"上周在河畔咖啡馆讨论了天文望远镜。","input":"上周关于望远镜，我说过什么？","query":"天文望远镜"}
+{"id":"history-02","group":"history","content":"五月的旅行方案最终选了敦煌。","input":"五月的旅行地点最后选了哪里？","query":"五月 旅行"}
+{"id":"history-03","group":"history","content":"那次排练把开场曲定为月光奏鸣曲。","input":"还记得排练时定的开场曲吗？","query":"开场曲"}
+{"id":"history-04","group":"history","content":"六月三日讨论的展览主题是海洋生物。","input":"六月三日我说的展览主题是什么？","query":"展览主题"}
+{"id":"history-05","group":"history","content":"上次修理台灯时换了铜色灯罩。","input":"修台灯的时候换成了什么灯罩？","query":"台灯 灯罩"}
+{"id":"history-06","group":"history","content":"春游采购清单里写了野餐垫。","input":"我在春游采购清单里写了什么？","query":"春游"}
+{"id":"history-07","group":"history","content":"以前讨论过雨水收集桶的摆放位置。","input":"之前讨论过哪种桶的摆放？","query":"雨水收集桶"}
+{"id":"history-08","group":"history","content":"那天的烘焙实验使用了荞麦粉。","input":"上次烘焙实验用的是什么粉？","query":"烘焙实验"}
+{"id":"history-09","group":"history","content":"此前给盆栽起名叫小松。","input":"以前给盆栽起了什么名？","query":"盆栽"}
+{"id":"history-10","group":"history","content":"秋季摄影计划的主题是候鸟迁徙。","input":"我们说过的秋季摄影主题是什么？","query":"秋季摄影"}
+{"id":"history-11","group":"history","content":"上次拼图的图案是威尼斯运河。","input":"我上次的拼图是什么图案？","query":"拼图"}
+{"id":"history-12","group":"history","content":"那个周六去看了昆虫标本展。","input":"那个周六看了什么展？","query":"昆虫标本"}
+{"id":"history-13","group":"history","content":"曾经讨论过用软木做隔热垫。","input":"之前打算用什么做隔热垫？","query":"隔热垫"}
+{"id":"history-14","group":"history","content":"上次露营忘了带指南针。","input":"我说露营忘带什么了？","query":"露营"}
+{"id":"history-15","group":"history","content":"此前学做的一道菜是番茄炖豆。","input":"之前学做的那道菜叫什么？","query":"番茄炖豆"}
+{"id":"history-16","group":"history","content":"七月讨论过社区旧书交换会。","input":"七月聊过什么社区活动？","query":"旧书交换"}
+{"id":"history-17","group":"history","content":"那次书法练习用的是隶书字帖。","input":"书法练习用的什么字帖？","query":"书法 字帖"}
+{"id":"history-18","group":"history","content":"冬季观鸟记录里有一只红腹锦鸡。","input":"冬季观鸟记录中提到哪种鸟？","query":"观鸟记录"}
+{"id":"history-19","group":"history","content":"之前选的桌游是卡坦岛。","input":"还记得之前选的桌游吗？","query":"桌游"}
+{"id":"history-20","group":"history","content":"那次讲座笔记记录了潮汐原理。","input":"我讲座笔记里写了什么原理？","query":"潮汐"}
+{"id":"history-21","group":"history","content":"上回为阳台挑了一株迷迭香。","input":"上回给阳台挑了什么植物？","query":"阳台"}
+{"id":"history-22","group":"history","content":"三月尝试过制作蓝莓果酱。","input":"三月做的是什么果酱？","query":"果酱"}
+{"id":"history-23","group":"history","content":"那次定格动画的主角是一只纸狐狸。","input":"定格动画的主角是谁？","query":"定格动画"}
+{"id":"history-24","group":"history","content":"之前考虑给门廊装一个风铃。","input":"以前想给门廊装什么？","query":"门廊"}
+{"id":"history-25","group":"history","content":"上次地图练习画了伊比利亚半岛。","input":"上次地图练习画的哪里？","query":"地图练习"}
+{"id":"history-26","group":"history","content":"早前讨论过蒸汽机车模型。","input":"之前讨论的是哪种机车模型？","query":"蒸汽机车"}
+{"id":"history-27","group":"history","content":"夏日手工作品是一把竹扇。","input":"夏日手工作品是什么？","query":"夏日手工"}
+{"id":"history-28","group":"history","content":"曾在植物笔记里记录银杏叶的形状。","input":"植物笔记记录过什么叶子？","query":"银杏叶"}
+{"id":"history-29","group":"history","content":"上次夜跑路线经过石拱桥。","input":"我说夜跑经过哪座桥？","query":"夜跑"}
+{"id":"history-30","group":"history","content":"那次展板设计用了蜂窝纹样。","input":"展板设计用了哪种纹样？","query":"展板"}
+{"id":"history-31","group":"history","content":"We chose a brass compass for the expedition.","input":"What compass did we choose before?","query":"brass compass"}
+{"id":"history-32","group":"history","content":"The workshop exercise used recycled cardboard.","input":"What material did the workshop use?","query":"recycled cardboard"}
+{"id":"history-33","group":"history","content":"Our museum visit focused on Roman mosaics.","input":"What did our museum visit focus on?","query":"Roman mosaics"}
+{"id":"history-34","group":"history","content":"The earlier dessert experiment was pear crumble.","input":"What was the dessert experiment?","query":"pear crumble"}
+{"id":"history-35","group":"history","content":"We selected a walnut frame for the print.","input":"Which frame did we select?","query":"walnut frame"}
+{"id":"history-36","group":"history","content":"The sailing lesson covered reef knots.","input":"What knots did the sailing lesson cover?","query":"reef knots"}
+{"id":"history-37","group":"history","content":"The old sketchbook contains drawings of lighthouses.","input":"What did I draw in the old sketchbook?","query":"lighthouses"}
+{"id":"history-38","group":"history","content":"The lecture discussed volcanic glass.","input":"What glass did that lecture discuss?","query":"volcanic glass"}
+{"id":"history-39","group":"history","content":"Our garden plan placed lavender along the fence.","input":"Where did the garden plan place lavender?","query":"lavender"}
+{"id":"history-40","group":"history","content":"The puzzle night ended with a tangram challenge.","input":"What challenge ended puzzle night?","query":"tangram"}
+{"id":"history-41","group":"history","content":"The previous craft session made felt penguins.","input":"What did the previous craft session make?","query":"felt penguins"}
+{"id":"history-42","group":"history","content":"We used indigo dye for the fabric sample.","input":"What dye did we use for the sample?","query":"indigo dye"}
+{"id":"history-43","group":"history","content":"The walking tour stopped at an old windmill.","input":"Where did the walking tour stop?","query":"windmill"}
+{"id":"history-44","group":"history","content":"The astronomy notebook mentioned Saturn's rings.","input":"What did the astronomy notebook mention?","query":"Saturn"}
+{"id":"history-45","group":"history","content":"We packed rye crackers for the train ride.","input":"What crackers did we pack?","query":"rye crackers"}
+{"id":"history-46","group":"history","content":"The model bridge was built from bamboo skewers.","input":"What was the model bridge built from?","query":"bamboo skewers"}
+{"id":"history-47","group":"history","content":"Our animation test featured a bouncing acorn.","input":"What featured in the animation test?","query":"bouncing acorn"}
+{"id":"history-48","group":"history","content":"The birdwatching trip spotted a kingfisher.","input":"What bird did we spot on that trip?","query":"kingfisher"}
+{"id":"history-49","group":"history","content":"The previous reading group discussed maritime folklore.","input":"What did the reading group discuss?","query":"maritime folklore"}
+{"id":"history-50","group":"history","content":"We planned to use amber lighting for the miniature stage.","input":"What lighting did we plan for the miniature stage?","query":"amber lighting"}
+{"id":"irrelevant-01","group":"irrelevant","input":"我以前说过潜水艇的型号吗？","query":"潜水艇"}
+{"id":"irrelevant-02","group":"irrelevant","input":"还记得我买的陨石吗？","query":"陨石"}
+{"id":"irrelevant-03","group":"irrelevant","input":"我们上次聊到哪种恐龙？","query":"恐龙"}
+{"id":"irrelevant-04","group":"irrelevant","input":"以前说的雪貂叫什么？","query":"雪貂"}
+{"id":"irrelevant-05","group":"irrelevant","input":"我之前说过哪个拳击馆？","query":"拳击馆"}
+{"id":"irrelevant-06","group":"irrelevant","input":"上回提到的珊瑚礁在哪里？","query":"珊瑚礁"}
+{"id":"irrelevant-07","group":"irrelevant","input":"你记得我学的保龄球技巧吗？","query":"保龄球"}
+{"id":"irrelevant-08","group":"irrelevant","input":"之前的炼钢实验结果是什么？","query":"炼钢"}
+{"id":"irrelevant-09","group":"irrelevant","input":"我以前提过羊驼吗？","query":"羊驼"}
+{"id":"irrelevant-10","group":"irrelevant","input":"还记得我提到的沙漏吗？","query":"沙漏"}
+{"id":"irrelevant-11","group":"irrelevant","input":"What did I say about zeppelins?","query":"zeppelins"}
+{"id":"irrelevant-12","group":"irrelevant","input":"Do you remember my squash racket?","query":"squash racket"}
+{"id":"irrelevant-13","group":"irrelevant","input":"What was my previous comment on quasars?","query":"quasars"}
+{"id":"irrelevant-14","group":"irrelevant","input":"Which glockenspiel did I mention?","query":"glockenspiel"}
+{"id":"irrelevant-15","group":"irrelevant","input":"What did we say about capybaras?","query":"capybaras"}
+{"id":"irrelevant-16","group":"irrelevant","input":"Do you recall my trampoline routine?","query":"trampoline"}
+{"id":"irrelevant-17","group":"irrelevant","input":"What did I say about trebuchets?","query":"trebuchets"}
+{"id":"irrelevant-18","group":"irrelevant","input":"Which saxophone did I talk about?","query":"saxophone"}
+{"id":"irrelevant-19","group":"irrelevant","input":"What did we discuss about truffles?","query":"truffles"}
+{"id":"irrelevant-20","group":"irrelevant","input":"Do you remember my remarks on platypuses?","query":"platypuses"}
+{"id":"ordinary-01","group":"ordinary","input":"今天看见一朵黄色的花。"}
+{"id":"ordinary-02","group":"ordinary","input":"外面开始下雨了。"}
+{"id":"ordinary-03","group":"ordinary","input":"这一页先读到这里。"}
+{"id":"ordinary-04","group":"ordinary","input":"举一个链表的例子。"}
+{"id":"ordinary-05","group":"ordinary","input":"如果我说“记住我喜欢游泳”，会怎样？"}
+{"id":"ordinary-06","group":"ordinary","input":"把这句话翻成英文：记住我喜欢游泳。"}
+{"id":"ordinary-07","group":"ordinary","input":"这是一句台词：“记住我们的约定。”"}
+{"id":"ordinary-08","group":"ordinary","input":"我刚喝完一杯水。"}
+{"id":"ordinary-09","group":"ordinary","input":"先休息一下。"}
+{"id":"ordinary-10","group":"ordinary","input":"我今天听了一首新歌。"}
+{"id":"ordinary-11","group":"ordinary","input":"The train is arriving."}
+{"id":"ordinary-12","group":"ordinary","input":"Explain binary search."}
+{"id":"ordinary-13","group":"ordinary","input":"Translate: remember my favorite season."}
+{"id":"ordinary-14","group":"ordinary","input":"Suppose I asked you to remember a fictional hometown."}
+{"id":"ordinary-15","group":"ordinary","input":"The character says, remember that I am a pirate."}
+{"id":"ordinary-16","group":"ordinary","input":"I just opened the window."}
+{"id":"ordinary-17","group":"ordinary","input":"Let's pause here."}
+{"id":"ordinary-18","group":"ordinary","input":"This paragraph seems too long."}
+{"id":"ordinary-19","group":"ordinary","input":"How does evaporation work?"}
+{"id":"ordinary-20","group":"ordinary","input":"That was an interesting example."}

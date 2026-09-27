@@ -15,6 +15,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
+import { classifyMemoryContent } from "@violet/policy";
 
 const maximumDurationMs = 30 * 60_000;
 const retentionMs = 24 * 60 * 60_000;
@@ -320,6 +321,7 @@ export function sanitizeTrace(value: unknown, key = "", depth = 0): unknown {
 }
 
 export function redactTraceText(text: string): string {
+  if (classifyMemoryContent(text) === "secret") return "[REDACTED_SECRET]";
   return text
     .replaceAll(
       /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/gu,

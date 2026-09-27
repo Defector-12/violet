@@ -63,6 +63,14 @@
         "type": {
           "const": "complete"
         },
+        "memoryChanges": {
+          "type": "array",
+          "items": { "$ref": "./memory.schema.json#/$defs/change" }
+        },
+        "memoryDeletionPreviewId": {
+          "type": "string",
+          "format": "uuid"
+        },
         "usage": {
           "type": "object",
           "additionalProperties": false,

@@ -8,6 +8,7 @@ import type {
 } from "@violet/domain";
 import WebSocket from "ws";
 import { defaultConversationInstructions } from "../conversation/context-assembler.js";
+import { recallMemoryTool } from "../memory/memory-search.js";
 import { qwenAudioRealtimeContextProfile } from "../model/model-context.js";
 import { AsyncQueue, abortReason, timeoutSignal } from "./async-queue.js";
 import { recordTestTrace, testTraceEnabled } from "./test-trace.js";
@@ -130,7 +131,16 @@ export class QwenAudioRealtimeConversationPort implements RealtimeConversationPo
           max_history_turns: 20,
           modalities: ["audio", "text"],
           output_audio_format: "pcm",
-          ...(configuration.contextLookupAvailable ? { tools: [inspectContextTool] } : {}),
+          ...(configuration.contextLookupAvailable || configuration.memoryLookupAvailable
+            ? {
+                tools: [
+                  ...(configuration.contextLookupAvailable ? [inspectContextTool] : []),
+                  ...(configuration.memoryLookupAvailable
+                    ? [{ type: "function", function: recallMemoryTool }]
+                    : []),
+                ],
+              }
+            : {}),
           turn_detection:
             turnDetection === "manual"
               ? null
@@ -145,18 +155,26 @@ export class QwenAudioRealtimeConversationPort implements RealtimeConversationPo
       await transport.send(sessionUpdate);
       await waitForEvent(transport, "session.updated", setupSignal);
       for (const message of configuration.history ?? []) {
+        // Qwen can omit leading assistant output from the effective input context.
+        // Supply derived data as input; preserve the roles of actual past utterances.
+        const role = message.contextData ? "user" : message.role;
         await transport.send({
           item: {
             content: [
               {
                 text: message.content,
-                type: message.role === "user" ? "input_text" : "output_text",
+                type: role === "user" ? "input_text" : "output_text",
               },
             ],
-            role: message.role,
+            role,
             type: "message",
           },
           type: "conversation.item.create",
+        });
+        recordTestTrace("qwen.history.sent", {
+          contextData: message.contextData === true,
+          role,
+          textBytes: Buffer.byteLength(message.content, "utf8"),
         });
       }
       return new QwenAudioRealtimeConversation(
@@ -182,6 +200,7 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
   readonly #localResponseIds = new Map<string, string>();
   readonly #pendingContextCallIds = new Set<string>();
   readonly #pendingContextResponseIds = new Set<string>();
+  readonly #pendingCancellationProviderResponseIds = new Set<string>();
   readonly #pendingResponseTurns: PendingResponseTurn[] = [];
   readonly #providerResponseIds = new Map<string, string>();
   readonly #retiredPendingTurnIds = new Set<string>();
@@ -191,6 +210,7 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
   >();
   readonly #suppressedProviderResponseIds = new Set<string>();
   readonly #toolResponseIds = new Set<string>();
+  readonly #pendingMemoryReplies = new Map<string, { reply: string; attemptId?: number }>();
   readonly #transport: QwenRealtimeTransport;
   readonly #turnDetection: "manual" | "server_vad" | "smart_turn";
   readonly #attemptIdsByProviderResponse = new Map<string, number>();
@@ -199,7 +219,6 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
   #activeProviderResponseId: string | null = null;
   #closed = false;
   #currentTurnId: string | null = null;
-  #pendingCancellationProviderResponseId: string | null = null;
   #pendingAudioTurnId: string | null = null;
 
   constructor(
@@ -241,9 +260,10 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
     this.#turnIdsByInputItem.clear();
     this.#turnIdsByProviderResponse.clear();
     this.#toolResponseIds.clear();
+    this.#pendingMemoryReplies.clear();
     this.#activeProviderResponseId = null;
     this.#currentTurnId = null;
-    this.#pendingCancellationProviderResponseId = null;
+    this.#pendingCancellationProviderResponseIds.clear();
     this.#pendingAudioTurnId = null;
   }
 
@@ -293,10 +313,14 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
         await this.#commitAudio(input.turnId, input.attemptId);
         break;
       case "context-result":
+      case "recall-result":
         await this.#sendContextResult(input.callId, input.output);
         break;
+      case "memory-result":
+        await this.#replaceMemoryResponse(input.turnId, input.reply, input.attemptId);
+        break;
       case "text":
-        await this.#sendText(input.text, input.turnId, input.attemptId);
+        await this.#sendText(input.text, input.turnId, input.attemptId, input.confirmedReply);
         break;
       case "cancel":
         await this.#cancelResponse(input.responseId);
@@ -357,7 +381,12 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
     await this.#requestResponse(turnId, attemptId);
   }
 
-  async #sendText(text: string, turnId: string, attemptId?: number): Promise<void> {
+  async #sendText(
+    text: string,
+    turnId: string,
+    attemptId?: number,
+    confirmedReply?: string,
+  ): Promise<void> {
     if (this.#pendingAudioTurnId) {
       throw new QwenAdapterError(
         "AUDIO_TURN_IN_PROGRESS",
@@ -391,7 +420,7 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
     if (!submitted.responseRequested) {
       submitted.responseRequested = true;
       try {
-        await this.#requestResponse(turnId, attemptId);
+        await this.#requestResponse(turnId, attemptId, confirmedReply);
       } catch (error) {
         submitted.responseRequested = false;
         throw error;
@@ -409,16 +438,36 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
     this.#clearPendingContextRequests();
   }
 
+  async #replaceMemoryResponse(turnId: string, reply: string, attemptId?: number): Promise<void> {
+    this.#pendingMemoryReplies.set(turnId, {
+      reply,
+      ...(attemptId !== undefined ? { attemptId } : {}),
+    });
+    const providerId = this.#activeProviderResponseId;
+    if (providerId && this.#turnIdsByProviderResponse.get(providerId) === turnId) {
+      this.#suppressedProviderResponseIds.add(providerId);
+      await this.#requestProviderCancellation(providerId);
+    } else if (!this.#pendingResponseTurns.some((pending) => pending.turnId === turnId)) {
+      await this.#resumeMemoryResponse(turnId);
+    }
+  }
+
+  async #resumeMemoryResponse(turnId: string): Promise<void> {
+    const pending = this.#pendingMemoryReplies.get(turnId);
+    if (!pending) return;
+    this.#pendingMemoryReplies.delete(turnId);
+    await this.#requestResponse(turnId, pending.attemptId, pending.reply);
+  }
+
   async #requestProviderCancellation(providerResponseId: string): Promise<void> {
-    this.#pendingCancellationProviderResponseId = providerResponseId;
+    if (this.#pendingCancellationProviderResponseIds.has(providerResponseId)) return;
+    this.#pendingCancellationProviderResponseIds.add(providerResponseId);
     this.#cancelledProviderResponseIds.add(providerResponseId);
     try {
       await this.#transport.send({ type: "response.cancel" });
     } catch (error) {
       this.#cancelledProviderResponseIds.delete(providerResponseId);
-      if (this.#pendingCancellationProviderResponseId === providerResponseId) {
-        this.#pendingCancellationProviderResponseId = null;
-      }
+      this.#pendingCancellationProviderResponseIds.delete(providerResponseId);
       throw error;
     }
   }
@@ -456,18 +505,22 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
   ): Promise<RealtimeConversationOutput | undefined> {
     if (event.type === "error") {
       const output = providerErrorOutput(event);
-      const cancelledProviderResponseId = this.#pendingCancellationProviderResponseId;
+      const error = record(event["error"]);
+      const cancelledProviderResponseId = this.#pendingCancellationProviderResponseIds
+        .values()
+        .next().value;
       if (
         cancelledProviderResponseId &&
+        (error?.["param"] == null || error["param"] === "response.cancel") &&
         /conversation has no active response\.?/iu.test(output.message)
       ) {
-        this.#pendingCancellationProviderResponseId = null;
+        this.#pendingCancellationProviderResponseIds.delete(cancelledProviderResponseId);
         if (this.#activeProviderResponseId === cancelledProviderResponseId) {
           this.#activeProviderResponseId = null;
         }
-        this.#cancelledProviderResponseIds.add(cancelledProviderResponseId);
         const suppressed = this.#suppressedProviderResponseIds.has(cancelledProviderResponseId);
         const localResponseId = this.#localResponseIds.get(cancelledProviderResponseId);
+        if (localResponseId) this.#cancelledProviderResponseIds.add(cancelledProviderResponseId);
         const attemptId = this.#attemptIdsByProviderResponse.get(cancelledProviderResponseId);
         const turnId = this.#turnIdsByProviderResponse.get(cancelledProviderResponseId);
         if (turnId) {
@@ -487,9 +540,9 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
         if (localResponseId) {
           this.#forgetResponse(cancelledProviderResponseId, localResponseId);
         }
+        if (turnId) await this.#resumeMemoryResponse(turnId);
         return cancelled;
       }
-      const error = record(event["error"]);
       const failed =
         string(error?.["param"]) === "response.create"
           ? this.#pendingResponseTurns.shift()
@@ -510,6 +563,10 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
         : output;
     }
     if (event.type === "input_audio_buffer.speech_started") {
+      const itemId = string(event["item_id"]);
+      // A late/duplicate start for an already observed item must not interrupt
+      // the answer or memory decision already associated with that same utterance.
+      if (itemId && this.#turnIdsByInputItem.has(itemId)) return undefined;
       if (this.#activeProviderResponseId) {
         await this.#requestProviderCancellation(this.#activeProviderResponseId);
       }
@@ -520,8 +577,8 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
         this.#retiredPendingTurnIds.add(this.#currentTurnId);
       }
       this.#clearPendingContextRequests();
+      this.#pendingMemoryReplies.clear();
       this.#currentTurnId = this.#generateId();
-      const itemId = string(event["item_id"]);
       if (itemId) {
         this.#turnIdsByInputItem.set(itemId, this.#currentTurnId);
       }
@@ -559,10 +616,6 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
     if (event.type === "conversation.item.input_audio_transcription.completed") {
       const transcript = string(event["transcript"]);
       const turnId = this.#inputTurnId(event);
-      const itemId = string(event["item_id"]);
-      if (itemId) {
-        this.#turnIdsByInputItem.delete(itemId);
-      }
       return transcript
         ? {
             final: true,
@@ -574,10 +627,6 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
     }
     if (event.type === "conversation.item.input_audio_transcription.failed") {
       const turnId = this.#inputTurnId(event);
-      const itemId = string(event["item_id"]);
-      if (itemId) {
-        this.#turnIdsByInputItem.delete(itemId);
-      }
       return {
         ...providerErrorOutput(event),
         turnId,
@@ -587,7 +636,11 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
       const providerResponseId = string(event["response_id"]);
       const callId = string(event["call_id"]);
       const name = string(event["name"]);
-      if (!providerResponseId || !callId || name !== inspectContextToolName) {
+      if (
+        !providerResponseId ||
+        !callId ||
+        (name !== inspectContextToolName && name !== recallMemoryTool.name)
+      ) {
         throw new QwenAdapterError(
           "INVALID_CONTEXT_TOOL_CALL",
           "Qwen returned an invalid context tool call",
@@ -605,6 +658,16 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
         this.#contextAttemptIds.set(callId, context.attemptId);
       }
       this.#contextTurnIds.set(callId, context.turnId);
+      if (name === recallMemoryTool.name) {
+        return {
+          ...(context.attemptId !== undefined ? { attemptId: context.attemptId } : {}),
+          callId,
+          arguments: string(event["arguments"]) ?? "",
+          responseId: context.localResponseId,
+          turnId: context.turnId,
+          type: "recall-request",
+        };
+      }
       return {
         ...(context.attemptId !== undefined ? { attemptId: context.attemptId } : {}),
         callId,
@@ -625,12 +688,16 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
         const suppressed = this.#suppressedProviderResponseIds.delete(providerResponseId);
         const localResponseId = this.#localResponseIds.get(providerResponseId);
         const attemptId = this.#attemptIdsByProviderResponse.get(providerResponseId);
-        if (this.#pendingCancellationProviderResponseId === providerResponseId) {
-          this.#pendingCancellationProviderResponseId = null;
+        const turnId = this.#turnIdsByProviderResponse.get(providerResponseId);
+        // A natural completion may arrive before the provider rejects our in-flight cancel.
+        // Only a cancelled status acknowledges it; retain completed cancellations for that reply.
+        if (string(record(event["response"])?.["status"]) === "cancelled") {
+          this.#pendingCancellationProviderResponseIds.delete(providerResponseId);
         }
         if (localResponseId) {
           this.#forgetResponse(providerResponseId, localResponseId);
         }
+        if (turnId) await this.#resumeMemoryResponse(turnId);
         return !suppressed &&
           localResponseId &&
           string(record(event["response"])?.["status"]) === "cancelled"
@@ -645,6 +712,12 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
     }
     const context = this.#responseContext(providerResponseId, event.type === "response.created");
     if (event.type === "response.created") {
+      if (this.#pendingMemoryReplies.has(context.turnId)) {
+        this.#activeProviderResponseId = providerResponseId;
+        this.#suppressedProviderResponseIds.add(providerResponseId);
+        await this.#requestProviderCancellation(providerResponseId);
+        return undefined;
+      }
       if (this.#retiredPendingTurnIds.delete(context.turnId)) {
         this.#suppressedProviderResponseIds.add(providerResponseId);
         await this.#requestProviderCancellation(providerResponseId);
@@ -693,9 +766,8 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
 
     const response = record(event["response"]);
     const status = string(response?.["status"]);
-    if (this.#pendingCancellationProviderResponseId === providerResponseId) {
-      this.#pendingCancellationProviderResponseId = null;
-    }
+    if (status === "cancelled")
+      this.#pendingCancellationProviderResponseIds.delete(providerResponseId);
     if (this.#toolResponseIds.delete(providerResponseId)) {
       if (status && status !== "completed") {
         this.#forgetContextProviderResponse(providerResponseId);
@@ -756,7 +828,14 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
   #inputTurnId(event: Readonly<Record<string, unknown>>): string {
     const itemId = string(event["item_id"]);
     const mapped = itemId ? this.#turnIdsByInputItem.get(itemId) : undefined;
-    const turnId = mapped ?? this.#currentTurnId ?? this.#newTurnId();
+    if (mapped) return mapped;
+    // Automatic transcription can arrive without VAD events. A new provider item
+    // is a new utterance, never an update to whichever turn happens to be active.
+    // Retain item identities until close so late/duplicate events stay correlated.
+    const turnId =
+      itemId && this.#turnDetection !== "manual"
+        ? this.#newTurnId()
+        : (this.#currentTurnId ?? this.#newTurnId());
     if (itemId && !mapped) {
       this.#turnIdsByInputItem.set(itemId, turnId);
     }
@@ -835,14 +914,28 @@ class QwenAudioRealtimeConversation implements RealtimeConversation {
     }
   }
 
-  async #requestResponse(turnId: string, attemptId?: number): Promise<void> {
+  async #requestResponse(
+    turnId: string,
+    attemptId?: number,
+    confirmedReply?: string,
+  ): Promise<void> {
     const pending = {
       ...(attemptId !== undefined ? { attemptId } : {}),
       turnId,
     };
     this.#pendingResponseTurns.push(pending);
     try {
-      await this.#transport.send({ type: "response.create" });
+      await this.#transport.send({
+        type: "response.create",
+        ...(confirmedReply
+          ? {
+              response: {
+                instructions: `Core has finished handling this memory request. Say exactly this acknowledgement in Chinese, without adding facts or claims: ${JSON.stringify(confirmedReply)}`,
+                tool_choice: "none",
+              },
+            }
+          : {}),
+      });
     } catch (error) {
       const index = this.#pendingResponseTurns.lastIndexOf(pending);
       if (index >= 0) {

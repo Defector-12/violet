@@ -26,6 +26,7 @@ export function handleRealtimeWebSocket(
   let outputPump: Promise<void> | null = null;
   let sendQueue = Promise.resolve();
   let sessionId: string | undefined;
+  let memoryChanged = false;
   let traceClosed = false;
   let resolveClosed = () => {};
   let firstFailure: unknown;
@@ -62,6 +63,9 @@ export function handleRealtimeWebSocket(
     if (socket.readyState === socket.OPEN) socket.close(1011, "TEST_TRACE_INCOMPLETE");
   });
   const sendEvent = (event: RealtimeServerEvent) => {
+    if (event.type === "session.end_requested" && event.reason === "memory_changed") {
+      memoryChanged = true;
+    }
     recordTestTrace("core.send", event);
     sendQueue = sendQueue.then(
       () =>
@@ -93,7 +97,10 @@ export function handleRealtimeWebSocket(
         }
         if (session.closed && socket.readyState === socket.OPEN) {
           closeTrace();
-          socket.close(1011, "REALTIME_SESSION_FAILED");
+          socket.close(
+            memoryChanged ? 1000 : 1011,
+            memoryChanged ? "MEMORY_CHANGED" : "REALTIME_SESSION_FAILED",
+          );
         }
       }),
     ).catch((error) => {
@@ -129,6 +136,8 @@ export function handleRealtimeWebSocket(
             throw error;
           }
 
+          // The final reply has been sent. Discard microphone frames already in flight.
+          if (memoryChanged) return;
           sessionId = value.sessionId;
           await withTestTraceIds(
             { sessionId, ...("turnId" in value ? { turnId: value.turnId } : {}) },

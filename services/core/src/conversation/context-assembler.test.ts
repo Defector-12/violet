@@ -6,6 +6,7 @@ import type {
 } from "@violet/domain";
 import { describe, expect, it } from "vitest";
 
+import type { MemoryService } from "../memory/memory-service.js";
 import {
   boundUntrustedContext,
   ContextAssembler,
@@ -88,12 +89,64 @@ describe("ContextAssembler", () => {
       "Question two",
       "Answer two",
     ]);
-    expect(context.history[0]?.role).toBe("assistant");
+    expect(context.history[0]).toMatchObject({ role: "assistant", contextData: true });
+    expect(context.history.slice(1).every((message) => message.contextData === undefined)).toBe(
+      true,
+    );
     expect(context.systemInstructions).not.toContain("Bounded checkpoint.");
     await expect(checkpoints.get(epoch.id)).resolves.toMatchObject({
       content: "Bounded checkpoint.",
       throughSequence: 2,
     });
+  });
+
+  it("marks derived memory data without relabelling utterances or changing text model roles", async () => {
+    const ledger = new InMemoryConversationLedger();
+    const quotedData = "[UNTRUSTED CURRENT MEMORY]\nA quoted marker, not derived data";
+    await appendTurn(ledger, 1, "Earlier question", quotedData);
+    const memory = {
+      async context() {
+        return {
+          summary: "用户喜欢紫色的书签。",
+          revision: 1,
+          excludedRequests: new Set<string>(),
+        };
+      },
+      repository: {
+        async state() {
+          return { revision: 1 };
+        },
+      },
+    } as unknown as MemoryService;
+    const context = await new ContextAssembler({
+      checkpoints: new InMemoryContextCheckpointRepository(),
+      ledger,
+      model: new CheckpointModel(),
+      memoryService: memory,
+      now: () => new Date("2026-09-23T12:00:00Z"),
+    }).assemble({
+      contextEpochId: epoch.id,
+      currentMessage: { role: "user", content: "按我的喜好推荐一种书签颜色。" },
+    });
+
+    expect(context.history).toEqual([
+      {
+        role: "assistant",
+        contextData: true,
+        content: "[UNTRUSTED CURRENT MEMORY]\n用户喜欢紫色的书签。",
+      },
+      { role: "user", content: "Earlier question" },
+      { role: "assistant", content: quotedData },
+    ]);
+    expect(context.messages.filter((message) => message.role !== "system")).toEqual([
+      { role: "assistant", content: context.history[0]?.content },
+      { role: "user", content: "Earlier question" },
+      { role: "assistant", content: quotedData },
+      { role: "user", content: "按我的喜好推荐一种书签颜色。" },
+    ]);
+    expect(context.systemInstructions).not.toContain("紫色");
+    expect(context.systemInstructions).toContain("Current time (UTC): 2026-09-23T12:00:00.000Z.");
+    expect(await ledger.list()).toHaveLength(2);
   });
 
   it("expands a checkpoint boundary so interleaved logical turns are never split", async () => {

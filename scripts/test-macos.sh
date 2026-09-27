@@ -12,4 +12,4 @@ TMPDIR="${TMP}" swift test \
   --cache-path "${TMP}/cache" \
   --config-path "${TMP}/config" \
   --security-path "${TMP}/security" \
-  --disable-index-store -j 4 "$@"
+  --disable-index-store --no-parallel -j 4 "$@"

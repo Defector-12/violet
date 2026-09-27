@@ -25,12 +25,15 @@ export type {
   ListConversationTurns,
 } from "./conversation-ledger.js";
 export { assertContextReference, groupConversationTurns } from "./conversation-ledger.js";
+export * from "./memory.js";
 export type {
   ModelContextProfile,
   ModelGateway,
   ModelMessage,
   ModelRequest,
   ModelStreamEvent,
+  ModelTool,
+  ModelToolCall,
 } from "./model-gateway.js";
 export type {
   RealtimeAudioFormat,

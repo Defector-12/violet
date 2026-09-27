@@ -5,6 +5,8 @@ import VioletMacCore
 struct PresenceView: View {
   @ObservedObject var model: PresenceModel
   @ObservedObject var wakeWord: WakeWordCoordinator
+  var memory: MemoryManagementModel?
+  var openMemory: () -> Void = {}
   @State private var draft = ""
 
   var body: some View {
@@ -38,6 +40,10 @@ struct PresenceView: View {
       }
 
       Spacer()
+
+      if let memory {
+        MemoryEntryButton(model: memory, action: openMemory)
+      }
 
       Button {
         Task {
@@ -346,6 +352,23 @@ struct PresenceView: View {
     let message = draft
     draft = ""
     model.send(message)
+  }
+}
+
+private struct MemoryEntryButton: View {
+  @ObservedObject var model: MemoryManagementModel
+  let action: () -> Void
+
+  var body: some View {
+    Button(action: action) {
+      Image(systemName: "brain.head.profile")
+        .overlay(alignment: .topTrailing) {
+          if model.hasChanges { Circle().fill(Color.accentColor).frame(width: 6, height: 6) }
+        }
+    }
+    .buttonStyle(.plain)
+    .accessibilityLabel(model.hasChanges ? "记忆，有新变化" : "记忆")
+    .help("查看、纠正和删除记忆")
   }
 }
 

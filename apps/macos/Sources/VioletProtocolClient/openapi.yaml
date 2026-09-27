@@ -6,6 +6,175 @@ info:
 servers:
   - url: http://127.0.0.1:4310
 paths:
+  /v1/memories:
+    get:
+      operationId: listMemories
+      summary: List current memories with sensitive content masked.
+      security:
+        - deviceToken: []
+      responses:
+        '200':
+          description: Current memory snapshot.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/list'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /v1/memories/{memoryId}:
+    get:
+      operationId: getMemory
+      summary: Read memory versions and source turns.
+      security:
+        - deviceToken: []
+      parameters:
+        - $ref: '#/components/parameters/MemoryId'
+        - in: query
+          name: reveal
+          schema:
+            type: boolean
+            default: false
+      responses:
+        '200':
+          description: Versions and source turns.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/detail'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/MemoryNotFound'
+  /v1/memories/{memoryId}/corrections:
+    post:
+      operationId: correctMemory
+      summary: Append an explicit correction and invalidate the prior version.
+      security:
+        - deviceToken: []
+      parameters:
+        - $ref: '#/components/parameters/MemoryId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/correction'
+      responses:
+        '200':
+          description: Committed memory changes.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/mutation'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/MemoryConflict'
+  /v1/memory-deletions/previews:
+    post:
+      operationId: previewMemoryDeletion
+      summary: Preview all affected source turns and memories without deleting them.
+      security:
+        - deviceToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/previewRequest'
+      responses:
+        '200':
+          description: Version-bound impact preview.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/preview'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/MemoryConflict'
+  /v1/memory-deletions/{deletionId}/preview:
+    get:
+      operationId: getMemoryDeletionPreview
+      summary: Read a deletion preview proposed during conversation.
+      security:
+        - deviceToken: []
+      parameters:
+        - $ref: '#/components/parameters/DeletionId'
+      responses:
+        '200':
+          description: Version-bound impact preview.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/preview'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/MemoryNotFound'
+  /v1/memory-deletions/{deletionId}/confirm:
+    post:
+      operationId: confirmMemoryDeletion
+      summary: Confirm a preview after the Mac durably advances its minimum restore epoch.
+      security:
+        - deviceToken: []
+      parameters:
+        - $ref: '#/components/parameters/DeletionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/confirmation'
+      responses:
+        '200':
+          description: Online deletion committed; backup cleanup status.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/deletionStatus'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/MemoryConflict'
+  /v1/memory-deletions/{deletionId}:
+    get:
+      operationId: getMemoryDeletionStatus
+      summary: Read backup cleanup status without exposing deleted content.
+      security:
+        - deviceToken: []
+      parameters:
+        - $ref: '#/components/parameters/DeletionId'
+      responses:
+        '200':
+          description: Current deletion and cleanup status.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/deletionStatus'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/MemoryNotFound'
+  /v1/memory-deletions/{deletionId}/retry:
+    post:
+      operationId: retryMemoryBackupCleanup
+      summary: Retry failed backup cleanup without undoing online deletion.
+      security:
+        - deviceToken: []
+      parameters:
+        - $ref: '#/components/parameters/DeletionId'
+      responses:
+        '200':
+          description: Current cleanup status.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/deletionStatus'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/MemoryNotFound'
   /v1/health/live:
     get:
       operationId: getLiveHealth
@@ -173,6 +342,13 @@ paths:
                         format: uuid
                       type:
                         const: complete
+                      memoryChanges:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/change'
+                      memoryDeletionPreviewId:
+                        type: string
+                        format: uuid
                       usage:
                         type: object
                         additionalProperties: false
@@ -700,6 +876,13 @@ paths:
                     $ref: '#/components/schemas/uuid'
                   type:
                     const: response.completed
+                  memoryChanges:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/change'
+                  memoryDeletionPreviewId:
+                    type: string
+                    format: uuid
                   usage:
                     $ref: '#/components/schemas/usage'
               - type: object
@@ -734,7 +917,9 @@ paths:
                   eventId:
                     $ref: '#/components/schemas/uuid'
                   reason:
-                    const: user_intent
+                    enum:
+                      - user_intent
+                      - memory_changed
                   sequence:
                     $ref: '#/components/schemas/sequence'
                   sessionId:
@@ -853,7 +1038,42 @@ paths:
               schema:
                 $ref: '#/components/schemas/error.schema'
 components:
+  parameters:
+    MemoryId:
+      in: path
+      name: memoryId
+      required: true
+      schema:
+        type: string
+        format: uuid
+    DeletionId:
+      in: path
+      name: deletionId
+      required: true
+      schema:
+        type: string
+        format: uuid
   schemas:
+    Memory:
+      $ref: '#/components/schemas/memory'
+    MemoryChange:
+      $ref: '#/components/schemas/change'
+    MemoryList:
+      $ref: '#/components/schemas/list'
+    MemoryDetail:
+      $ref: '#/components/schemas/detail'
+    MemoryCorrection:
+      $ref: '#/components/schemas/correction'
+    MemoryMutation:
+      $ref: '#/components/schemas/mutation'
+    MemoryDeletionPreviewRequest:
+      $ref: '#/components/schemas/previewRequest'
+    MemoryDeletionPreview:
+      $ref: '#/components/schemas/preview'
+    MemoryDeletionConfirmation:
+      $ref: '#/components/schemas/confirmation'
+    MemoryDeletionStatus:
+      $ref: '#/components/schemas/deletionStatus'
     ChatStreamEvent:
       $ref: '#/components/schemas/chat-stream-event.schema'
     ContextEnvelope:
@@ -864,6 +1084,387 @@ components:
       $ref: '#/components/schemas/realtime-client-event.schema'
     RealtimeServerEvent:
       $ref: '#/components/schemas/realtime-server-event.schema'
+    source:
+      type: object
+      additionalProperties: false
+      required:
+        - eventId
+        - startByte
+        - endByte
+      properties:
+        eventId:
+          type: string
+          format: uuid
+        startByte:
+          type: integer
+          minimum: 0
+        endByte:
+          type: integer
+          minimum: 1
+    memory:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - version
+        - state
+        - origin
+        - content
+        - kind
+        - sensitivity
+        - createdAt
+        - updatedAt
+        - sources
+      properties:
+        id:
+          type: string
+          format: uuid
+        version:
+          type: integer
+          minimum: 1
+        state:
+          type: string
+          enum:
+            - current
+            - superseded
+        origin:
+          const: explicit
+        content:
+          type: string
+        kind:
+          type: string
+          enum:
+            - preference
+            - fact
+            - goal
+            - relationship
+        sensitivity:
+          type: string
+          enum:
+            - normal
+            - controlled
+        redacted:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        sources:
+          type: array
+          items:
+            $ref: '#/components/schemas/source'
+    list:
+      type: object
+      additionalProperties: false
+      required:
+        - instanceId
+        - revision
+        - deletionRevision
+        - restoreEpoch
+        - memories
+      properties:
+        instanceId:
+          type: string
+          format: uuid
+        revision:
+          type: integer
+          minimum: 0
+        deletionRevision:
+          type: integer
+          minimum: 0
+        restoreEpoch:
+          type: integer
+          minimum: 0
+        memories:
+          type: array
+          items:
+            $ref: '#/components/schemas/memory'
+    error.schema:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      $id: https://violet.local/schemas/v1/error.schema.json
+      title: ApiError
+      type: object
+      additionalProperties: false
+      required:
+        - code
+        - message
+        - requestId
+        - retryable
+      properties:
+        code:
+          type: string
+          pattern: ^[A-Z][A-Z0-9_]+$
+        message:
+          type: string
+          minLength: 1
+        requestId:
+          type: string
+          format: uuid
+        retryable:
+          type: boolean
+    event:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - requestId
+        - role
+        - content
+        - occurredAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        requestId:
+          type: string
+          format: uuid
+        role:
+          type: string
+          enum:
+            - user
+            - assistant
+        content:
+          type: string
+        redacted:
+          type: boolean
+        occurredAt:
+          type: string
+          format: date-time
+    detail:
+      type: object
+      additionalProperties: false
+      required:
+        - instanceId
+        - revision
+        - versions
+        - events
+      properties:
+        instanceId:
+          type: string
+          format: uuid
+        revision:
+          type: integer
+          minimum: 0
+        versions:
+          type: array
+          items:
+            $ref: '#/components/schemas/memory'
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/event'
+    correction:
+      type: object
+      additionalProperties: false
+      required:
+        - requestId
+        - expectedVersion
+        - content
+      properties:
+        requestId:
+          type: string
+          format: uuid
+        expectedVersion:
+          type: integer
+          minimum: 1
+        content:
+          type: string
+          minLength: 1
+          maxLength: 8000
+    change:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - version
+        - kind
+      properties:
+        id:
+          type: string
+          format: uuid
+        version:
+          type: integer
+          minimum: 1
+        kind:
+          type: string
+          enum:
+            - created
+            - corrected
+            - source_added
+    mutation:
+      type: object
+      additionalProperties: false
+      required:
+        - memoryChanges
+      properties:
+        memoryChanges:
+          type: array
+          items:
+            $ref: '#/components/schemas/change'
+    target:
+      oneOf:
+        - type: object
+          additionalProperties: false
+          required:
+            - kind
+            - id
+            - version
+          properties:
+            kind:
+              const: memory
+            id:
+              type: string
+              format: uuid
+            version:
+              type: integer
+              minimum: 1
+        - type: object
+          additionalProperties: false
+          required:
+            - kind
+            - eventId
+          properties:
+            kind:
+              const: source
+            eventId:
+              type: string
+              format: uuid
+        - type: object
+          additionalProperties: false
+          required:
+            - kind
+          properties:
+            kind:
+              const: all
+    previewRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - target
+      properties:
+        id:
+          type: string
+          format: uuid
+        target:
+          $ref: '#/components/schemas/target'
+    preview:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - instanceId
+        - revision
+        - deletionRevision
+        - restoreEpoch
+        - nextRestoreEpoch
+        - eventSequence
+        - target
+        - requestIds
+        - eventIds
+        - deletedMemoryIds
+        - retainedMemoryIds
+        - createdAt
+        - events
+        - memories
+      properties:
+        id:
+          type: string
+          format: uuid
+        instanceId:
+          type: string
+          format: uuid
+        revision:
+          type: integer
+          minimum: 0
+        deletionRevision:
+          type: integer
+          minimum: 0
+        restoreEpoch:
+          type: integer
+          minimum: 0
+        nextRestoreEpoch:
+          type: integer
+          minimum: 1
+        eventSequence:
+          type: integer
+          minimum: 1
+        target:
+          $ref: '#/components/schemas/target'
+        requestIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+        eventIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+        deletedMemoryIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+        retainedMemoryIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+        createdAt:
+          type: string
+          format: date-time
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/event'
+        memories:
+          type: array
+          items:
+            $ref: '#/components/schemas/memory'
+    confirmation:
+      type: object
+      additionalProperties: false
+      required:
+        - instanceId
+        - minimumRestoreEpoch
+      properties:
+        instanceId:
+          type: string
+          format: uuid
+        minimumRestoreEpoch:
+          type: integer
+          minimum: 1
+    deletionStatus:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - instanceId
+        - restoreEpoch
+        - status
+      properties:
+        id:
+          type: string
+          format: uuid
+        instanceId:
+          type: string
+          format: uuid
+        restoreEpoch:
+          type: integer
+          minimum: 1
+        status:
+          type: string
+          enum:
+            - pending
+            - running
+            - complete
+            - failed
+        failureCode:
+          type: string
+          maxLength: 80
     health.schema:
       $schema: https://json-schema.org/draft/2020-12/schema
       $id: https://violet.local/schemas/v1/health.schema.json
@@ -914,29 +1515,6 @@ components:
         version:
           type: string
           minLength: 1
-    error.schema:
-      $schema: https://json-schema.org/draft/2020-12/schema
-      $id: https://violet.local/schemas/v1/error.schema.json
-      title: ApiError
-      type: object
-      additionalProperties: false
-      required:
-        - code
-        - message
-        - requestId
-        - retryable
-      properties:
-        code:
-          type: string
-          pattern: ^[A-Z][A-Z0-9_]+$
-        message:
-          type: string
-          minLength: 1
-        requestId:
-          type: string
-          format: uuid
-        retryable:
-          type: boolean
     probability:
       type: number
       minimum: 0
@@ -1331,6 +1909,13 @@ components:
               format: uuid
             type:
               const: complete
+            memoryChanges:
+              type: array
+              items:
+                $ref: '#/components/schemas/change'
+            memoryDeletionPreviewId:
+              type: string
+              format: uuid
             usage:
               type: object
               additionalProperties: false
@@ -1885,6 +2470,13 @@ components:
               $ref: '#/components/schemas/uuid'
             type:
               const: response.completed
+            memoryChanges:
+              type: array
+              items:
+                $ref: '#/components/schemas/change'
+            memoryDeletionPreviewId:
+              type: string
+              format: uuid
             usage:
               $ref: '#/components/schemas/usage'
         - type: object
@@ -1919,7 +2511,9 @@ components:
             eventId:
               $ref: '#/components/schemas/uuid'
             reason:
-              const: user_intent
+              enum:
+                - user_intent
+                - memory_changed
             sequence:
               $ref: '#/components/schemas/sequence'
             sessionId:
@@ -2035,6 +2629,18 @@ components:
       scheme: bearer
       bearerFormat: opaque-device-token
   responses:
+    MemoryConflict:
+      description: Memory or deletion impact changed; refresh before retrying.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/error.schema'
+    MemoryNotFound:
+      description: The memory or deletion no longer exists.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/error.schema'
     Unauthorized:
       description: Device token is missing or invalid.
       content:

@@ -74,6 +74,76 @@ struct PresenceModelTests {
     #expect(model.messages[1].text == "Hello from Violet")
   }
 
+  @Test(arguments: [false, true], [1, 2, 3])
+  @MainActor
+  func deletionDropsLateTextCompletionWithoutAffectingNewChat(failOld: Bool, trial: Int) async throws {
+    let (oldStream, oldSource) = AsyncThrowingStream<String, Error>.makeStream()
+    let (newStream, newSource) = AsyncThrowingStream<String, Error>.makeStream()
+    defer { oldSource.finish(); newSource.finish() }
+    let model = PresenceModel(
+      client: DeletionChatClient(streams: ["Old question": oldStream, "New question": newStream]),
+      defaults: isolatedPresenceDefaults()
+    )
+    model.setNaturalPointingEnabled(true)
+    await model.refresh()
+    model.send("Old question")
+    oldSource.yield("Deleted answer")
+    try await waitUntil { model.messages.last?.text == "Deleted answer" }
+    // Queue the old terminal event, then invalidate before its task can resume.
+    if failOld { oldSource.finish(throwing: TestError.streamFailure) }
+    else { oldSource.finish() }
+    model.invalidateDeletedConversation()
+    #expect(model.messages.isEmpty)
+    #expect(!model.isResponding)
+    #expect(model.isNaturalPointingEnabled)
+    model.send("New question")
+    newSource.yield("New answer")
+    try await waitUntil { model.messages.last?.text == "New answer" }
+    #expect(model.messages.map(\.text) == ["New question", "New answer"])
+    #expect(model.isResponding)
+    #expect(model.connectionState == .ready(version: "test"))
+    newSource.finish()
+    try await waitUntil { !model.isResponding }
+  }
+
+  @Test(arguments: [1, 2, 3])
+  @MainActor
+  func deletionCancelsAudioAndDropsLateSourceEvents(trial: Int) async throws {
+    let turnId = UUID()
+    let responseId = UUID()
+    let audio = FakeAudioIO()
+    let recorder = FakeAcceptanceRecorder()
+    let realtime = FakeRealtimeSessionClient(
+      capabilities: audioCapabilities,
+      events: [
+        .transcript(text: "Deleted source", final: true, turnId: turnId),
+        .responseStarted(responseId: responseId, turnId: turnId),
+        .responseText(responseId: responseId, text: "Deleted answer", turnId: turnId),
+        .responseAudio(responseId: responseId, audio: Data([0, 0]), turnId: turnId),
+        .transcript(text: "Late source", final: true, turnId: turnId),
+        .responseText(responseId: responseId, text: "Late answer", turnId: turnId),
+      ],
+      eventInterval: .milliseconds(30)
+    )
+    let model = PresenceModel(
+      client: FakeCoreClient(statusValue: .init(state: .ready, version: "test")),
+      audioIO: audio, realtimeClient: realtime, acceptanceRecorder: recorder
+    )
+    await model.refresh()
+    model.startAudioSession()
+    try await waitUntil { audio.isPlaying }
+    #expect(!model.messages.isEmpty)
+    model.invalidateDeletedConversation()
+    #expect(model.messages.isEmpty)
+    #expect(!audio.isCapturing)
+    #expect(!audio.isPlaying)
+    try await Task.sleep(for: .milliseconds(120))
+    #expect(model.messages.isEmpty)
+    #expect(model.audioState == .idle)
+    #expect(model.connectionState == .ready(version: "test"))
+    #expect(recorder.marks.contains { $0.type == .sessionEnded && $0.reason == .memoryChanged })
+  }
+
   @Test
   @MainActor
   func silentAdaptersHaveNoDeviceSideEffects() async {
@@ -303,6 +373,78 @@ struct PresenceModelTests {
         $0.type == .sessionEnded && $0.reason == .modelIntent
       }
     )
+  }
+
+  @Test
+  @MainActor
+  func memoryCorrectionClosesCaptureButDrainsFinalReply() async throws {
+    let turnId = UUID()
+    let responseId = UUID()
+    let audio = FakeAudioIO()
+    let recorder = FakeAcceptanceRecorder()
+    let realtime = FakeRealtimeSessionClient(
+      capabilities: audioCapabilities,
+      events: [
+        .responseStarted(responseId: responseId, turnId: turnId),
+        .responseText(responseId: responseId, text: "已改为橙色。", turnId: turnId),
+        .responseAudio(responseId: responseId, audio: Data(count: 19_200), turnId: turnId),
+        .responseCompleted(responseId: responseId, turnId: turnId),
+        .endRequested(turnId: turnId, reason: .memoryChanged),
+      ],
+      endsStream: true
+    )
+    let model = PresenceModel(
+      client: FakeCoreClient(statusValue: .init(state: .ready, version: "test")),
+      audioIO: audio,
+      realtimeClient: realtime,
+      acceptanceRecorder: recorder
+    )
+    await model.refresh()
+    model.startAudioSession()
+    try await waitUntil { audio.isPlaying && !audio.isCapturing }
+    let stopped = audio.stopPlaybackCount
+    try await Task.sleep(for: .milliseconds(50))
+    #expect(model.isAudioSessionActive)
+    #expect(audio.isPlaying)
+    #expect(audio.stopPlaybackCount == stopped)
+    #expect(!recorder.marks.contains { $0.type == .sessionEnded })
+    #expect(recorder.marks.filter { $0.type == .captureStopped }.map(\.reason) == [.memoryChanged])
+    audio.finishPlayback()
+    try await waitUntil { model.audioState == .idle }
+    #expect(recorder.marks.filter { $0.type == .sessionEnded }.map(\.reason) == [.memoryChanged])
+  }
+
+  @Test
+  @MainActor
+  func unexpectedDisconnectStillStopsPlaybackAndReportsFailure() async throws {
+    let turnId = UUID()
+    let responseId = UUID()
+    let audio = FakeAudioIO()
+    let recorder = FakeAcceptanceRecorder()
+    let realtime = FakeRealtimeSessionClient(
+      capabilities: audioCapabilities,
+      events: [
+        .responseStarted(responseId: responseId, turnId: turnId),
+        .responseAudio(responseId: responseId, audio: Data([0, 0]), turnId: turnId),
+        .responseCompleted(responseId: responseId, turnId: turnId),
+      ],
+      streamFailureCount: 1
+    )
+    let model = PresenceModel(
+      client: FakeCoreClient(statusValue: .init(state: .ready, version: "test")),
+      audioIO: audio,
+      realtimeClient: realtime,
+      acceptanceRecorder: recorder
+    )
+    await model.refresh()
+    model.startAudioSession()
+    try await waitUntil { !model.isAudioSessionActive }
+    guard case .failed = model.audioState else {
+      Issue.record("Unexpected disconnect must remain a failure")
+      return
+    }
+    #expect(!audio.isPlaying)
+    #expect(recorder.marks.contains { $0.type == .sessionEnded && $0.reason == .failure })
   }
 
   @Test
@@ -1294,39 +1436,24 @@ struct PresenceModelTests {
     model.cancelAudioSession()
   }
 
-  @Test
+  @Test(arguments: [1, 2, 3])
   @MainActor
-  func lateCancelledCaptureCannotDetachTheCurrentCaptureTask() async throws {
+  func lateCancelledCaptureCannotDetachTheCurrentCaptureTask(trial: Int) async throws {
     let defaults = isolatedPresenceDefaults()
     let firstTurnId = UUID()
     let secondTurnId = UUID()
     let thirdTurnId = UUID()
+    var pending: [Int: CheckedContinuation<Void, Never>] = [:]
+    defer { for continuation in pending.values { continuation.resume() } }
     let capture = FakeContextCapture(
-      captureDelays: [.milliseconds(55), .milliseconds(100)],
+      captureGate: { index in
+        await withCheckedContinuation { pending[index] = $0 }
+      },
       result: .text(appBundleId: "com.apple.Safari", text: "Delayed")
     )
     let realtime = FakeRealtimeSessionClient(
       capabilities: audioCapabilities,
-      events: [
-        .speechStopped(turnId: firstTurnId),
-        .contextCaptureRequested(
-          requestId: UUID(),
-          turnId: firstTurnId,
-          expiresAt: Date().addingTimeInterval(10)
-        ),
-        .speechStarted(turnId: secondTurnId),
-        .speechStopped(turnId: secondTurnId),
-        .contextCaptureRequested(
-          requestId: UUID(),
-          turnId: secondTurnId,
-          expiresAt: Date().addingTimeInterval(10)
-        ),
-        .transcript(text: "wait", final: false, turnId: secondTurnId),
-        .transcript(text: "wait", final: false, turnId: secondTurnId),
-        .transcript(text: "wait", final: false, turnId: secondTurnId),
-        .speechStarted(turnId: thirdTurnId),
-      ],
-      eventInterval: .milliseconds(10)
+      events: []
     )
     let model = PresenceModel(
       client: FakeCoreClient(statusValue: .init(state: .ready, version: "test")),
@@ -1340,12 +1467,31 @@ struct PresenceModelTests {
     model.setNaturalPointingEnabled(true)
 
     model.startAudioSession()
+    defer { model.cancelAudioSession() }
+    try await waitUntilAsync { await realtime.isStreaming }
+    await realtime.emit(.speechStopped(turnId: firstTurnId))
+    await realtime.emit(.contextCaptureRequested(
+      requestId: UUID(), turnId: firstTurnId, expiresAt: Date().addingTimeInterval(10)
+    ))
+    try await waitUntil { pending[0] != nil }
+    await realtime.emit(.speechStarted(turnId: secondTurnId))
+    await realtime.emit(.speechStopped(turnId: secondTurnId))
+    await realtime.emit(.contextCaptureRequested(
+      requestId: UUID(), turnId: secondTurnId, expiresAt: Date().addingTimeInterval(10)
+    ))
+    try await waitUntil { pending[1] != nil }
+    // Finish the cancelled old task while the replacement capture is still suspended.
+    pending.removeValue(forKey: 0)?.resume()
+    try await waitUntilAsync { await realtime.captureFailureReasons == [.cancelled] }
+    await realtime.emit(.speechStarted(turnId: thirdTurnId))
+    await realtime.emit(.transcript(text: "Third turn admitted", final: true, turnId: thirdTurnId))
+    try await waitUntil { model.messages.contains { $0.text == "Third turn admitted" } }
+    pending.removeValue(forKey: 1)?.resume()
     try await waitUntilAsync { await realtime.captureFailureReasons.count == 2 }
 
     #expect(capture.captureCount == 2)
     #expect(await realtime.captureSuccessCount == 0)
     #expect(await realtime.captureFailureReasons == [.cancelled, .cancelled])
-    model.cancelAudioSession()
   }
 
   @Test
@@ -1662,6 +1808,15 @@ private struct FakeCoreClient: VioletCoreClientPort {
   }
 }
 
+private struct DeletionChatClient: VioletCoreClientPort {
+  let streams: [String: AsyncThrowingStream<String, Error>]
+
+  func status() async throws -> VioletCoreStatus { .init(state: .ready, version: "test") }
+  func streamChat(message: String, requestId: UUID) -> AsyncThrowingStream<String, Error> {
+    streams[message] ?? AsyncThrowingStream { $0.finish() }
+  }
+}
+
 private struct FailingCoreClient: VioletCoreClientPort {
   func status() async throws -> VioletCoreStatus {
     throw URLError(.cannotConnectToHost)
@@ -1681,6 +1836,7 @@ private struct FailingCoreClient: VioletCoreClientPort {
 private final class FakeContextCapture: ContextCapturePort {
   private let canPrepareNaturalPointingCapture: Bool
   private let captureDelays: [Duration]
+  private let captureGate: ((Int) async -> Void)?
   private let result: CapturedContext
   private(set) var captureCount = 0
   private(set) var capturedKinds: [ContextCaptureKind] = []
@@ -1689,10 +1845,12 @@ private final class FakeContextCapture: ContextCapturePort {
   init(
     canPrepareNaturalPointingCapture: Bool = true,
     captureDelays: [Duration] = [],
+    captureGate: ((Int) async -> Void)? = nil,
     result: CapturedContext
   ) {
     self.canPrepareNaturalPointingCapture = canPrepareNaturalPointingCapture
     self.captureDelays = captureDelays
+    self.captureGate = captureGate
     self.result = result
   }
 
@@ -1700,6 +1858,7 @@ private final class FakeContextCapture: ContextCapturePort {
     let index = captureCount
     captureCount += 1
     capturedKinds.append(kind)
+    await captureGate?(index)
     if captureDelays.indices.contains(index) {
       try? await Task.sleep(for: captureDelays[index])
     }
@@ -1835,6 +1994,7 @@ private actor FakeRealtimeSessionClient: RealtimeSessionClientPort {
   let capabilities: RealtimeCapabilities
   let eventInterval: Duration
   let events: [RealtimeServerEvent]
+  let endsStream: Bool
   private(set) var cancelResponseCount = 0
   private(set) var captureFailureReasons: [RealtimeContextCaptureFailure] = []
   private(set) var captureSuccessCount = 0
@@ -1843,16 +2003,25 @@ private actor FakeRealtimeSessionClient: RealtimeSessionClientPort {
   private var onDemandContextValues: [Bool] = []
   private var frames: [VioletAudioFrame] = []
   private var streamFailureCount: Int
+  private var outputContinuation: AsyncThrowingStream<RealtimeServerEvent, Error>.Continuation?
+
+  var isStreaming: Bool { outputContinuation != nil }
+
+  func emit(_ event: RealtimeServerEvent) {
+    outputContinuation?.yield(event)
+  }
 
   init(
     capabilities: RealtimeCapabilities,
     events: [RealtimeServerEvent] = [],
     eventInterval: Duration = .zero,
+    endsStream: Bool = false,
     streamFailureCount: Int = 0
   ) {
     self.capabilities = capabilities
     self.eventInterval = eventInterval
     self.events = events
+    self.endsStream = endsStream
     self.streamFailureCount = streamFailureCount
   }
 
@@ -1908,6 +2077,7 @@ private actor FakeRealtimeSessionClient: RealtimeSessionClientPort {
       streamFailureCount -= 1
     }
     return AsyncThrowingStream { continuation in
+      outputContinuation = continuation
       let frameTask = Task {
         for await frame in frames {
           self.record(frame)
@@ -1921,6 +2091,8 @@ private actor FakeRealtimeSessionClient: RealtimeSessionClientPort {
         }
         if shouldFail {
           continuation.finish(throwing: TestError.streamFailure)
+        } else if self.endsStream {
+          continuation.finish()
         }
       }
       continuation.onTermination = { _ in

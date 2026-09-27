@@ -8,7 +8,12 @@ export class DeterministicModelGateway implements ModelGateway {
     signal?.throwIfAborted();
     const lastUserMessage = request.messages.findLast((message) => message.role === "user");
     const content = lastUserMessage?.content ?? "";
-    const response = boundOutput(`Violet test response: ${content}`, request.maximumOutputTokens);
+    const response = boundOutput(
+      request.jsonOutput
+        ? JSON.stringify({ intent: "none", history: false })
+        : `Violet test response: ${content}`,
+      request.maximumOutputTokens,
+    );
 
     if (response) {
       yield { content: response, type: "delta" };

@@ -6,6 +6,175 @@ info:
 servers:
   - url: http://127.0.0.1:4310
 paths:
+  /v1/memories:
+    get:
+      operationId: listMemories
+      summary: List current memories with sensitive content masked.
+      security:
+        - deviceToken: []
+      responses:
+        "200":
+          description: Current memory snapshot.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MemoryList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /v1/memories/{memoryId}:
+    get:
+      operationId: getMemory
+      summary: Read memory versions and source turns.
+      security:
+        - deviceToken: []
+      parameters:
+        - $ref: "#/components/parameters/MemoryId"
+        - in: query
+          name: reveal
+          schema:
+            type: boolean
+            default: false
+      responses:
+        "200":
+          description: Versions and source turns.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MemoryDetail"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/MemoryNotFound"
+  /v1/memories/{memoryId}/corrections:
+    post:
+      operationId: correctMemory
+      summary: Append an explicit correction and invalidate the prior version.
+      security:
+        - deviceToken: []
+      parameters:
+        - $ref: "#/components/parameters/MemoryId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MemoryCorrection"
+      responses:
+        "200":
+          description: Committed memory changes.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MemoryMutation"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/MemoryConflict"
+  /v1/memory-deletions/previews:
+    post:
+      operationId: previewMemoryDeletion
+      summary: Preview all affected source turns and memories without deleting them.
+      security:
+        - deviceToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MemoryDeletionPreviewRequest"
+      responses:
+        "200":
+          description: Version-bound impact preview.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MemoryDeletionPreview"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/MemoryConflict"
+  /v1/memory-deletions/{deletionId}/preview:
+    get:
+      operationId: getMemoryDeletionPreview
+      summary: Read a deletion preview proposed during conversation.
+      security:
+        - deviceToken: []
+      parameters:
+        - $ref: "#/components/parameters/DeletionId"
+      responses:
+        "200":
+          description: Version-bound impact preview.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MemoryDeletionPreview"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/MemoryNotFound"
+  /v1/memory-deletions/{deletionId}/confirm:
+    post:
+      operationId: confirmMemoryDeletion
+      summary: Confirm a preview after the Mac durably advances its minimum restore epoch.
+      security:
+        - deviceToken: []
+      parameters:
+        - $ref: "#/components/parameters/DeletionId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MemoryDeletionConfirmation"
+      responses:
+        "200":
+          description: Online deletion committed; backup cleanup status.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MemoryDeletionStatus"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/MemoryConflict"
+  /v1/memory-deletions/{deletionId}:
+    get:
+      operationId: getMemoryDeletionStatus
+      summary: Read backup cleanup status without exposing deleted content.
+      security:
+        - deviceToken: []
+      parameters:
+        - $ref: "#/components/parameters/DeletionId"
+      responses:
+        "200":
+          description: Current deletion and cleanup status.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MemoryDeletionStatus"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/MemoryNotFound"
+  /v1/memory-deletions/{deletionId}/retry:
+    post:
+      operationId: retryMemoryBackupCleanup
+      summary: Retry failed backup cleanup without undoing online deletion.
+      security:
+        - deviceToken: []
+      parameters:
+        - $ref: "#/components/parameters/DeletionId"
+      responses:
+        "200":
+          description: Current cleanup status.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MemoryDeletionStatus"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/MemoryNotFound"
   /v1/health/live:
     get:
       operationId: getLiveHealth
@@ -146,7 +315,42 @@ paths:
               schema:
                 $ref: ../schemas/v1/error.schema.json
 components:
+  parameters:
+    MemoryId:
+      in: path
+      name: memoryId
+      required: true
+      schema:
+        type: string
+        format: uuid
+    DeletionId:
+      in: path
+      name: deletionId
+      required: true
+      schema:
+        type: string
+        format: uuid
   schemas:
+    Memory:
+      $ref: ../schemas/v1/memory.schema.json#/$defs/memory
+    MemoryChange:
+      $ref: ../schemas/v1/memory.schema.json#/$defs/change
+    MemoryList:
+      $ref: ../schemas/v1/memory.schema.json#/$defs/list
+    MemoryDetail:
+      $ref: ../schemas/v1/memory.schema.json#/$defs/detail
+    MemoryCorrection:
+      $ref: ../schemas/v1/memory.schema.json#/$defs/correction
+    MemoryMutation:
+      $ref: ../schemas/v1/memory.schema.json#/$defs/mutation
+    MemoryDeletionPreviewRequest:
+      $ref: ../schemas/v1/memory.schema.json#/$defs/previewRequest
+    MemoryDeletionPreview:
+      $ref: ../schemas/v1/memory.schema.json#/$defs/preview
+    MemoryDeletionConfirmation:
+      $ref: ../schemas/v1/memory.schema.json#/$defs/confirmation
+    MemoryDeletionStatus:
+      $ref: ../schemas/v1/memory.schema.json#/$defs/deletionStatus
     ChatStreamEvent:
       $ref: ../schemas/v1/chat-stream-event.schema.json
     ContextEnvelope:
@@ -163,6 +367,18 @@ components:
       scheme: bearer
       bearerFormat: opaque-device-token
   responses:
+    MemoryConflict:
+      description: Memory or deletion impact changed; refresh before retrying.
+      content:
+        application/json:
+          schema:
+            $ref: ../schemas/v1/error.schema.json
+    MemoryNotFound:
+      description: The memory or deletion no longer exists.
+      content:
+        application/json:
+          schema:
+            $ref: ../schemas/v1/error.schema.json
     Unauthorized:
       description: Device token is missing or invalid.
       content:

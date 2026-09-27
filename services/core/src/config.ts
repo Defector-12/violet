@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 
 export interface CoreRuntimeConfig {
   readonly contextCheckpointEnabled: boolean;
+  readonly memoryInjectionEnabled: boolean;
   readonly contextStorage:
     | {
         readonly provider: "memory";
@@ -96,6 +97,7 @@ export function loadCoreRuntimeConfig(env: NodeJS.ProcessEnv): CoreRuntimeConfig
 
   return {
     contextCheckpointEnabled: parseBoolean(env["VIOLET_CONTEXT_CHECKPOINT_ENABLED"] ?? "true"),
+    memoryInjectionEnabled: parseBoolean(env["VIOLET_MEMORY_INJECTION_ENABLED"] ?? "true"),
     contextStorage,
     contentKey,
     contentKeyVersion: env["VIOLET_CONTENT_KEY_VERSION"] ?? "content-v1",
