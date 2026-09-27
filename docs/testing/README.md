@@ -18,16 +18,23 @@
 - `manifest.json`、原始文件、stdout/stderr、退出码与所有失败尝试均可检查；
   manifest 记录提交与完整工作树指纹（含未跟踪源码），命令结束后另存最终指纹。
   报告生成成功不等于产品验收通过。
+- `acceptance.ndjson` 只保存延迟、停止原因等性能元数据，不含对话正文；旧
+  `start-macos-acceptance.sh` 的元数据日志不能代替上述完整 test-run。
 
-自动化测试仍由 `pnpm test` / `pnpm macos:test` 保存独立 stdout、stderr 和退出码到
+自动化测试由以下入口保存独立 stdout、stderr 和退出码到
 `.local-acceptance/test-runs/`。Mac 入口显式使用 `--no-parallel`，避免独立 UI 测试
 争用 MainActor 并触发夹具的短等待超时；并发行为由用例内显式安排交错顺序和重复试验，
-不能用套件串行通过代替竞态验证。其他验证用：
+不能用套件串行通过代替竞态验证。
 
 ```sh
+fnm exec --using=.node-version -- pnpm test
+fnm exec --using=.node-version -- pnpm macos:test
+fnm exec --using=.node-version -- pnpm test:record pnpm check:ci
+fnm exec --using=.node-version -- pnpm test:record pnpm macos:app
 fnm exec --using=.node-version -- pnpm test:record <命令> <参数...>
 ```
 
-每次运行 `scripts/test-run.mjs` 都会先清理超过 24 小时保留期的原始证据，也可用
-`fnm exec --using=.node-version -- node scripts/test-run.mjs purge` 显式触发。未过期
-证据和历史持续日志不会被顺带删除。
+每次从 CLI 运行 `scripts/test-run.mjs` 都会先清理超过 24 小时保留期的原始证据，
+也可用 `fnm exec --using=.node-version -- node scripts/test-run.mjs purge` 显式触发。
+直接导入 `createRun` / `runCommand` 的专项脚本不会自动触发 CLI 清理，须遵守相同的
+授权与留存边界。未过期证据和历史持续日志不会被顺带删除。

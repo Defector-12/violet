@@ -34,6 +34,6 @@ DeepSeek 输出：
 已删除：`ContextTargetEvidence`、`localText`、`pointerTextVerified`、普通指针局部图、
 第二张图、二次模型调用、颜色/位置/OCR 答案校验和 AX 正文捷径。
 
-测试证据、部署版本和回滚信息只在
-[Release 1C 验收](./release-1c-acceptance.md)维护；记录规则见
+视觉历史证据见 [Release 1C 验收](./release-1c-acceptance.md)，当前部署版本和回滚
+约束见 [Release 1D 验收](./release-1d-acceptance.md)；记录规则见
 [Test Evidence](./testing/README.md)。

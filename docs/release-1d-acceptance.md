@@ -14,6 +14,7 @@
 > 普通终端已完成本机恢复保护初始化、生产备份的官方隔离恢复和签名 App 启动；
 > 两次实际执行均通过，Agent 沙箱失败及终端反引号报错的区别见 2.27。
 > Phase 3 未开始。
+> 2.28 的文档审计与启动脚本修正单独通过 Git 交付，不改变 2.26—2.27 的线上版本。
 > 本文记录 Release 1D 的实际版本、失败、证据和剩余门禁。规格见
 > [最终规格](./release-1d-spec.md)，实施顺序见 [任务拆分](./release-1d-tasks.md)。
 
@@ -1535,6 +1536,39 @@ Shell 先执行成功的脚本，再把 `Test evidence: ...` 等标准输出当�
 **Phase 2 提交与部署收尾完成。** 2.26 的本机待办已全部补齐，本轮未新增模型调用，
 无需重复真人故事。Phase 3 与 Release 1D 三阶段总门禁仍独立保留。
 
+### 2.28 全仓内容一致性审计（2026-09-27）
+
+按用户要求盘点 **257 个受版本控制文件、16 份 Markdown**，核对文档与源码、配置、
+脚本、协议入口及当前交付证据。初次结构检查
+`a68c7383-1ba5-4458-9518-88090be8d86e` 的 69 个本地链接/锚点、JSON 和命令入口通过。
+本轮是内容一致性审计与局部修正，不代表对全部代码重新进行正确性或安全审查。
+
+- 校准路线、规格、历史和验收交接：Phase 2 已部署，自动提取/设置仍属 Phase 3；
+  已存在的评估入口在 Phase 3 扩展，不重复新建。历史失败、指标与延期门禁保留。
+- 修正 Mac 自然指向、Keychain 秘密范围、官方恢复写出明文时机、双远端内容一致性
+  和旧版本回滚说明；验证命令使用仓库 Node 与 test-run。产品宪法只移出过时进度，
+  产品原则不变。持久项目记忆移除陈旧状态、测试数字与预算余额，改查本验收文档。
+- `.env.example` 补齐记忆注入开关。启动脚本经 sudo 清理环境后丢失记忆注入和
+  checkpoint 开关，可能把显式 `false` 变回 Compose 默认 `true`；现已在两条路径
+  显式传递。新增 8 项隔离测试，仅使用 Docker/sudo stub，不启停真实服务。
+- 修前 run `97e406da-12df-4c9f-b521-db2b1afbc481` 为 3 通过、5 失败，其中 3 项
+  复现 sudo 丢失显式配置，另 2 项检查默认值显式传递。修后
+  `a6923acb-61dc-45d5-b498-6a47b21af14d` 全部 8 项通过；Shell 语法
+  `a71abff0-afee-408c-a7b2-ee89f5b52d67` 通过。Biome 首次仅格式失败
+  `5d449e85-8cad-4f9a-8e5e-76d52ca9cf71` 保留，修正后
+  `83cbb253-034c-4512-bd93-c174c703ed19` 通过。
+- 文档修正后的结构复核 `1d142465-7980-461f-8db2-fafb794ad9e7` 通过：257 个
+  tracked 文件及新增回归文件、16 份 Markdown、85 个本地链接/锚点、JSON 和脚本
+  入口均无缺失。差异检查 `66e16317-2de8-49f8-b89b-c36e8f062794` 通过。
+  外部 URL 可用性不在本轮结构检查范围内。
+
+审计完成时上述改动保留本地；用户随后明确授权提交并推送远程仓库，交付分支为
+`docs/phase2-content-audit`，同步到 `bits` 与 `origin`。本次范围为 Git 提交与推送，
+未部署或调用付费模型。此前 550 项 TS/脚本与 116 项 Mac 是 2.25—2.26 的交付证据，
+本轮未重复全量回归或真人故事。
+下一步按任务拆分 1D-09—10 实现普通完成轮次的自动记忆、持久提取任务与开关，并扩展
+100 条自动提取正负例。验收和生产启用授权完成前保持关闭；模型测试另定当次预算。
+
 ## 3. P0：事实与来源
 
 第 3—11 节同时包含 Phase 2 与 Phase 3 的验收合同。自动提取、自动记忆开关和
@@ -1678,10 +1712,10 @@ Shell 先执行成功的脚本，再把 `Test evidence: ...` 等标准输出当�
 ```sh
 fnm exec --using=.node-version -- pnpm test:record pnpm check:ci
 fnm exec --using=.node-version -- pnpm test:record pnpm eval:phase1-checkpoints
-fnm exec --using=.node-version -- pnpm test:record pnpm eval:memory
+fnm exec --using=.node-version -- pnpm eval:memory
 fnm exec --using=.node-version -- pnpm macos:test
 fnm exec --using=.node-version -- pnpm test:record pnpm macos:app
-fnm exec --using=.node-version -- pnpm test:record docker compose -f infra/compose/compose.yaml config
+fnm exec --using=.node-version -- pnpm test:record docker compose -f infra/compose/compose.yaml config --quiet
 ```
 
 另有独立记录证明：
@@ -1690,7 +1724,8 @@ fnm exec --using=.node-version -- pnpm test:record docker compose -f infra/compo
   （`0001 → 0002 → 0002b → 0002c → 0003`；2.10、2.13、2.14）。
 - [ ] Phase 3 空库及既有数据升级到 `0004` 通过（尚未开始）。
 - [x] PostgreSQL 本地并发、回滚、重启服务后读取和隔离恢复/删除竞态通过（2.10—2.14）。
-- [x] OpenAPI 再生成前后内容 hash 一致（2.14、2.25）；未提交的生成变更保留。
+- [x] OpenAPI 再生成前后内容 hash 一致（2.14、2.25）；生成物已提交，提交后相对 HEAD
+  无差异检查通过（2.26）。
 - [x] backup 旧/新格式、TOS 清理和官方恢复脚本通过（2.13、2.16、2.25）。
 - [x] 真实模型矩阵保留每条 3 次结果；Qwen 的全部故事尝试和失败另行列明（2.19—2.21）。
 
@@ -1735,6 +1770,8 @@ fnm exec --using=.node-version -- pnpm test:record docker compose -f infra/compo
   `66ead81-release-1d-phase1-final-gate`。
 - [x] Phase 1 复盘后的请求清理修复与精简已合入双主线并重新部署，运行版本为
   `414fd54-release-1d-phase1-runtime-fix`。
+- [x] Phase 2 已合入双主线并部署，`0003`、备份调度、Mac 激活与生产备份官方隔离
+  恢复完成，运行版本为 `b3fa62c-release-1d-phase2`（2.26—2.27）。
 - [ ] 用户明确批准后，生产自动记忆才开启。
 
 关闭自动提取、记忆注入或 checkpoint 可以回滚能力；任何回滚都不得降低

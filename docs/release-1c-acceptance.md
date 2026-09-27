@@ -3,6 +3,8 @@
 状态：Release 1C/1C.1 用户产品验收已完成；Release 1C.2 源码硬化、Git 交付和
 最终部署已完成。
 本文件是 Release 1C 系列状态与剩余工作的事实源；不能把历史测试数字当成当前版本的新测试。
+当前运行版本与回滚约束已进入 [Release 1D 验收](./release-1d-acceptance.md)；
+下列 1C 构建、部署与设备结果均为对应日期的历史证据。
 
 ## 交付范围
 
@@ -91,7 +93,7 @@
 - 复审后 Node 全量 152/152、生成一致、类型检查与 Biome 通过：
   `b438086f-ce08-4dcc-9460-cb16d786130c`；Swift 全量 92/92：
   `d5d3fe64-e7d0-4621-a9a3-a44e0bbaba32`。
-- 上述复审硬化已随 Release 1C.2 部署，历史运行基线仍保留用于回滚。
+- 上述复审硬化已随 Release 1C.2 部署；当时的回滚基线作为历史证据保留。
 - Release 1C.2 本地候选进一步修复：区域框选绕过保密应用、常见凭证格式漏检、
   OCR 失败时图片 fail-open、手动图片 Context 无法进入后续问答，以及 Smart-turn
   迟到响应错绑新轮次。
@@ -148,9 +150,10 @@
 - 临时图按现有独立 DEK 加密，TOS 会话清理删除全部版本/delete marker，
   生命周期 24 小时兜底。敏感原文、凭据与原始音频不进入记录或 Git。
 
-## 部署与回滚
+## 1C 历史部署与回滚
 
-最终运行版本：
+1C.2 交付时的运行版本如下。它们不能用于已升级 `0003` 的当前环境；现行迁移、
+能力回滚和官方恢复约束见 [Release 1D 验收](./release-1d-acceptance.md) 2.25—2.27。
 
 - Core：`97aee4a-release-1c2`，镜像
   `sha256:46070d90ce613da245391958a85c5af0065d2d76d55a8a803b6dfe84114f4975`，
@@ -166,8 +169,8 @@
   `dfa51803-0567-4a95-979d-db114702ebe2`、
   `9ec14771-0fdd-4a6f-a469-2334ddf78f28` 和
   `5b78e9d6-8101-4095-bb3f-3e6c6f6cc076`。
-- Core 回滚标签 `violet-core:pre-release-1c2-20260915` 指向原
-  `3b9ffc1-release-1c` 镜像；Mac 回滚包
+- 当时的 Core 回滚标签 `violet-core:pre-release-1c2-20260915` 指向原
+  `3b9ffc1-release-1c` 镜像；当时的 Mac 回滚包
   `.local-acceptance/rollback/Violet-freshness-v6-before-clean-vision.app`。
 - 关闭 Look 可停用按需视觉；显式 deterministic Vision 或 memory Context 配置可用于
   受控降级。供应商失败不自动切换，不使用旧 Context 猜答案。

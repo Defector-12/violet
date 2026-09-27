@@ -6,20 +6,25 @@
 
 ## 1. 执行方式
 
-验收记录默认关闭，只记录单调时间、事件类型、停止原因及随机生成的关联 ID。禁止记录
-音频、转写、回复、设备令牌、供应商密钥、模型推理或用户文件内容。
+验收记录默认关闭。当前复验先创建完整 test-run，记录器就绪后开始，范围与留存见
+[Test Evidence](./testing/README.md)。其中性能日志 `acceptance.ndjson` 只记录
+单调时间、事件类型、停止原因及随机关联 ID，不含音频、转写或回复。完整测试记录中的
+请求/回复按限时授权保存；所有记录均禁止凭证、模型内部推理和原始音频。
 
 ```bash
 klist -s || kinit
-pnpm macos:app
-./scripts/start-macos-acceptance.sh
-pnpm acceptance:report -- .local-acceptance/<file>.ndjson
+fnm exec --using=.node-version -- pnpm test:record pnpm macos:app
+bash scripts/start-test-run.sh realtime-acceptance
+fnm exec --using=.node-version -- pnpm test:report .local-acceptance/test-runs/<runId>
+fnm exec --using=.node-version -- pnpm acceptance:report -- .local-acceptance/test-runs/<runId>/acceptance.ndjson
 ```
 
 - 真实 Qwen 批量调用前确认累计费用不超过本轮已批准上限。
 - App 必须先退出，再由 LaunchServices 验收脚本启动。
-- 日志默认写入被 Git 忽略的 `.local-acceptance/`。
-- 报告退出码：全部通过为 0，样本不足或门禁失败为 1，日志/schema 非法为 2。
+- 使用启动脚本打印的实际 run 路径，先确认 Mac/Core recorder ready；结束后收集 Core
+  证据并生成报告。日志写入被 Git 忽略的 `.local-acceptance/test-runs/`。
+- `acceptance:report` 退出码：全部通过为 0，样本不足或门禁失败为 1，日志/schema 非法为 2。
+- 旧 `start-macos-acceptance.sh` 是性能元数据入口，单独使用不能满足完整验收留证要求。
 
 ## 2. 验收门槛
 

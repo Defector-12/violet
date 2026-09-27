@@ -2,7 +2,7 @@
 
 > 状态：方案已批准；Phase 1 复盘修复已合入双主线并重新部署；用户于 2026-09-20
 > 批准开始 Phase 2 实现，A—D 本地实现及 E 自动化/评估工具已完成；
-> 真实模型质量、Keychain/TOS 恢复及 Mac 故事覆盖已通过，最终真人缺口见 2.24。
+> 真实模型质量、Keychain/TOS 恢复及 Mac 故事覆盖已通过，最终真人缺口已在 2.24 补齐。
 > 交付收尾完成，边界缺陷已修复，550 项 TS/脚本、116 项 Mac 全量回归及打包验签通过；
 > 最终复核与交付边界见 2.25。Phase 2 已合入双主线，Core、0003 与新版备份调度
 > 已部署；普通终端已完成本机恢复保护初始化、官方隔离恢复和 Mac 启动（2.27）。
@@ -118,6 +118,8 @@
 - 关闭 checkpoint 后既不创建也不读取此前持久化的 checkpoint。
 
 ## 3. Phase 2：明确记忆和治理闭环
+
+本阶段已交付。以下保留实现范围与验证合同；最终部署和 Mac 收尾见验收清单 2.26—2.27。
 
 **独立价值**
 
@@ -464,11 +466,14 @@ checkpoint 评估器措辞规则来证明记忆正确。`eval:memory` 已实现�
 
 ### 1D-10 评估集和默认开启
 
-新增：
+扩展 Phase 2 已交付的语料、测试与命令：
 
 - `services/core/src/memory/fixtures/release-1d-memory.jsonl`
 - `services/core/src/memory/release-1d-memory.eval.test.ts`
 - 根 `package.json` 的 `eval:memory` 命令。
+
+保留既有明确写入、检索与治理样本，新增至少 100 条自动提取正负例及任务/开关验证，
+不另建第二套评估入口。
 
 评估集至少覆盖：
 
@@ -496,12 +501,12 @@ checkpoint 评估器措辞规则来证明记忆正确。`eval:memory` 已实现�
 通过仓库固定的 Node 版本运行：
 
 ```sh
-fnm exec --using=.node-version -- pnpm check:ci
-fnm exec --using=.node-version -- pnpm eval:phase1-checkpoints
+fnm exec --using=.node-version -- pnpm test:record pnpm check:ci
+fnm exec --using=.node-version -- pnpm test:record pnpm eval:phase1-checkpoints
 fnm exec --using=.node-version -- pnpm eval:memory
 fnm exec --using=.node-version -- pnpm macos:test
-fnm exec --using=.node-version -- pnpm macos:app
-docker compose -f infra/compose/compose.yaml config
+fnm exec --using=.node-version -- pnpm test:record pnpm macos:app
+fnm exec --using=.node-version -- pnpm test:record docker compose -f infra/compose/compose.yaml config --quiet
 ```
 
 每条命令由 `pnpm test:record` 或现有包装脚本生成独立 test-run。数据库迁移、真实模型、
