@@ -50,6 +50,11 @@ public struct RealtimeCapabilities: Codable, Equatable, Sendable {
   }
 }
 
+public enum RealtimeSessionEndReason: String, Decodable, Sendable {
+  case userIntent = "user_intent"
+  case memoryChanged = "memory_changed"
+}
+
 public enum RealtimeServerEvent: Equatable, Sendable {
   case ready(RealtimeCapabilities)
   case speechStarted(turnId: UUID)
@@ -58,9 +63,9 @@ public enum RealtimeServerEvent: Equatable, Sendable {
   case responseStarted(responseId: UUID, turnId: UUID)
   case responseText(responseId: UUID, text: String, turnId: UUID)
   case responseAudio(responseId: UUID, audio: Data, turnId: UUID)
-  case responseCompleted(responseId: UUID, turnId: UUID)
+  case responseCompleted(responseId: UUID, turnId: UUID, memory: MemoryCompletion = .init())
   case responseCancelled(responseId: UUID)
-  case endRequested(turnId: UUID)
+  case endRequested(turnId: UUID, reason: RealtimeSessionEndReason = .userIntent)
   case contextCaptureRequested(requestId: UUID, turnId: UUID, expiresAt: Date)
   case error(code: String, message: String, retryable: Bool)
 }
@@ -122,28 +127,37 @@ public protocol RealtimeSessionClientPort: Sendable {
   func streamText(_ text: String) async -> AsyncThrowingStream<String, Error>
 }
 
+private struct SocketSendFailure: Error, LocalizedError {
+  let underlying: any Error
+  var errorDescription: String? { underlying.localizedDescription }
+}
+
 public actor URLSessionRealtimeClient: RealtimeSessionClientPort {
   private let coreURL: URL
   private let deviceToken: String
   private let session: URLSession
   private let testTrace: TestTraceRecorder?
+  private let onMemoryCompletion: (@MainActor @Sendable (MemoryCompletion) -> Void)?
   private var sessionId = UUID()
   private var clientSequence = 1
   private var serverSequence = 1
   private var activeResponseId: UUID?
   private var turnActive = false
+  private var serverEnded = false
   private var socket: URLSessionWebSocketTask?
 
   public init(
     coreURL: URL,
     deviceToken: String,
     session: URLSession = .shared,
-    testTrace: TestTraceRecorder? = nil
+    testTrace: TestTraceRecorder? = nil,
+    onMemoryCompletion: (@MainActor @Sendable (MemoryCompletion) -> Void)? = nil
   ) {
     self.coreURL = coreURL
     self.deviceToken = deviceToken
     self.session = session
     self.testTrace = testTrace
+    self.onMemoryCompletion = onMemoryCompletion
   }
 
   public func connect(
@@ -158,6 +172,7 @@ public actor URLSessionRealtimeClient: RealtimeSessionClientPort {
     serverSequence = 1
     activeResponseId = nil
     turnActive = false
+    serverEnded = false
 
     if let testTrace {
       try testTrace.record("connection.preflight", fields: ["sessionId": sessionId.uuidString])
@@ -212,6 +227,7 @@ public actor URLSessionRealtimeClient: RealtimeSessionClientPort {
       let task = Task {
         do {
           try await performAudioTurn(frames, continuation: continuation)
+          continuation.finish()
         } catch is CancellationError {
           await cancelActiveResponse()
           continuation.finish()
@@ -248,22 +264,24 @@ public actor URLSessionRealtimeClient: RealtimeSessionClientPort {
     guard let socket else {
       return
     }
-    do {
-      try await send(
-        CloseEvent(
-          eventId: UUID(),
-          sequence: nextClientSequence(),
-          sessionId: sessionId,
-          type: "session.close"
+    if !serverEnded {
+      do {
+        try await send(
+          CloseEvent(
+            eventId: UUID(),
+            sequence: nextClientSequence(),
+            sessionId: sessionId,
+            type: "session.close"
+          )
         )
-      )
-      if !(await waitForServerClose(socket)) {
-        try? testTrace?.record("connection.close-timeout")
+        if !(await waitForServerClose(socket)) {
+          try? testTrace?.record("connection.close-timeout")
+        }
+      } catch {
+        try? testTrace?.record("connection.close-send-failed", fields: [
+          "error": error.localizedDescription
+        ])
       }
-    } catch {
-      try? testTrace?.record("connection.close-send-failed", fields: [
-        "error": error.localizedDescription
-      ])
     }
     socket.cancel(with: .normalClosure, reason: nil)
     self.socket = nil
@@ -331,14 +349,22 @@ public actor URLSessionRealtimeClient: RealtimeSessionClientPort {
     }
 
     let streamId = UUID()
-    try await withThrowingTaskGroup(of: Void.self) { group in
+    try await withThrowingTaskGroup(of: Bool.self) { group in
       group.addTask {
-        try await self.sendAudioFrames(frames, streamId: streamId)
+        do {
+          try await self.sendAudioFrames(frames, streamId: streamId)
+          return true
+        } catch is SocketSendFailure {
+          // Read the server's queued terminal event (or receive failure) before deciding
+          // whether a transport close is expected. A failed send can race that event.
+          return false
+        }
       }
       group.addTask {
         try await self.receiveAudioEvents(continuation)
+        return true
       }
-      try await group.next()
+      while try await group.next() == false {}
       group.cancelAll()
     }
   }
@@ -380,8 +406,15 @@ public actor URLSessionRealtimeClient: RealtimeSessionClientPort {
       case .responseCompleted, .responseCancelled:
         activeResponseId = nil
         continuation.yield(event)
+      case .endRequested(_, let reason):
+        if reason == .memoryChanged {
+          serverEnded = true
+          continuation.yield(event)
+          return
+        }
+        continuation.yield(event)
       case .speechStarted, .speechStopped, .transcript, .responseText, .responseAudio,
-        .endRequested, .contextCaptureRequested:
+        .contextCaptureRequested:
         continuation.yield(event)
       case .error(let code, let message, let retryable):
         throw RealtimeSessionClientError.server(
@@ -434,7 +467,7 @@ public actor URLSessionRealtimeClient: RealtimeSessionClientPort {
           throw RealtimeSessionClientError.invalidEvent
         }
         continuation.yield(delta)
-      case .responseCompleted(_, let responseTurnId):
+      case .responseCompleted(_, let responseTurnId, _):
         guard responseTurnId == turnId else {
           throw RealtimeSessionClientError.invalidEvent
         }
@@ -497,7 +530,11 @@ public actor URLSessionRealtimeClient: RealtimeSessionClientPort {
       )
     }
     serverSequence += 1
-    return try decodeRealtimeServerEvent(data)
+    let event = try decodeRealtimeServerEvent(data)
+    if case .responseCompleted(_, _, let memory) = event {
+      await onMemoryCompletion?(memory)
+    }
+    return event
   }
 
   private func send<T: Encodable>(_ event: T) async throws {
@@ -513,7 +550,7 @@ public actor URLSessionRealtimeClient: RealtimeSessionClientPort {
       try await socket.send(.string(value))
     } catch {
       try? testTrace?.record("mac.send.failed", fields: ["error": error.localizedDescription])
-      throw error
+      throw SocketSendFailure(underlying: error)
     }
   }
 
@@ -661,7 +698,7 @@ private struct ErrorEvent: Decodable {
 }
 
 private struct SessionEndRequestEvent: Decodable {
-  let reason: String
+  let reason: RealtimeSessionEndReason
   let turnId: UUID
 }
 
@@ -710,16 +747,16 @@ func decodeRealtimeServerEvent(_ data: Data) throws -> RealtimeServerEvent {
     guard let turnId = event.turnId else {
       throw RealtimeSessionClientError.invalidEvent
     }
-    return .responseCompleted(responseId: event.responseId, turnId: turnId)
+    return .responseCompleted(
+      responseId: event.responseId, turnId: turnId,
+      memory: try decoder.decode(MemoryCompletion.self, from: data)
+    )
   case "response.cancelled":
     let event = try decoder.decode(ResponseEvent.self, from: data)
     return .responseCancelled(responseId: event.responseId)
   case "session.end_requested":
     let event = try decoder.decode(SessionEndRequestEvent.self, from: data)
-    guard event.reason == "user_intent" else {
-      throw RealtimeSessionClientError.invalidEvent
-    }
-    return .endRequested(turnId: event.turnId)
+    return .endRequested(turnId: event.turnId, reason: event.reason)
   case "context.capture.requested":
     let event = try decoder.decode(ContextCaptureRequestEvent.self, from: data)
     guard let expiresAt = parseISO8601(event.expiresAt) else {

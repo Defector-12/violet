@@ -10,6 +10,8 @@ import type {
   RealtimeSessionConfiguration,
 } from "@violet/domain";
 import WebSocket, { type RawData } from "ws";
+import type { MemoryService } from "../memory/memory-service.js";
+import { confirmedMemoryReply, streamWithRecall } from "../memory/recall-memory-tool.js";
 import { AsyncQueue, abortReason, timeoutSignal } from "./async-queue.js";
 
 const inputAudio = {
@@ -55,6 +57,7 @@ export interface PipelineRealtimeConversationPortOptions {
   readonly createTtsTransport?: DashScopeRealtimeTransportFactory;
   readonly generateId: () => string;
   readonly modelGateway: ModelGateway;
+  readonly memoryService?: MemoryService;
   readonly ttsModel: string;
   readonly voice: string;
   readonly workspaceId: string;
@@ -67,7 +70,10 @@ export type PipelineContextAssembler = (
     readonly requestId: string;
   },
   signal?: AbortSignal,
-) => Promise<readonly ModelMessage[]>;
+) => Promise<{
+  readonly messages: readonly ModelMessage[];
+  readonly memoryRevision?: number;
+}>;
 
 export class PipelineRealtimeConversationPort implements RealtimeConversationPort {
   readonly contextProfile?: ModelContextProfile;
@@ -79,6 +85,7 @@ export class PipelineRealtimeConversationPort implements RealtimeConversationPor
   readonly #createTtsTransport: DashScopeRealtimeTransportFactory;
   readonly #generateId: () => string;
   readonly #modelGateway: ModelGateway;
+  readonly #memory: MemoryService | undefined;
   readonly #ttsModel: string;
   readonly #voice: string;
   readonly #workspaceId: string;
@@ -95,6 +102,7 @@ export class PipelineRealtimeConversationPort implements RealtimeConversationPor
     this.#createTtsTransport = options.createTtsTransport ?? createWebSocketTransport;
     this.#generateId = options.generateId;
     this.#modelGateway = options.modelGateway;
+    this.#memory = options.memoryService;
     this.#ttsModel = required(options.ttsModel, "Pipeline TTS model");
     this.#voice = required(options.voice, "Pipeline TTS voice");
     this.#workspaceId = required(options.workspaceId, "DashScope workspace ID");
@@ -133,6 +141,7 @@ export class PipelineRealtimeConversationPort implements RealtimeConversationPor
             }
           : {}),
         modelGateway: this.#modelGateway,
+        ...(this.#memory ? { memoryService: this.#memory } : {}),
         ttsModel: this.#ttsModel,
         voice: this.#voice,
         workspaceId: this.#workspaceId,
@@ -179,6 +188,7 @@ interface PipelineRealtimeConversationOptions {
   readonly createTtsTransport: DashScopeRealtimeTransportFactory;
   readonly generateId: () => string;
   readonly modelGateway: ModelGateway;
+  readonly memoryService?: MemoryService;
   readonly ttsModel: string;
   readonly voice: string;
   readonly workspaceId: string;
@@ -205,6 +215,7 @@ class PipelineRealtimeConversation implements RealtimeConversation {
   readonly #createTtsTransport: DashScopeRealtimeTransportFactory;
   readonly #generateId: () => string;
   readonly #modelGateway: ModelGateway;
+  readonly #memory: MemoryService | undefined;
   readonly #outputQueue = new AsyncQueue<RealtimeConversationOutput>();
   readonly #ttsModel: string;
   readonly #voice: string;
@@ -223,6 +234,7 @@ class PipelineRealtimeConversation implements RealtimeConversation {
     this.#createTtsTransport = options.createTtsTransport;
     this.#generateId = options.generateId;
     this.#modelGateway = options.modelGateway;
+    this.#memory = options.memoryService;
     this.#ttsModel = options.ttsModel;
     this.#voice = options.voice;
     this.#workspaceId = options.workspaceId;
@@ -281,6 +293,8 @@ class PipelineRealtimeConversation implements RealtimeConversation {
           false,
         );
       case "context-result":
+      case "recall-result":
+      case "memory-result":
         throw new PipelineAdapterError(
           "UNSUPPORTED_REALTIME_INPUT",
           "The realtime pipeline does not accept context tool results",
@@ -392,7 +406,7 @@ class PipelineRealtimeConversation implements RealtimeConversation {
     let tts: StartedTts | undefined;
 
     try {
-      const messages = await this.#assembleContext(
+      const assembled = await this.#assembleContext(
         {
           additionalSystemInstructions: this.#contextInstructions,
           currentMessage: { content: response.userContent, role: "user" },
@@ -400,13 +414,36 @@ class PipelineRealtimeConversation implements RealtimeConversation {
         },
         response.controller.signal,
       );
-      for await (const event of this.#modelGateway.stream(
-        {
-          messages,
-          requestId: response.turnId,
-        },
+      const memoryResult = await this.#memory?.prepareRequest(
+        response.turnId,
         response.controller.signal,
-      )) {
+      );
+      response.controller.signal.throwIfAborted();
+      let memoryRevision = assembled.memoryRevision;
+      if (memoryResult?.reply && memoryResult.memoryTransition) {
+        memoryRevision = memoryResult.memoryTransition.revision;
+      } else if (
+        this.#memory &&
+        memoryResult?.reply &&
+        memoryResult.changes.some((change) => change.kind === "corrected")
+      ) {
+        // Only this Core-authored acknowledgement is independent of the old context.
+        memoryRevision = (await this.#memory.repository.state()).revision;
+        response.controller.signal.throwIfAborted();
+      }
+      const events = memoryResult?.reply
+        ? confirmedMemoryReply(memoryResult.reply)
+        : streamWithRecall(
+            this.#modelGateway,
+            {
+              messages: assembled.messages,
+              requestId: response.turnId,
+            },
+            this.#memory,
+            memoryResult?.history ?? false,
+            response.controller.signal,
+          );
+      for await (const event of events) {
         response.controller.signal.throwIfAborted();
         if (event.type === "complete") {
           inputTokens = event.inputTokens;
@@ -424,6 +461,7 @@ class PipelineRealtimeConversation implements RealtimeConversation {
         if (!tts) {
           tts = await this.#startTts(response);
         }
+        response.controller.signal.throwIfAborted();
         await tts.transport.sendJson(continueTask(tts.taskId, event.content));
       }
 
@@ -448,6 +486,11 @@ class PipelineRealtimeConversation implements RealtimeConversation {
         responseId: response.responseId,
         turnId: response.turnId,
         type: "response-completed",
+        ...(memoryRevision !== undefined ? { memoryRevision } : {}),
+        ...(memoryResult?.changes.length ? { memoryChanges: memoryResult.changes } : {}),
+        ...(memoryResult?.deletionPreviewId
+          ? { memoryDeletionPreviewId: memoryResult.deletionPreviewId }
+          : {}),
       });
     } catch (error) {
       if (!response.controller.signal.aborted && this.#activeResponse === response) {

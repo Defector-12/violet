@@ -1,16 +1,17 @@
 import { randomUUID } from "node:crypto";
-import type {
-  ContextEpoch,
-  ConversationLedger,
-  LedgerMessage,
-  RealtimeConversation,
-  RealtimeConversationInput,
-  RealtimeConversationOutput,
-  RealtimeConversationPort,
-  RealtimeSessionConfiguration,
+import {
+  type ContextEpoch,
+  type ConversationLedger,
+  type LedgerMessage,
+  MemoryConflictError,
+  type RealtimeConversation,
+  type RealtimeConversationInput,
+  type RealtimeConversationOutput,
+  type RealtimeConversationPort,
+  type RealtimeSessionConfiguration,
 } from "@violet/domain";
+import { assertMemoryContentAllowed, MemorySecretError } from "@violet/policy";
 import type { RealtimeClientEvent, RealtimeServerEvent } from "@violet/protocol";
-
 import { type ContextService, ContextServiceError } from "../context/context-service.js";
 import {
   type AssembledContext,
@@ -20,6 +21,8 @@ import {
 } from "../conversation/context-assembler.js";
 import { ContextEpochManager } from "../conversation/context-epoch-manager.js";
 import { InMemoryContextCheckpointRepository } from "../conversation/in-memory-context-checkpoint-repository.js";
+import { parseRecallQuery } from "../memory/memory-search.js";
+import type { MemoryService, TurnMemoryResult } from "../memory/memory-service.js";
 import { DeterministicModelGateway } from "../model/deterministic-model-gateway.js";
 import type { ConversationEndIntentPort } from "./conversation-end-intent.js";
 import {
@@ -49,6 +52,7 @@ interface PendingContextCapture {
 
 interface PendingAssistantTurn {
   readonly content: string;
+  readonly memoryRevision?: number;
   readonly occurredAt: Date;
 }
 
@@ -75,6 +79,7 @@ export interface RealtimeSessionOptions {
   readonly generateId: () => string;
   readonly ledger: ConversationLedger;
   readonly now?: () => Date;
+  readonly memoryService?: MemoryService;
 }
 
 export class RealtimeSession {
@@ -88,6 +93,14 @@ export class RealtimeSession {
   readonly #generateId: () => string;
   readonly #ledger: ConversationLedger;
   readonly #now: () => Date;
+  readonly #memory: MemoryService | undefined;
+  readonly #unsubscribeMemory: (() => void) | undefined;
+  readonly #memoryResults = new Map<string, TurnMemoryResult>();
+  readonly #memoryReplyRevisions = new Map<string, number>();
+  readonly #turnMemoryRevisions = new Map<string, number>();
+  readonly #memoryController = new AbortController();
+  readonly #transcriptTimeouts = new Map<string, NodeJS.Timeout>();
+  #closeAfterMemoryTurn: string | undefined;
   readonly #assistantContent = new Map<string, string>();
   readonly #acceptedInputTurns = new Set<string>();
   readonly #clientEventIds = new Set<string>();
@@ -126,6 +139,7 @@ export class RealtimeSession {
   #serverSequence = 1;
   #sessionEpochId: string | null = null;
   #sessionLedgerSequence: number | null = null;
+  #sessionMemoryRevision: number | undefined;
   #sessionSnapshotSequence: number | null = null;
   #sessionId: string | null = null;
 
@@ -139,6 +153,7 @@ export class RealtimeSession {
         checkpoints: new InMemoryContextCheckpointRepository(),
         ledger: options.ledger,
         model: new DeterministicModelGateway(),
+        ...(options.memoryService ? { memoryService: options.memoryService } : {}),
       });
     this.#contextService = options.contextService;
     this.#endIntentWaitMs = options.endIntentWaitMs ?? 1_000;
@@ -158,6 +173,14 @@ export class RealtimeSession {
     this.#generateId = options.generateId;
     this.#ledger = options.ledger;
     this.#now = options.now ?? (() => new Date());
+    this.#memory = options.memoryService;
+    this.#unsubscribeMemory = this.#memory?.onInvalidation((exceptRequestId) => {
+      if (exceptRequestId && canonicalId(this.#activeTurnId ?? "") === exceptRequestId) {
+        this.#closeAfterMemoryTurn = exceptRequestId;
+      } else {
+        void this.close().catch(() => undefined);
+      }
+    });
   }
 
   get closed(): boolean {
@@ -173,6 +196,13 @@ export class RealtimeSession {
       return;
     }
     this.#closed = true;
+    this.#unsubscribeMemory?.();
+    this.#memoryController.abort();
+    this.#memoryResults.clear();
+    this.#memoryReplyRevisions.clear();
+    this.#turnMemoryRevisions.clear();
+    for (const timeout of this.#transcriptTimeouts.values()) clearTimeout(timeout);
+    this.#transcriptTimeouts.clear();
     let closeError: unknown;
     this.#acceptedInputTurns.clear();
     this.#automaticAudioInputAccepted = false;
@@ -219,6 +249,7 @@ export class RealtimeSession {
     this.#requiresStableContextSnapshot = false;
     this.#sessionEpochId = null;
     this.#sessionLedgerSequence = null;
+    this.#sessionMemoryRevision = undefined;
     this.#sessionSnapshotSequence = null;
     if (closeError) {
       throw closeError;
@@ -272,6 +303,10 @@ export class RealtimeSession {
         return;
       }
 
+      const configurationSignal = AbortSignal.any([
+        this.#memoryController.signal,
+        ...(signal ? [signal] : []),
+      ]);
       let contextEvidence: string | undefined;
       if (event.configuration.contextSessionId) {
         try {
@@ -314,7 +349,7 @@ export class RealtimeSession {
           ...(this.#conversationPort.maximumHistoryTurns !== undefined
             ? { maximumHistoryTurns: this.#conversationPort.maximumHistoryTurns }
             : {}),
-          ...(signal ? { signal } : {}),
+          signal: configurationSignal,
         });
       } catch (error) {
         if (error instanceof ContextAssemblyError) {
@@ -332,9 +367,14 @@ export class RealtimeSession {
         contextEpochId: epoch?.id,
         historyMessages: assembled.history.length,
       });
-      this.#conversation = await this.#conversationPort.open(
+      if (this.#closed || configurationSignal.aborted) {
+        await this.close();
+        return;
+      }
+      const conversation = await this.#conversationPort.open(
         {
           ...mapConfiguration(event.configuration),
+          ...(this.#memory?.injectionEnabled ? { memoryLookupAvailable: true } : {}),
           ...(boundedContextEvidence
             ? {
                 contextEvidence: boundedContextEvidence,
@@ -348,8 +388,18 @@ export class RealtimeSession {
             ? { contextLookupAvailable: true }
             : {}),
         },
-        signal,
+        configurationSignal,
       );
+      if (this.#closed || configurationSignal.aborted) {
+        try {
+          await conversation.close();
+        } finally {
+          await this.close();
+        }
+        return;
+      }
+      this.#conversation = conversation;
+      this.#sessionMemoryRevision = assembled.memoryRevision;
       this.#requiresStableContextSnapshot =
         this.#conversation.capabilities.runtimeKind === "integrated";
       this.#sessionLedgerSequence = epoch ? assembled.sourceThroughSequence : null;
@@ -396,14 +446,18 @@ export class RealtimeSession {
     const isNewInputTurn =
       (event.type === "input.audio" || event.type === "input.text") &&
       !this.#acceptedInputTurns.has(canonicalId(event.turnId));
-    if (isNewInputTurn || event.type === "input.commit") {
+    if (
+      isNewInputTurn ||
+      event.type === "input.commit" ||
+      (this.#closeAfterMemoryTurn && event.type === "input.text")
+    ) {
       const contextError = await this.#contextAdmissionError();
       if (this.#closed) {
         return;
       }
       if (contextError) {
-        yield this.#error(event.sessionId, contextError.code, contextError.message);
         await this.close();
+        yield this.#error(event.sessionId, contextError.code, contextError.message);
         return;
       }
     }
@@ -470,14 +524,24 @@ export class RealtimeSession {
       return;
     }
 
+    let confirmedReply: string | undefined;
     if (event.type === "input.text") {
       let persistence: PersistUserTurnResult;
       try {
+        assertMemoryContentAllowed(event.text);
         persistence = await this.#trackTurnPersistence(
           () => this.#persistUserTurn(event.turnId, event.text, true),
           event.turnId,
         );
       } catch (error) {
+        if (error instanceof MemorySecretError) {
+          yield this.#error(
+            event.sessionId,
+            "MEMORY_SECRET_REJECTED",
+            "密码、验证码和密钥不能保存，请移除后重试。",
+          );
+          return;
+        }
         if (error instanceof RealtimeTurnContentMismatchError) {
           yield this.#error(
             event.sessionId,
@@ -525,11 +589,29 @@ export class RealtimeSession {
         await this.close();
         return;
       }
+      if (this.#memory && this.#conversation.capabilities.runtimeKind !== "pipeline") {
+        try {
+          confirmedReply = (await this.#prepareMemory(event.turnId, signal)).reply;
+        } catch {
+          await this.#trackTurnPersistence(() => this.#markTurnFailed(event.turnId), event.turnId);
+          if (this.#closeAfterMemoryTurn) await this.close();
+          yield this.#error(
+            event.sessionId,
+            "MEMORY_PROCESSING_FAILED",
+            "记忆处理未完成，请重试。",
+          );
+          return;
+        }
+      }
     }
     try {
       const turnId = "turnId" in event ? event.turnId : undefined;
       const attemptId = turnId ? this.#turnGenerations.get(canonicalId(turnId)) : undefined;
-      await this.#conversation.send(mapInput(event, attemptId), signal);
+      const input = mapInput(event, attemptId);
+      await this.#conversation.send(
+        input.type === "text" && confirmedReply ? { ...input, confirmedReply } : input,
+        signal,
+      );
       if (event.type === "response.cancel") {
         const turnId = this.#responseTurnIds.get(canonicalId(event.responseId));
         if (turnId) this.#cancelContextCapturesForTurn(turnId);
@@ -541,6 +623,7 @@ export class RealtimeSession {
           event.turnId,
         );
       }
+      if (this.#closeAfterMemoryTurn) await this.close();
       yield this.#error(
         event.sessionId,
         "REALTIME_INPUT_FAILED",
@@ -568,12 +651,29 @@ export class RealtimeSession {
         continue;
       }
       recordTestTrace("runtime.output", receivedOutput);
+      const receivedTurnId = this.#outputTurnId(receivedOutput);
+      if (
+        this.#closeAfterMemoryTurn &&
+        receivedTurnId &&
+        canonicalId(receivedTurnId) !== this.#closeAfterMemoryTurn
+      ) {
+        await this.close();
+        if (this.#sessionId) {
+          yield this.#error(
+            this.#sessionId,
+            "CONTEXT_SNAPSHOT_STALE",
+            "The realtime memory changed and requires a fresh session",
+          );
+        }
+        return;
+      }
       if (receivedOutput.type === "response-started") {
         this.#responseTurnIds.set(canonicalId(receivedOutput.responseId), receivedOutput.turnId);
       }
       const deferredTurnId = responseTurnIdForDeferral(receivedOutput);
       if (
-        (this.#onDemandContext ||
+        (this.#memory !== undefined ||
+          this.#onDemandContext ||
           (this.#requiresStableContextSnapshot &&
             deferredTurnId !== undefined &&
             (this.#acceptedInputTurns.has(canonicalId(deferredTurnId)) ||
@@ -581,9 +681,28 @@ export class RealtimeSession {
         deferredTurnId &&
         !this.#finalTranscripts.has(deferredTurnId)
       ) {
-        const deferred = this.#deferredResponseOutputs.get(deferredTurnId) ?? [];
+        const turnKey = canonicalId(deferredTurnId);
+        if (this.#memory && !this.#transcriptTimeouts.has(turnKey)) {
+          const timeout = setTimeout(() => {
+            if (
+              this.#closed ||
+              this.#transcriptTimeouts.get(turnKey) !== timeout ||
+              !this.#deferredResponseOutputs.has(turnKey) ||
+              this.#finalTranscripts.has(deferredTurnId)
+            ) {
+              return;
+            }
+            recordTestTrace("runtime.failed", {
+              turnId: deferredTurnId,
+              code: "FINAL_TRANSCRIPT_TIMEOUT",
+            });
+            void this.close().catch(() => undefined);
+          }, 30_000).unref();
+          this.#transcriptTimeouts.set(turnKey, timeout);
+        }
+        const deferred = this.#deferredResponseOutputs.get(turnKey) ?? [];
         deferred.push(receivedOutput);
-        this.#deferredResponseOutputs.set(deferredTurnId, deferred);
+        this.#deferredResponseOutputs.set(turnKey, deferred);
         if (receivedOutput.type === "response-started") {
           recordTestTrace("routing.deferred", {
             turnId: deferredTurnId,
@@ -594,10 +713,13 @@ export class RealtimeSession {
       }
       const outputs =
         receivedOutput.type === "transcript" && receivedOutput.final
-          ? [receivedOutput, ...(this.#deferredResponseOutputs.get(receivedOutput.turnId) ?? [])]
+          ? [
+              receivedOutput,
+              ...(this.#deferredResponseOutputs.get(canonicalId(receivedOutput.turnId)) ?? []),
+            ]
           : [receivedOutput];
       if (receivedOutput.type === "transcript" && receivedOutput.final) {
-        this.#deferredResponseOutputs.delete(receivedOutput.turnId);
+        this.#clearDeferredResponseOutputs(receivedOutput.turnId);
       }
       for (const output of outputs) {
         if (this.#closed) {
@@ -607,10 +729,34 @@ export class RealtimeSession {
           this.#rememberRejectedResponse(output);
           continue;
         }
+        const outputTurnId = this.#outputTurnId(output);
+        const endsMemoryTurn =
+          this.#closeAfterMemoryTurn !== undefined &&
+          ((output.type === "response-cancelled" &&
+            outputTurnId !== undefined &&
+            canonicalId(outputTurnId) === this.#closeAfterMemoryTurn) ||
+            (output.type === "error" &&
+              (!outputTurnId || canonicalId(outputTurnId) === this.#closeAfterMemoryTurn)));
+        if (output.type === "recall-request") {
+          if (!this.#memory || !this.#finalTranscripts.has(output.turnId)) {
+            throw new Error("Recall requires an admitted final user input");
+          }
+          const result = await this.#memory.recall(
+            parseRecallQuery(output.arguments),
+            this.#memoryResults.get(canonicalId(output.turnId))?.history ?? false,
+            this.#memoryController.signal,
+          );
+          if (this.#closed) return;
+          await conversation.send(
+            { type: "recall-result", callId: output.callId, output: JSON.stringify(result) },
+            signal,
+          );
+          continue;
+        }
         if (output.type === "context-request") {
           this.#responseTurnIds.set(canonicalId(output.responseId), output.turnId);
           if (this.#onDemandContext) {
-            this.#deferredResponseOutputs.delete(output.turnId);
+            this.#clearDeferredResponseOutputs(output.turnId);
             if (this.#visibleResponseIds.delete(output.responseId) && this.#sessionId) {
               const cancelled = {
                 responseId: output.responseId,
@@ -656,11 +802,22 @@ export class RealtimeSession {
           this.#cancelPendingContextCaptures(output.turnId);
         }
         if (output.type === "transcript" && output.final) {
+          if (classifySecret(output.text)) {
+            if (this.#sessionId)
+              yield this.#error(
+                this.#sessionId,
+                "MEMORY_SECRET_REJECTED",
+                "密码、验证码和密钥不能保存，请移除后重试。",
+              );
+            await this.close();
+            return;
+          }
           this.#activeTurnId = output.turnId;
           this.#recordFinalText(output.turnId, output.text, signal);
         }
         if (
           output.type === "response-cancelled" &&
+          !endsMemoryTurn &&
           this.#visualRequestedTurns.size > 0 &&
           !this.#visibleResponseIds.has(output.responseId)
         ) {
@@ -678,6 +835,18 @@ export class RealtimeSession {
             continue;
           }
         } catch (error) {
+          if (this.#closed) return;
+          if (error instanceof MemoryConflictError) {
+            await this.close();
+            if (this.#sessionId) {
+              yield this.#error(
+                this.#sessionId,
+                "CONTEXT_SNAPSHOT_STALE",
+                "The realtime memory changed and requires a fresh session",
+              );
+            }
+            return;
+          }
           if (error instanceof RealtimeEpochExpiredError && this.#sessionId) {
             yield this.#error(
               this.#sessionId,
@@ -702,11 +871,42 @@ export class RealtimeSession {
           return;
         }
         if (output.type === "transcript" && output.final) {
-          const contextError = await this.#contextAdmissionError();
+          const contextError = await this.#contextAdmissionError(output.turnId);
           if (contextError && this.#sessionId) {
             yield this.#error(this.#sessionId, contextError.code, contextError.message);
             await this.close();
             return;
+          }
+          if (this.#memory && conversation.capabilities.runtimeKind === "integrated") {
+            try {
+              const result = await this.#prepareMemory(output.turnId, signal);
+              if (result.reply) {
+                for (const [responseId, turnId] of this.#responseTurnIds) {
+                  if (canonicalId(turnId) === canonicalId(output.turnId))
+                    this.#rejectedResponseIds.add(responseId);
+                }
+                await conversation.send(
+                  {
+                    type: "memory-result",
+                    turnId: output.turnId,
+                    reply: result.reply,
+                    ...(output.attemptId !== undefined ? { attemptId: output.attemptId } : {}),
+                  },
+                  signal,
+                );
+              }
+            } catch {
+              // Finish terminal cleanup before yielding: a client may stop reading
+              // as soon as it receives the error and never resume this generator.
+              await this.close();
+              if (this.#sessionId)
+                yield this.#error(
+                  this.#sessionId,
+                  "MEMORY_PROCESSING_FAILED",
+                  "记忆处理未完成，请重试。",
+                );
+              return;
+            }
           }
         }
         if (output.type === "response-started") {
@@ -718,12 +918,27 @@ export class RealtimeSession {
         if (!this.#sessionId) {
           return;
         }
+        if (endsMemoryTurn) {
+          await this.close();
+          yield this.#mapOutput(this.#sessionId, output);
+          return;
+        }
         yield this.#mapOutput(this.#sessionId, output);
         if (output.type === "error" && output.terminal) {
           await this.close();
           return;
         }
         if (output.type === "response-completed") {
+          if (this.#closeAfterMemoryTurn === canonicalId(output.turnId)) {
+            yield {
+              reason: "memory_changed",
+              turnId: output.turnId,
+              ...this.#baseEvent(this.#sessionId),
+              type: "session.end_requested",
+            };
+            await this.close();
+            return;
+          }
           if (!this.#finalTranscripts.has(output.turnId)) {
             this.#completedResponseTurns.add(output.turnId);
             continue;
@@ -756,6 +971,45 @@ export class RealtimeSession {
         }
       }
     }
+  }
+
+  async #prepareMemory(turnId: string, signal?: AbortSignal): Promise<TurnMemoryResult> {
+    const key = canonicalId(turnId);
+    const memorySignal = AbortSignal.any([
+      this.#memoryController.signal,
+      ...(signal ? [signal] : []),
+    ]);
+    memorySignal.throwIfAborted();
+    const cached = this.#memoryResults.get(key);
+    if (cached) return cached;
+    if (this.#sessionMemoryRevision !== undefined) {
+      this.#turnMemoryRevisions.set(key, this.#sessionMemoryRevision);
+    }
+    const result = (await this.#memory?.prepareRequest(key, memorySignal)) ?? { changes: [] };
+    memorySignal.throwIfAborted();
+    const transition = result.memoryTransition;
+    if (
+      result.reply &&
+      result.changes.length &&
+      result.changes.every((change) => change.kind !== "corrected") &&
+      transition &&
+      transition.previousRevision === this.#turnMemoryRevisions.get(key)
+    ) {
+      // These additive facts came from this turn, not a newly fetched global snapshot.
+      this.#turnMemoryRevisions.set(key, transition.revision);
+    }
+    if (
+      this.#memory &&
+      result.reply &&
+      result.changes.some((change) => change.kind === "corrected")
+    ) {
+      const revision =
+        result.memoryTransition?.revision ?? (await this.#memory.repository.state()).revision;
+      memorySignal.throwIfAborted();
+      this.#memoryReplyRevisions.set(key, revision);
+    }
+    this.#memoryResults.set(key, result);
+    return result;
   }
 
   #recordFinalText(turnId: string, text: string, signal?: AbortSignal): void {
@@ -856,8 +1110,8 @@ export class RealtimeSession {
 
   #cancelPendingContextCaptures(activeTurnId?: string): void {
     for (const turnId of this.#deferredResponseOutputs.keys()) {
-      if (turnId !== activeTurnId) {
-        this.#deferredResponseOutputs.delete(turnId);
+      if (turnId !== (activeTurnId ? canonicalId(activeTurnId) : undefined)) {
+        this.#clearDeferredResponseOutputs(turnId);
       }
     }
     for (const [requestId, pending] of this.#pendingContextCaptures) {
@@ -880,7 +1134,7 @@ export class RealtimeSession {
   }
 
   #cancelContextCapturesForTurn(turnId: string): void {
-    this.#deferredResponseOutputs.delete(turnId);
+    this.#clearDeferredResponseOutputs(turnId);
     for (const [requestId, pending] of this.#pendingContextCaptures) {
       if (pending.turnId !== turnId) continue;
       this.#pendingContextCaptures.delete(requestId);
@@ -1041,13 +1295,30 @@ export class RealtimeSession {
         });
         this.#assistantContent.delete(output.responseId);
         if (content) {
+          const result = this.#memoryResults.get(turnKey);
+          const turnRevision =
+            this.#turnMemoryRevisions.get(turnKey) ?? this.#sessionMemoryRevision;
+          // Only a correction's exact acknowledgement can outlive superseded context.
+          const memoryRevision =
+            this.#conversation?.capabilities.runtimeKind === "pipeline"
+              ? output.memoryRevision
+              : result?.reply && content.trim() === result.reply.trim()
+                ? (this.#memoryReplyRevisions.get(turnKey) ?? turnRevision)
+                : turnRevision;
           const contextEpoch = this.#turnEpochs.get(turnKey);
           if (contextEpoch) {
-            await this.#appendAssistantTurn(output.turnId, content, contextEpoch, this.#now());
+            await this.#appendAssistantTurn(
+              output.turnId,
+              content,
+              contextEpoch,
+              this.#now(),
+              memoryRevision,
+            );
           } else {
             this.#pendingAssistantTurns.set(turnKey, {
               content,
               occurredAt: this.#now(),
+              ...(memoryRevision !== undefined ? { memoryRevision } : {}),
             });
           }
         }
@@ -1089,6 +1360,7 @@ export class RealtimeSession {
         }
         break;
       case "context-request":
+      case "recall-request":
       case "response-audio":
         break;
     }
@@ -1251,7 +1523,13 @@ export class RealtimeSession {
     if (!pending || !contextEpoch) {
       return;
     }
-    await this.#appendAssistantTurn(turnId, pending.content, contextEpoch, pending.occurredAt);
+    await this.#appendAssistantTurn(
+      turnId,
+      pending.content,
+      contextEpoch,
+      pending.occurredAt,
+      pending.memoryRevision,
+    );
     this.#pendingAssistantTurns.delete(turnKey);
     this.#turnEpochs.delete(turnKey);
   }
@@ -1261,8 +1539,12 @@ export class RealtimeSession {
     content: string,
     contextEpoch: ContextEpoch,
     occurredAt: Date,
+    memoryRevision?: number,
   ): Promise<void> {
     const turnKey = canonicalId(turnId);
+    if (this.#memory && memoryRevision === undefined) {
+      throw new MemoryConflictError("The response has no memory context revision");
+    }
     const message = await this.#ledger.append({
       content,
       contextEpoch,
@@ -1270,7 +1552,22 @@ export class RealtimeSession {
       occurredAt,
       requestId: turnKey,
       role: "assistant",
+      signal: this.#memoryController.signal,
+      ...(memoryRevision !== undefined ? { expectedMemoryRevision: memoryRevision } : {}),
     });
+    const result = this.#memoryResults.get(turnKey);
+    const transition = result?.memoryTransition;
+    if (
+      !this.#closed &&
+      this.#requiresStableContextSnapshot &&
+      result?.changes.length &&
+      result.changes.every((change) => change.kind !== "corrected") &&
+      transition &&
+      transition.previousRevision === this.#sessionMemoryRevision &&
+      transition.revision === memoryRevision
+    ) {
+      this.#sessionMemoryRevision = transition.revision;
+    }
     if (message.contextEpochId) {
       this.#trackSessionSequence(message.contextEpochId, message.sequence);
     }
@@ -1304,10 +1601,16 @@ export class RealtimeSession {
     }
   }
 
+  #clearDeferredResponseOutputs(turnId: string): void {
+    const turnKey = canonicalId(turnId);
+    clearTimeout(this.#transcriptTimeouts.get(turnKey));
+    this.#transcriptTimeouts.delete(turnKey);
+    this.#deferredResponseOutputs.delete(turnKey);
+  }
+
   #clearTurnOutputState(turnId: string, clearEpoch: boolean): void {
     const turnKey = canonicalId(turnId);
-    this.#deferredResponseOutputs.delete(turnId);
-    this.#deferredResponseOutputs.delete(turnKey);
+    this.#clearDeferredResponseOutputs(turnId);
     this.#pendingAssistantTurns.delete(turnKey);
     for (const [responseId, responseTurnId] of this.#responseTurnIds) {
       if (canonicalId(responseTurnId) !== canonicalId(turnId)) continue;
@@ -1392,10 +1695,19 @@ export class RealtimeSession {
     }
   }
 
-  async #contextAdmissionError(): Promise<{
+  async #contextAdmissionError(turnId?: string): Promise<{
     readonly code: string;
     readonly message: string;
   } | null> {
+    if (
+      this.#closeAfterMemoryTurn &&
+      (!turnId || canonicalId(turnId) !== this.#closeAfterMemoryTurn)
+    ) {
+      return {
+        code: "CONTEXT_SNAPSHOT_STALE",
+        message: "The realtime memory changed and requires a fresh session",
+      };
+    }
     const currentEpochId = this.#epochManager.current(this.#now())?.id;
     if (this.#sessionEpochId && currentEpochId !== this.#sessionEpochId) {
       return {
@@ -1539,6 +1851,7 @@ export class RealtimeSession {
           },
           ...base,
           type: "response.completed",
+          ...this.#memoryCompletion(output),
         };
       case "response-cancelled":
         return {
@@ -1555,8 +1868,19 @@ export class RealtimeSession {
           type: "error",
         };
       case "context-request":
+      case "recall-request":
         throw new Error("Context requests must be resolved inside the realtime session");
     }
+  }
+
+  #memoryCompletion(output: Extract<RealtimeConversationOutput, { type: "response-completed" }>) {
+    const result = this.#memoryResults.get(canonicalId(output.turnId));
+    const changes = output.memoryChanges ?? result?.changes;
+    const previewId = output.memoryDeletionPreviewId ?? result?.deletionPreviewId;
+    return {
+      ...(changes?.length ? { memoryChanges: [...changes] } : {}),
+      ...(previewId ? { memoryDeletionPreviewId: previewId } : {}),
+    };
   }
 }
 
@@ -1586,6 +1910,8 @@ function responseTurnIdForDeferral(output: RealtimeConversationOutput): string |
     case "response-started":
     case "response-text":
       return output.turnId;
+    case "recall-request":
+      return output.turnId;
     case "context-request":
     case "error":
     case "response-cancelled":
@@ -1593,6 +1919,15 @@ function responseTurnIdForDeferral(output: RealtimeConversationOutput): string |
     case "speech-stopped":
     case "transcript":
       return undefined;
+  }
+}
+
+function classifySecret(text: string): boolean {
+  try {
+    assertMemoryContentAllowed(text);
+    return false;
+  } catch {
+    return true;
   }
 }
 

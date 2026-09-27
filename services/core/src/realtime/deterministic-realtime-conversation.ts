@@ -93,7 +93,7 @@ class DeterministicRealtimeConversation implements RealtimeConversation {
     this.#outputQueue.push({
       ...(input.attemptId !== undefined ? { attemptId: input.attemptId } : {}),
       responseId,
-      text: `Violet realtime test response: ${input.text}`,
+      text: input.confirmedReply ?? `Violet realtime test response: ${input.text}`,
       turnId: input.turnId,
       type: "response-text",
     });

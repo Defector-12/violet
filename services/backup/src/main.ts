@@ -5,10 +5,12 @@ import { createReadStream } from "node:fs";
 import { mkdir, readFile, rename, rm, stat } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 import { stdin, stdout } from "node:process";
+import { pathToFileURL } from "node:url";
 import {
   AbortMultipartUploadCommand,
   CreateMultipartUploadCommand,
   DeleteObjectCommand,
+  GetObjectCommand,
   HeadObjectCommand,
   ListMultipartUploadsCommand,
   ListObjectsV2Command,
@@ -21,35 +23,39 @@ import {
   decryptBackupToFile,
   encryptBackupToFile,
 } from "@violet/backup";
+import { cleanupManagedBackups } from "./cleanup.js";
+import { loadRestorePolicy, withRestoreLock } from "./restore-policy.js";
+import { readSnapshotStream } from "./snapshot-stream.js";
 
-const [command, ...arguments_] = process.argv.slice(2);
-
-try {
-  if (command === "encrypt-upload") {
-    await encryptAndMaybeUpload(process.env);
-  } else if (command === "upload-existing") {
-    await uploadExisting(arguments_, process.env);
-  } else if (command === "decrypt") {
-    await decrypt(arguments_, process.env);
-  } else if (command === "verify-access") {
-    await verifyTosAccess(process.env);
-  } else {
-    throw new Error(
-      "Usage: violet-backup <encrypt-upload|upload-existing|decrypt|verify-access> [input] [output]",
-    );
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  const [command, ...arguments_] = process.argv.slice(2);
+  try {
+    if (command === "encrypt-upload") {
+      await encryptAndMaybeUpload(process.env);
+    } else if (command === "upload-existing") {
+      await uploadExisting(arguments_, process.env);
+    } else if (command === "decrypt") {
+      await decrypt(arguments_, process.env);
+    } else if (command === "verify-access") {
+      await verifyTosAccess(process.env);
+    } else {
+      throw new Error(
+        "Usage: violet-backup <encrypt-upload|upload-existing|decrypt|verify-access> [input] [output]",
+      );
+    }
+  } catch (error) {
+    process.stderr.write(`${error instanceof Error ? error.message : "Backup command failed"}\n`);
+    process.exitCode = 1;
   }
-} catch (error) {
-  process.stderr.write(`${error instanceof Error ? error.message : "Backup command failed"}\n`);
-  process.exitCode = 1;
 }
 
-async function uploadExisting(
+export async function uploadExisting(
   arguments_: readonly string[],
   env: NodeJS.ProcessEnv,
 ): Promise<void> {
-  const [metadataPath] = arguments_;
-  if (!metadataPath) {
-    throw new Error("Usage: violet-backup upload-existing <metadata.json>");
+  const [metadataPath, cleanup] = arguments_;
+  if (!metadataPath || (cleanup !== undefined && cleanup !== "--cleanup")) {
+    throw new Error("Usage: violet-backup upload-existing <metadata.json> [--cleanup]");
   }
   const outputDirectory = resolve(env["VIOLET_BACKUP_OUTPUT_DIR"] ?? "/var/lib/violet/backups");
   const metadataFile = resolve(metadataPath);
@@ -65,7 +71,12 @@ async function uploadExisting(
     typeof value["plaintextSha256"] !== "string" ||
     typeof value["plaintextBytes"] !== "number" ||
     typeof value["publicKeyFingerprint"] !== "string" ||
-    value["schemaVersion"] !== 1
+    value["schemaVersion"] !== 2 ||
+    typeof value["instanceId"] !== "string" ||
+    typeof value["restoreEpoch"] !== "number" ||
+    !Number.isSafeInteger(value["restoreEpoch"]) ||
+    value["restoreEpoch"] < 0 ||
+    value["verified"] !== true
   ) {
     throw new Error("backup metadata is invalid");
   }
@@ -79,9 +90,17 @@ async function uploadExisting(
     plaintextBytes: value["plaintextBytes"],
     plaintextSha256: value["plaintextSha256"],
     publicKeyFingerprint: value["publicKeyFingerprint"],
-    schemaVersion: 1,
+    schemaVersion: 2,
+    instanceId: value["instanceId"],
+    restoreEpoch: value["restoreEpoch"],
   };
-  const objectKey = await uploadBackup({ encryptedSha256, env, metadata, path });
+  const objectKey = await uploadBackup({
+    encryptedSha256,
+    env,
+    metadata,
+    path,
+    cleanup: cleanup === "--cleanup",
+  });
   stdout.write(`${JSON.stringify({ ...value, objectKey, uploaded: true })}\n`);
 }
 
@@ -98,12 +117,15 @@ async function encryptAndMaybeUpload(env: NodeJS.ProcessEnv): Promise<void> {
   const temporaryPath = `${finalPath}.tmp`;
 
   await mkdir(outputDirectory, { mode: 0o700, recursive: true });
+  const snapshot = await readSnapshotStream(stdin);
   let encrypted: BackupEncryptionResult;
   try {
-    encrypted = await encryptBackupToFile(stdin, {
+    encrypted = await encryptBackupToFile(snapshot.dump, {
       createdAt,
       outputPath: temporaryPath,
       publicKey,
+      instanceId: snapshot.instanceId,
+      restoreEpoch: snapshot.restoreEpoch,
     });
     await rename(temporaryPath, finalPath);
   } catch (error) {
@@ -116,35 +138,26 @@ async function encryptAndMaybeUpload(env: NodeJS.ProcessEnv): Promise<void> {
     ...encrypted,
     encryptedSha256,
     localPath: finalPath,
+    verified: true,
   };
-  if (env["VIOLET_BACKUP_UPLOAD"] === "true") {
-    result["objectKey"] = await uploadBackup({
-      encryptedSha256,
-      env,
-      metadata: encrypted,
-      path: finalPath,
-    });
-    result["uploaded"] = true;
-  } else {
-    result["uploaded"] = false;
-  }
+  // The wrapper must check pg_dump's exit status before a separate upload command.
+  result["uploaded"] = false;
   stdout.write(`${JSON.stringify(result)}\n`);
 }
 
 async function decrypt(arguments_: readonly string[], env: NodeJS.ProcessEnv): Promise<void> {
-  const [inputPath, outputPath] = arguments_;
-  if (!inputPath || !outputPath) {
-    throw new Error("Usage: violet-backup decrypt <input.vltbk> <output.dump>");
+  const [inputPath, outputPath, instanceId] = arguments_;
+  if (!inputPath || !outputPath || !instanceId) {
+    throw new Error("Usage: violet-backup decrypt <input.vltbk> <output.dump> <instance-id>");
   }
-  const privateKey = await readSecret(
-    env,
-    "VIOLET_BACKUP_PRIVATE_KEY",
-    "VIOLET_BACKUP_PRIVATE_KEY_FILE",
-  );
-  const result = await decryptBackupToFile({
-    inputPath,
-    outputPath,
-    privateKey,
+  const result = await withRestoreLock(instanceId, async () => {
+    const restorePolicy = await loadRestorePolicy(instanceId);
+    const privateKey = await readSecret(
+      env,
+      "VIOLET_BACKUP_PRIVATE_KEY",
+      "VIOLET_BACKUP_PRIVATE_KEY_FILE",
+    );
+    return decryptBackupToFile({ inputPath, outputPath, privateKey, restorePolicy });
   });
   stdout.write(`${JSON.stringify({ ...result, inputPath, outputPath })}\n`);
 }
@@ -154,6 +167,7 @@ async function uploadBackup(input: {
   readonly env: NodeJS.ProcessEnv;
   readonly metadata: Awaited<ReturnType<typeof encryptBackupToFile>>;
   readonly path: string;
+  readonly cleanup?: boolean;
 }): Promise<string> {
   const bucket = required(input.env, "TOS_BUCKET");
   const objectKey = buildBackupObjectKey(
@@ -165,7 +179,7 @@ async function uploadBackup(input: {
   const client = await createTosClient(input.env);
 
   try {
-    await client.send(
+    const put = await client.send(
       new PutObjectCommand({
         Body: createReadStream(input.path),
         Bucket: bucket,
@@ -177,6 +191,8 @@ async function uploadBackup(input: {
           "plaintext-sha256": input.metadata.plaintextSha256,
           "public-key-fingerprint": input.metadata.publicKeyFingerprint,
           "schema-version": String(input.metadata.schemaVersion),
+          "instance-id": input.metadata.instanceId ?? "",
+          "restore-epoch": String(input.metadata.restoreEpoch),
         },
         ServerSideEncryption: "AES256",
       }),
@@ -186,9 +202,38 @@ async function uploadBackup(input: {
       head.ContentLength !== fileStats.size ||
       head.Metadata?.["encrypted-sha256"] !== input.encryptedSha256 ||
       head.Metadata?.["plaintext-sha256"] !== input.metadata.plaintextSha256 ||
+      head.Metadata?.["instance-id"] !== input.metadata.instanceId ||
+      head.Metadata?.["restore-epoch"] !== String(input.metadata.restoreEpoch) ||
       head.ServerSideEncryption !== "AES256"
     ) {
       throw new Error("uploaded backup metadata verification failed");
+    }
+    const downloaded = await client.send(
+      new GetObjectCommand({
+        Bucket: bucket,
+        Key: objectKey,
+        ...(put.VersionId ? { VersionId: put.VersionId } : {}),
+      }),
+    );
+    if (!downloaded.Body) throw new Error("Uploaded backup body is missing");
+    const hash = createHash("sha256");
+    let bytes = 0;
+    for await (const chunk of downloaded.Body as AsyncIterable<Uint8Array>) {
+      hash.update(chunk);
+      bytes += chunk.length;
+    }
+    if (bytes !== fileStats.size || hash.digest("hex") !== input.encryptedSha256) {
+      throw new Error("Uploaded backup ciphertext verification failed");
+    }
+    if (input.cleanup) {
+      if (!put.VersionId) throw new Error("Cleanup requires a versioned clean backup");
+      await cleanupManagedBackups(client, {
+        bucket,
+        objectKey,
+        versionId: put.VersionId,
+        localPath: input.path,
+        directory: resolve(input.env["VIOLET_BACKUP_OUTPUT_DIR"] ?? "/var/lib/violet/backups"),
+      });
     }
     return objectKey;
   } finally {

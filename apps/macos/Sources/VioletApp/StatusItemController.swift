@@ -24,7 +24,8 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
     model: PresenceModel,
     shortcut: any GlobalShortcutPort,
     wakeWord: WakeWordCoordinator,
-    acceptanceRecorder: any RealtimeAcceptanceRecording
+    acceptanceRecorder: any RealtimeAcceptanceRecording,
+    memoryWindow: MemoryWindowController? = nil
   ) {
     self.acceptanceRecorder = acceptanceRecorder
     self.model = model
@@ -54,7 +55,10 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
     popover.delegate = self
     popover.contentSize = NSSize(width: 400, height: 520)
     popover.contentViewController = NSHostingController(
-      rootView: PresenceView(model: model, wakeWord: wakeWord)
+      rootView: PresenceView(
+        model: model, wakeWord: wakeWord, memory: memoryWindow?.model,
+        openMemory: { [weak memoryWindow] in memoryWindow?.show() }
+      )
     )
     NSWorkspace.shared.notificationCenter.addObserver(
       self,

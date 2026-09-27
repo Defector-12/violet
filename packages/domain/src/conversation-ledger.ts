@@ -22,10 +22,13 @@ export interface AppendLedgerMessage {
   readonly contextEpoch?: ContextEpoch;
   readonly contextEventId?: string;
   readonly contextSourceId?: string;
+  readonly expectedMemoryRevision?: number;
   readonly id: string;
   readonly occurredAt: Date;
   readonly requestId: string;
   readonly role: ConversationRole;
+  // Cancellation before commit dispatch prevents persistence, not after it.
+  readonly signal?: AbortSignal;
 }
 
 export interface ConversationTurn {
@@ -55,6 +58,7 @@ export interface ConversationLedger {
   ): Promise<boolean>;
   latestSequence(contextEpochId: string): Promise<number>;
   list(): Promise<readonly LedgerMessage[]>;
+  sourceTurns(eventIds: readonly string[]): Promise<readonly LedgerMessage[]>;
   listTurns(options: ListConversationTurns): Promise<readonly ConversationTurn[]>;
   markRequestFailed(requestId: string, contextEpochId: string, occurredAt: Date): Promise<void>;
   recoverIncompleteRequests(occurredAt: Date): Promise<number>;

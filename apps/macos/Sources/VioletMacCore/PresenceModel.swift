@@ -66,6 +66,7 @@ public final class PresenceModel: ObservableObject {
   private let naturalPointingPreferenceKey: String
   private let pointingReplayRecorder: NaturalPointingReplayRecorder?
   private let realtimeClient: (any RealtimeSessionClientPort)?
+  private var activeChatResponseId: UUID?
   private var activeContextSessionId: UUID?
   private var activeRealtimeResponseId: UUID?
   private var audioFrameContinuation: AsyncStream<VioletAudioFrame>.Continuation?
@@ -200,31 +201,33 @@ public final class PresenceModel: ObservableObject {
     let responseId = UUID()
     messages.append(PresenceMessage(role: .user, text: message))
     messages.append(PresenceMessage(id: responseId, role: .assistant, text: ""))
+    activeChatResponseId = responseId
     isResponding = true
     let contextSessionId = activeContextSessionId
 
     chatTask = Task { [weak self, client] in
+      guard self?.activeChatResponseId == responseId else { return }
       do {
         for try await delta in client.streamChat(
           message: message,
           requestId: UUID(),
           contextSessionId: contextSessionId
         ) {
-          guard let self else {
+          guard let self, self.activeChatResponseId == responseId else {
             return
           }
           self.append(delta, to: responseId)
         }
-        self?.finishResponse()
+        self?.finishResponse(responseId)
       } catch is CancellationError {
-        self?.finishResponse()
+        self?.finishResponse(responseId)
       } catch {
-        guard let self else {
+        guard let self, self.activeChatResponseId == responseId else {
           return
         }
         self.replaceResponse(responseId, with: userFacingMessage(error))
         self.connectionState = .offline(message: userFacingMessage(error))
-        self.finishResponse()
+        self.finishResponse(responseId)
       }
     }
   }
@@ -513,6 +516,10 @@ public final class PresenceModel: ObservableObject {
         guard self.audioSessionId == sessionId else {
           return
         }
+        // A server-requested end can finish the transport before queued audio finishes.
+        if self.pendingConversationEndTask != nil {
+          return
+        }
         self.finishAudioSession(state: .idle, reason: .streamEnded)
       } catch is CancellationError {
         await realtimeClient.close()
@@ -639,6 +646,7 @@ public final class PresenceModel: ObservableObject {
   }
 
   public func stop(reason: RealtimeAcceptanceReason = .userStop) {
+    activeChatResponseId = nil
     chatTask?.cancel()
     chatTask = nil
     isResponding = false
@@ -646,6 +654,18 @@ public final class PresenceModel: ObservableObject {
     if reason != .userStop {
       clearContext()
     }
+  }
+
+  public func invalidateDeletedConversation() {
+    // Messages have no source IDs yet, so invalidate the visible conversation.
+    activeChatResponseId = nil
+    chatTask?.cancel()
+    chatTask = nil
+    isResponding = false
+    if audioSessionId != nil {
+      cancelAudioSession(reason: .memoryChanged)
+    }
+    messages.removeAll()
   }
 
   private func handleAudioEvent(_ event: RealtimeServerEvent) throws {
@@ -800,7 +820,7 @@ public final class PresenceModel: ObservableObject {
         message: message,
         retryable: retryable
       )
-    case .responseCompleted(let responseId, let turnId):
+    case .responseCompleted(let responseId, let turnId, _):
       resetAudioInactivityTimeout()
       acceptanceRecorder.record(
         .init(
@@ -832,8 +852,21 @@ public final class PresenceModel: ObservableObject {
         audioResponseMessageId = nil
         audioState = .listening
       }
-    case .endRequested:
-      finishConversationAfterPlayback()
+    case .endRequested(_, let reason):
+      if reason == .memoryChanged {
+        if audioIO.isCapturing {
+          acceptanceRecorder.record(
+            .init(type: .captureStopped, reason: .memoryChanged, sessionId: audioSessionId)
+          )
+        }
+        audioIO.stopCapture()
+        audioFrameContinuation?.finish()
+        audioFrameContinuation = nil
+        audioInactivityTask?.cancel()
+      }
+      finishConversationAfterPlayback(
+        reason: reason == .memoryChanged ? .memoryChanged : .modelIntent
+      )
     case .contextCaptureRequested(let requestId, let turnId, let expiresAt):
       captureContextForRealtime(
         requestId: requestId,
@@ -1021,7 +1054,7 @@ public final class PresenceModel: ObservableObject {
     }
   }
 
-  private func finishConversationAfterPlayback() {
+  private func finishConversationAfterPlayback(reason: RealtimeAcceptanceReason) {
     pendingConversationEndTask?.cancel()
     guard let sessionId = audioSessionId else {
       pendingConversationEndTask = nil
@@ -1035,16 +1068,16 @@ public final class PresenceModel: ObservableObject {
           return
         }
         if !self.audioIO.isPlaying {
-          self.cancelAudioSession(reason: .modelIntent)
+          self.cancelAudioSession(reason: reason)
           self.clearContext()
           return
         }
         try? await Task.sleep(for: .milliseconds(20))
       }
-      guard let self, self.audioSessionId == sessionId else {
+      guard !Task.isCancelled, let self, self.audioSessionId == sessionId else {
         return
       }
-      self.cancelAudioSession(reason: .modelIntent)
+      self.cancelAudioSession(reason: reason)
       self.clearContext()
     }
   }
@@ -1143,7 +1176,9 @@ public final class PresenceModel: ObservableObject {
     messages[index].text += delta
   }
 
-  private func finishResponse() {
+  private func finishResponse(_ responseId: UUID) {
+    guard activeChatResponseId == responseId else { return }
+    activeChatResponseId = nil
     chatTask = nil
     isResponding = false
   }

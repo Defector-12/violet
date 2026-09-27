@@ -1,0 +1,206 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://violet.local/schemas/v1/memory.schema.json",
+  "$defs": {
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["eventId", "startByte", "endByte"],
+      "properties": {
+        "eventId": { "type": "string", "format": "uuid" },
+        "startByte": { "type": "integer", "minimum": 0 },
+        "endByte": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "memory": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "version",
+        "state",
+        "origin",
+        "content",
+        "kind",
+        "sensitivity",
+        "createdAt",
+        "updatedAt",
+        "sources"
+      ],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "version": { "type": "integer", "minimum": 1 },
+        "state": { "type": "string", "enum": ["current", "superseded"] },
+        "origin": { "const": "explicit" },
+        "content": { "type": "string" },
+        "kind": { "type": "string", "enum": ["preference", "fact", "goal", "relationship"] },
+        "sensitivity": { "type": "string", "enum": ["normal", "controlled"] },
+        "redacted": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "sources": { "type": "array", "items": { "$ref": "#/$defs/source" } }
+      }
+    },
+    "event": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "requestId", "role", "content", "occurredAt"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "requestId": { "type": "string", "format": "uuid" },
+        "role": { "type": "string", "enum": ["user", "assistant"] },
+        "content": { "type": "string" },
+        "redacted": { "type": "boolean" },
+        "occurredAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "list": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["instanceId", "revision", "deletionRevision", "restoreEpoch", "memories"],
+      "properties": {
+        "instanceId": { "type": "string", "format": "uuid" },
+        "revision": { "type": "integer", "minimum": 0 },
+        "deletionRevision": { "type": "integer", "minimum": 0 },
+        "restoreEpoch": { "type": "integer", "minimum": 0 },
+        "memories": { "type": "array", "items": { "$ref": "#/$defs/memory" } }
+      }
+    },
+    "detail": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["instanceId", "revision", "versions", "events"],
+      "properties": {
+        "instanceId": { "type": "string", "format": "uuid" },
+        "revision": { "type": "integer", "minimum": 0 },
+        "versions": { "type": "array", "items": { "$ref": "#/$defs/memory" } },
+        "events": { "type": "array", "items": { "$ref": "#/$defs/event" } }
+      }
+    },
+    "correction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requestId", "expectedVersion", "content"],
+      "properties": {
+        "requestId": { "type": "string", "format": "uuid" },
+        "expectedVersion": { "type": "integer", "minimum": 1 },
+        "content": { "type": "string", "minLength": 1, "maxLength": 8000 }
+      }
+    },
+    "change": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version", "kind"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "version": { "type": "integer", "minimum": 1 },
+        "kind": { "type": "string", "enum": ["created", "corrected", "source_added"] }
+      }
+    },
+    "mutation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["memoryChanges"],
+      "properties": {
+        "memoryChanges": { "type": "array", "items": { "$ref": "#/$defs/change" } }
+      }
+    },
+    "target": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "id", "version"],
+          "properties": {
+            "kind": { "const": "memory" },
+            "id": { "type": "string", "format": "uuid" },
+            "version": { "type": "integer", "minimum": 1 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "eventId"],
+          "properties": {
+            "kind": { "const": "source" },
+            "eventId": { "type": "string", "format": "uuid" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": { "kind": { "const": "all" } }
+        }
+      ]
+    },
+    "previewRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "target"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "target": { "$ref": "#/$defs/target" }
+      }
+    },
+    "preview": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "instanceId",
+        "revision",
+        "deletionRevision",
+        "restoreEpoch",
+        "nextRestoreEpoch",
+        "eventSequence",
+        "target",
+        "requestIds",
+        "eventIds",
+        "deletedMemoryIds",
+        "retainedMemoryIds",
+        "createdAt",
+        "events",
+        "memories"
+      ],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "instanceId": { "type": "string", "format": "uuid" },
+        "revision": { "type": "integer", "minimum": 0 },
+        "deletionRevision": { "type": "integer", "minimum": 0 },
+        "restoreEpoch": { "type": "integer", "minimum": 0 },
+        "nextRestoreEpoch": { "type": "integer", "minimum": 1 },
+        "eventSequence": { "type": "integer", "minimum": 1 },
+        "target": { "$ref": "#/$defs/target" },
+        "requestIds": { "type": "array", "items": { "type": "string", "format": "uuid" } },
+        "eventIds": { "type": "array", "items": { "type": "string", "format": "uuid" } },
+        "deletedMemoryIds": { "type": "array", "items": { "type": "string", "format": "uuid" } },
+        "retainedMemoryIds": { "type": "array", "items": { "type": "string", "format": "uuid" } },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "events": { "type": "array", "items": { "$ref": "#/$defs/event" } },
+        "memories": { "type": "array", "items": { "$ref": "#/$defs/memory" } }
+      }
+    },
+    "confirmation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["instanceId", "minimumRestoreEpoch"],
+      "properties": {
+        "instanceId": { "type": "string", "format": "uuid" },
+        "minimumRestoreEpoch": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "deletionStatus": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "instanceId", "restoreEpoch", "status"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "instanceId": { "type": "string", "format": "uuid" },
+        "restoreEpoch": { "type": "integer", "minimum": 1 },
+        "status": { "type": "string", "enum": ["pending", "running", "complete", "failed"] },
+        "failureCode": { "type": "string", "maxLength": 80 }
+      }
+    }
+  }
+}

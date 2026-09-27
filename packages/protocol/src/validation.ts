@@ -11,6 +11,7 @@ import contextEnvelopeSchema from "../schemas/v1/context-envelope.schema.json" w
 import contextReceiptSchema from "../schemas/v1/context-receipt.schema.json" with { type: "json" };
 import errorSchema from "../schemas/v1/error.schema.json" with { type: "json" };
 import healthSchema from "../schemas/v1/health.schema.json" with { type: "json" };
+import memorySchema from "../schemas/v1/memory.schema.json" with { type: "json" };
 import realtimeClientEventSchema from "../schemas/v1/realtime-client-event.schema.json" with {
   type: "json",
 };
@@ -25,6 +26,14 @@ import type {
   ContextReceipt,
   CoreStatus,
   Health,
+  MemoryCorrection,
+  MemoryDeletionConfirmation,
+  MemoryDeletionPreview,
+  MemoryDeletionPreviewRequest,
+  MemoryDeletionStatus,
+  MemoryDetail,
+  MemoryList,
+  MemoryMutation,
   RealtimeClientEvent,
   RealtimeServerEvent,
 } from "./types.js";
@@ -37,6 +46,30 @@ const ajv = new Ajv2020({
 (addFormats as unknown as (instance: Ajv2020) => Ajv2020)(ajv);
 ajv.addSchema(errorSchema);
 ajv.addSchema(contextEnvelopeSchema);
+ajv.addSchema(memorySchema);
+
+const memoryListValidator = ajv.compile<MemoryList>({ $ref: `${memorySchema.$id}#/$defs/list` });
+const memoryDetailValidator = ajv.compile<MemoryDetail>({
+  $ref: `${memorySchema.$id}#/$defs/detail`,
+});
+const memoryCorrectionValidator = ajv.compile<MemoryCorrection>({
+  $ref: `${memorySchema.$id}#/$defs/correction`,
+});
+const memoryMutationValidator = ajv.compile<MemoryMutation>({
+  $ref: `${memorySchema.$id}#/$defs/mutation`,
+});
+const memoryPreviewRequestValidator = ajv.compile<MemoryDeletionPreviewRequest>({
+  $ref: `${memorySchema.$id}#/$defs/previewRequest`,
+});
+const memoryPreviewValidator = ajv.compile<MemoryDeletionPreview>({
+  $ref: `${memorySchema.$id}#/$defs/preview`,
+});
+const memoryConfirmationValidator = ajv.compile<MemoryDeletionConfirmation>({
+  $ref: `${memorySchema.$id}#/$defs/confirmation`,
+});
+const memoryDeletionStatusValidator = ajv.compile<MemoryDeletionStatus>({
+  $ref: `${memorySchema.$id}#/$defs/deletionStatus`,
+});
 
 const chatRequestValidator = ajv.compile<ChatRequest>(chatRequestSchema);
 const chatStreamEventValidator = ajv.compile<ChatStreamEvent>(chatStreamEventSchema);
@@ -97,4 +130,35 @@ export function assertRealtimeClientEvent(value: unknown): asserts value is Real
 
 export function assertRealtimeServerEvent(value: unknown): asserts value is RealtimeServerEvent {
   assertValid("RealtimeServerEvent", realtimeServerEventValidator, value);
+}
+
+export function assertMemoryList(value: unknown): asserts value is MemoryList {
+  assertValid("MemoryList", memoryListValidator, value);
+}
+export function assertMemoryDetail(value: unknown): asserts value is MemoryDetail {
+  assertValid("MemoryDetail", memoryDetailValidator, value);
+}
+export function assertMemoryCorrection(value: unknown): asserts value is MemoryCorrection {
+  assertValid("MemoryCorrection", memoryCorrectionValidator, value);
+}
+export function assertMemoryMutation(value: unknown): asserts value is MemoryMutation {
+  assertValid("MemoryMutation", memoryMutationValidator, value);
+}
+export function assertMemoryDeletionPreviewRequest(
+  value: unknown,
+): asserts value is MemoryDeletionPreviewRequest {
+  assertValid("MemoryDeletionPreviewRequest", memoryPreviewRequestValidator, value);
+}
+export function assertMemoryDeletionPreview(
+  value: unknown,
+): asserts value is MemoryDeletionPreview {
+  assertValid("MemoryDeletionPreview", memoryPreviewValidator, value);
+}
+export function assertMemoryDeletionConfirmation(
+  value: unknown,
+): asserts value is MemoryDeletionConfirmation {
+  assertValid("MemoryDeletionConfirmation", memoryConfirmationValidator, value);
+}
+export function assertMemoryDeletionStatus(value: unknown): asserts value is MemoryDeletionStatus {
+  assertValid("MemoryDeletionStatus", memoryDeletionStatusValidator, value);
 }

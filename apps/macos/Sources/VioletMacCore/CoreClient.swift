@@ -59,11 +59,15 @@ public struct GeneratedVioletCoreClient: VioletCoreClientPort {
   private let testTrace: TestTraceRecorder?
   private let serverURL: URL
   private let deviceToken: String
+  private let onMemoryCompletion: (@MainActor @Sendable (MemoryCompletion) -> Void)?
 
-  public init(serverURL: URL, deviceToken: String, testTrace: TestTraceRecorder? = nil) {
+  public init(serverURL: URL, deviceToken: String, testTrace: TestTraceRecorder? = nil,
+    onMemoryCompletion: (@MainActor @Sendable (MemoryCompletion) -> Void)? = nil
+  ) {
     self.testTrace = testTrace
     self.serverURL = serverURL
     self.deviceToken = deviceToken
+    self.onMemoryCompletion = onMemoryCompletion
     client = VioletProtocolClientFactory.make(
       serverURL: serverURL,
       deviceToken: deviceToken,
@@ -132,7 +136,8 @@ public struct GeneratedVioletCoreClient: VioletCoreClientPort {
               body,
               continuation: continuation,
               testTrace: testTrace,
-              requestId: requestId
+              requestId: requestId,
+              onMemoryCompletion: onMemoryCompletion
             )
             if let testTrace {
               try await testTrace.collectCore(coreURL: serverURL, deviceToken: deviceToken)
@@ -180,7 +185,8 @@ private func decodeChatStream(
   _ body: HTTPBody,
   continuation: AsyncThrowingStream<String, Error>.Continuation,
   testTrace: TestTraceRecorder?,
-  requestId: UUID
+  requestId: UUID,
+  onMemoryCompletion: (@MainActor @Sendable (MemoryCompletion) -> Void)?
 ) async throws -> String {
   var buffer = Data()
   var answer = ""
@@ -192,12 +198,12 @@ private func decodeChatStream(
       while let newline = buffer.firstIndex(of: 0x0A) {
         let line = buffer[..<newline]
         buffer.removeSubrange(...newline)
-        answer += try decodeChatLine(Data(line), continuation: continuation)
+        answer += try await decodeChatLine(Data(line), continuation: continuation, onMemoryCompletion: onMemoryCompletion)
       }
     }
 
     if !buffer.isEmpty {
-      answer += try decodeChatLine(buffer, continuation: continuation)
+      answer += try await decodeChatLine(buffer, continuation: continuation, onMemoryCompletion: onMemoryCompletion)
     }
     return answer
   } catch {
@@ -210,10 +216,11 @@ private func decodeChatStream(
   }
 }
 
-private func decodeChatLine(
+func decodeChatLine(
   _ data: Data,
-  continuation: AsyncThrowingStream<String, Error>.Continuation
-) throws -> String {
+  continuation: AsyncThrowingStream<String, Error>.Continuation,
+  onMemoryCompletion: (@MainActor @Sendable (MemoryCompletion) -> Void)? = nil
+) async throws -> String {
   guard !data.isEmpty else {
     return ""
   }
@@ -229,7 +236,11 @@ private func decodeChatLine(
     throw VioletCoreClientError.streamError(
       message: event.error?.message ?? "Violet Core realtime request failed."
     )
-  case "complete", "start":
+  case "complete":
+    let completion = try JSONDecoder().decode(MemoryCompletion.self, from: data)
+    await onMemoryCompletion?(completion)
+    return ""
+  case "start":
     return ""
   default:
     throw VioletCoreClientError.invalidResponse

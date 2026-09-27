@@ -8,6 +8,52 @@ import { InMemoryContextCheckpointRepository } from "./in-memory-context-checkpo
 import { InMemoryConversationLedger } from "./in-memory-conversation-ledger.js";
 
 describe("ChatService context assembly", () => {
+  it.each(["append", "complete"] as const)(
+    "does not emit complete when cancellation arrives during %s after persistence",
+    async (stage) => {
+      const ledger = new InMemoryConversationLedger();
+      const recovery = new RealtimeTurnFailureRecovery({ ledger });
+      const controller = new AbortController();
+      const service = createService(ledger, new RecordingModel(), recovery);
+      const request = { message: "Synthetic cancellation", requestId: "cancel-after-commit" };
+      const append = ledger.append.bind(ledger);
+      const complete = recovery.complete.bind(recovery);
+      const appendSpy = vi.spyOn(ledger, "append").mockImplementation(async (input) => {
+        const result = await append(input);
+        if (stage === "append" && input.role === "assistant") controller.abort();
+        return result;
+      });
+      const completeSpy = vi.spyOn(recovery, "complete").mockImplementation(async (...args) => {
+        await complete(...args);
+        if (stage === "complete") controller.abort();
+      });
+      try {
+        const events = await collect(service.stream(request, controller.signal));
+        expect(events.some((event) => event.type === "complete")).toBe(false);
+        expect(events.at(-1)?.type).toBe("error");
+        expect(await ledger.findByRequest(request.requestId, "assistant")).not.toBeNull();
+      } finally {
+        appendSpy.mockRestore();
+        completeSpy.mockRestore();
+        await recovery.stop();
+      }
+    },
+  );
+
+  it("checks cancellation again before completing an idempotent replay", async () => {
+    const ledger = new InMemoryConversationLedger();
+    const service = createService(ledger, new RecordingModel());
+    const request = { message: "Synthetic replay", requestId: "cancel-replay" };
+    await consume(service.stream(request));
+    const controller = new AbortController();
+    const iterator = service.stream(request, controller.signal)[Symbol.asyncIterator]();
+    expect((await iterator.next()).value?.type).toBe("start");
+    expect((await iterator.next()).value?.type).toBe("delta");
+    controller.abort();
+    expect((await iterator.next()).value?.type).toBe("error");
+    await iterator.return?.();
+  });
+
   it("uses complete turns from the active epoch and excludes them after thirty minutes", async () => {
     const ledger = new InMemoryConversationLedger();
     const model = new RecordingModel();

@@ -19,6 +19,77 @@ afterEach(async () => {
 });
 
 describe("backup envelope", () => {
+  const instanceId = "814bc7c4-bb69-4dfd-b06f-a07126292af2";
+
+  it("authenticates the instance and epoch and refuses an older or different instance before opening output", async () => {
+    const directory = await temporaryDirectory();
+    const inputPath = join(directory, "backup.vltbk");
+    const keys = generateBackupKeyPair();
+    await encryptBackupToFile(Readable.from([Buffer.from("PGDMP clean snapshot")]), {
+      outputPath: inputPath,
+      publicKey: keys.publicKey,
+      instanceId,
+      restoreEpoch: 3,
+    });
+    // A nonexistent parent proves no attempt to create plaintext precedes policy checks.
+    const absentOutput = join(directory, "absent", "restore.dump");
+    for (const restorePolicy of [
+      { instanceId, minimumRestoreEpoch: 4 },
+      { instanceId: "f3a9fd1a-b66f-46a2-a1dc-8d6fecc3afef", minimumRestoreEpoch: 0 },
+    ]) {
+      await expect(
+        decryptBackupToFile({
+          inputPath,
+          outputPath: absentOutput,
+          privateKey: keys.privateKey,
+          restorePolicy,
+        }),
+      ).rejects.toThrow("not permitted");
+    }
+    const outputPath = join(directory, "restore.dump");
+    expect(
+      await decryptBackupToFile({
+        inputPath,
+        outputPath,
+        privateKey: keys.privateKey,
+        restorePolicy: { instanceId, minimumRestoreEpoch: 3 },
+      }),
+    ).toMatchObject({ instanceId, restoreEpoch: 3, schemaVersion: 2 });
+    expect(await readFile(outputPath, "utf8")).toBe("PGDMP clean snapshot");
+    const bytes = await readFile(inputPath);
+    const tampered = Buffer.from(
+      bytes.toString("latin1").replace('"restoreEpoch":3', '"restoreEpoch":9'),
+      "latin1",
+    );
+    await writeFile(inputPath, tampered);
+    await expect(
+      decryptBackupToFile({
+        inputPath,
+        outputPath: absentOutput,
+        privateKey: keys.privateKey,
+        restorePolicy: { instanceId, minimumRestoreEpoch: 4 },
+      }),
+    ).rejects.toThrow(/authenticate|auth/i);
+  });
+
+  it("treats legacy backups as epoch zero and rejects them after deletion", async () => {
+    const directory = await temporaryDirectory();
+    const inputPath = join(directory, "legacy.vltbk");
+    const keys = generateBackupKeyPair();
+    await encryptBackupToFile(Readable.from([Buffer.from("legacy dump")]), {
+      outputPath: inputPath,
+      publicKey: keys.publicKey,
+    });
+    await expect(
+      decryptBackupToFile({
+        inputPath,
+        outputPath: join(directory, "absent", "restore.dump"),
+        privateKey: keys.privateKey,
+        restorePolicy: { instanceId, minimumRestoreEpoch: 1 },
+      }),
+    ).rejects.toThrow("not permitted");
+  });
+
   it("round-trips a chunked PostgreSQL dump", async () => {
     const directory = await temporaryDirectory();
     const encryptedPath = join(directory, "backup.vltbk");

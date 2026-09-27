@@ -248,6 +248,14 @@
         "type": {
           "const": "response.completed"
         },
+        "memoryChanges": {
+          "type": "array",
+          "items": { "$ref": "./memory.schema.json#/$defs/change" }
+        },
+        "memoryDeletionPreviewId": {
+          "type": "string",
+          "format": "uuid"
+        },
         "usage": {
           "$ref": "#/$defs/usage"
         }
@@ -284,7 +292,7 @@
           "$ref": "#/$defs/uuid"
         },
         "reason": {
-          "const": "user_intent"
+          "enum": ["user_intent", "memory_changed"]
         },
         "sequence": {
           "$ref": "#/$defs/sequence"

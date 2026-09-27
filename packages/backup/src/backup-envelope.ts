@@ -11,9 +11,10 @@ import {
   randomBytes,
   timingSafeEqual,
 } from "node:crypto";
-import { createReadStream } from "node:fs";
-import { type FileHandle, open, rm, stat } from "node:fs/promises";
-import { resolve } from "node:path";
+import { constants } from "node:fs";
+import { copyFile, type FileHandle, mkdtemp, open, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 
 const algorithm = "aes-256-gcm";
 const contentKeyLength = 32;
@@ -38,7 +39,9 @@ interface BackupHeader {
   readonly keyTag: string;
   readonly keyWrapAlgorithm: "AES-256-GCM";
   readonly recipientPublicKeyFingerprint: string;
-  readonly schemaVersion: 1;
+  readonly schemaVersion: 1 | 2;
+  readonly instanceId?: string;
+  readonly restoreEpoch?: number;
   readonly sourceFormat: "postgresql-custom";
   readonly wrappedKey: string;
 }
@@ -49,7 +52,14 @@ export interface BackupEncryptionResult {
   readonly plaintextBytes: number;
   readonly plaintextSha256: string;
   readonly publicKeyFingerprint: string;
-  readonly schemaVersion: 1;
+  readonly schemaVersion: 1 | 2;
+  readonly instanceId?: string;
+  readonly restoreEpoch: number;
+}
+
+export interface BackupRestorePolicy {
+  readonly instanceId: string;
+  readonly minimumRestoreEpoch: number;
 }
 
 export interface BackupKeyPair {
@@ -74,8 +84,13 @@ export async function encryptBackupToFile(
     readonly createdAt?: Date;
     readonly outputPath: string;
     readonly publicKey: string;
+    readonly instanceId?: string;
+    readonly restoreEpoch?: number;
   },
 ): Promise<BackupEncryptionResult> {
+  if (options.instanceId !== undefined || options.restoreEpoch !== undefined) {
+    validateEpoch(options.instanceId, options.restoreEpoch);
+  }
   const recipientPublicKey = importPublicKey(options.publicKey);
   const recipientPublicDer = exportPublicKey(recipientPublicKey);
   const { privateKey: ephemeralPrivateKey, publicKey: ephemeralPublicKey } =
@@ -105,7 +120,13 @@ export async function encryptBackupToFile(
     keyTag: wrapped.tag.toString("base64"),
     keyWrapAlgorithm: "AES-256-GCM",
     recipientPublicKeyFingerprint: publicKeyFingerprint,
-    schemaVersion: 1,
+    schemaVersion: options.instanceId === undefined ? 1 : 2,
+    ...(options.instanceId === undefined
+      ? {}
+      : {
+          instanceId: options.instanceId.toLowerCase(),
+          restoreEpoch: options.restoreEpoch as number,
+        }),
     sourceFormat: "postgresql-custom",
     wrappedKey: wrapped.ciphertext.toString("base64"),
   };
@@ -150,13 +171,38 @@ export async function encryptBackupToFile(
     await output.close();
     output = undefined;
 
+    // The server has only the public recovery key. Verify the complete file while the
+    // one-use data key is still in memory, then discard that key in finally.
+    const verification = await open(options.outputPath, "r");
+    try {
+      const prefix = await readExactly(verification, 0, magic.length + headerLengthSize);
+      const diskHeader = await readExactly(verification, prefix.length, headerBytes.length);
+      if (
+        !prefix.subarray(0, magic.length).equals(magic) ||
+        prefix.readUInt32BE(magic.length) !== headerBytes.length ||
+        !diskHeader.equals(headerBytes)
+      ) {
+        throw new Error("backup header read-back verification failed");
+      }
+      const checked = await readContent(verification, header, headerBytes, dataKey);
+      if (
+        checked.plaintextSha256 !== digest.toString("hex") ||
+        checked.plaintextBytes !== plaintextBytes
+      ) {
+        throw new Error("backup read-back verification failed");
+      }
+    } finally {
+      await verification.close();
+    }
     return {
       createdAt,
       encryptedBytes: position,
       plaintextBytes,
       plaintextSha256: digest.toString("hex"),
       publicKeyFingerprint,
-      schemaVersion: 1,
+      schemaVersion: header.schemaVersion,
+      ...(header.instanceId === undefined ? {} : { instanceId: header.instanceId }),
+      restoreEpoch: header.restoreEpoch ?? 0,
     };
   } catch (error) {
     await output?.close();
@@ -173,13 +219,16 @@ export async function decryptBackupToFile(options: {
   readonly inputPath: string;
   readonly outputPath: string;
   readonly privateKey: string;
+  readonly restorePolicy?: BackupRestorePolicy;
 }): Promise<BackupEncryptionResult> {
   if (resolve(options.inputPath) === resolve(options.outputPath)) {
     throw new Error("backup input and output paths must differ");
   }
 
-  const inputStats = await stat(options.inputPath);
-  const input = await open(options.inputPath, "r");
+  // Two passes use a private ciphertext copy so replacing/mutating the supplied file
+  // cannot change what is emitted after authentication. No plaintext is staged.
+  const directory = await mkdtemp(join(tmpdir(), "violet-restore-"));
+  let input: FileHandle | undefined;
   let output: FileHandle | undefined;
   let ownsOutput = false;
   let dataKey: Buffer | undefined;
@@ -187,6 +236,10 @@ export async function decryptBackupToFile(options: {
   let wrappingKey: Buffer | undefined;
 
   try {
+    const snapshotPath = join(directory, "ciphertext");
+    await copyFile(options.inputPath, snapshotPath, constants.COPYFILE_EXCL);
+    input = await open(snapshotPath, "r");
+    const inputStats = await input.stat();
     const prefix = await readExactly(input, 0, magic.length + headerLengthSize);
     if (!timingSafeEqual(prefix.subarray(0, magic.length), magic)) {
       throw new Error("backup magic is invalid");
@@ -232,62 +285,104 @@ export async function decryptBackupToFile(options: {
       decodeBase64(header.keyNonce, "key nonce", gcmNonceLength),
       decodeBase64(header.keyTag, "key tag", gcmTagLength),
     );
-    const contentDecipher = createDecipheriv(
-      algorithm,
-      dataKey,
-      decodeBase64(header.contentNonce, "content nonce", gcmNonceLength),
-    );
-    contentDecipher.setAAD(headerBytes);
-    contentDecipher.setAuthTag(trailer.subarray(0, gcmTagLength));
-
+    const result = await readContent(input, header, headerBytes, dataKey);
+    if (options.restorePolicy) {
+      const policy = options.restorePolicy;
+      validateEpoch(policy.instanceId, policy.minimumRestoreEpoch);
+      if (
+        (header.instanceId !== undefined &&
+          header.instanceId !== policy.instanceId.toLowerCase()) ||
+        result.restoreEpoch < policy.minimumRestoreEpoch
+      ) {
+        throw new Error("backup instance or restore epoch is not permitted");
+      }
+    }
+    // Authentication, full integrity and the device's floor all precede output creation.
     output = await open(options.outputPath, "wx", 0o600);
     ownsOutput = true;
-    let outputPosition = 0;
-    let plaintextBytes = 0;
-    const plaintextHash = createHash("sha256");
-    const ciphertext = createReadStream(options.inputPath, {
-      end: trailerOffset - 1,
-      start: ciphertextOffset,
-    });
-    for await (const value of ciphertext) {
-      const plaintext = contentDecipher.update(Buffer.from(value));
-      plaintextHash.update(plaintext);
-      plaintextBytes += plaintext.length;
-      outputPosition = await writeAll(output, plaintext, outputPosition);
-    }
-    const finalPlaintext = contentDecipher.final();
-    plaintextHash.update(finalPlaintext);
-    plaintextBytes += finalPlaintext.length;
-    await writeAll(output, finalPlaintext, outputPosition);
-
-    const digest = plaintextHash.digest();
-    const expectedDigest = trailer.subarray(gcmTagLength, gcmTagLength + hashLength);
-    const expectedSize = trailer.readBigUInt64BE(gcmTagLength + hashLength);
-    if (!timingSafeEqual(digest, expectedDigest) || BigInt(plaintextBytes) !== expectedSize) {
-      throw new Error("backup plaintext integrity check failed");
-    }
+    await readContent(input, header, headerBytes, dataKey, output);
     await output.sync();
     await output.close();
     output = undefined;
 
-    return {
-      createdAt: header.createdAt,
-      encryptedBytes: inputStats.size,
-      plaintextBytes,
-      plaintextSha256: digest.toString("hex"),
-      publicKeyFingerprint: header.recipientPublicKeyFingerprint,
-      schemaVersion: 1,
-    };
+    return result;
   } catch (error) {
     await output?.close();
     if (ownsOutput) await rm(options.outputPath, { force: true });
     throw error;
   } finally {
-    await input.close();
+    await input?.close();
+    await rm(directory, { recursive: true, force: true });
     dataKey?.fill(0);
     sharedSecret?.fill(0);
     wrappingKey?.fill(0);
   }
+}
+
+async function readContent(
+  input: FileHandle,
+  header: BackupHeader,
+  headerBytes: Buffer,
+  key: Buffer,
+  output?: FileHandle,
+): Promise<BackupEncryptionResult> {
+  const size = (await input.stat()).size;
+  const start = magic.length + headerLengthSize + headerBytes.length;
+  const end = size - trailerLength;
+  const trailer = await readExactly(input, end, trailerLength);
+  if (!timingSafeEqual(trailer.subarray(gcmTagLength + hashLength + 8), trailerMagic)) {
+    throw new Error("backup trailer is invalid");
+  }
+  const decipher = createDecipheriv(
+    algorithm,
+    key,
+    decodeBase64(header.contentNonce, "content nonce", gcmNonceLength),
+  );
+  decipher.setAAD(headerBytes);
+  decipher.setAuthTag(trailer.subarray(0, gcmTagLength));
+  const hash = createHash("sha256");
+  let plaintextBytes = 0;
+  for (let position = start; position < end; ) {
+    const ciphertext = await readExactly(input, position, Math.min(64 * 1024, end - position));
+    position += ciphertext.length;
+    const plaintext = decipher.update(ciphertext);
+    hash.update(plaintext);
+    if (output) await writeAll(output, plaintext, plaintextBytes);
+    plaintextBytes += plaintext.length;
+    plaintext.fill(0);
+  }
+  const final = decipher.final();
+  hash.update(final);
+  if (output) await writeAll(output, final, plaintextBytes);
+  plaintextBytes += final.length;
+  final.fill(0);
+  const digest = hash.digest();
+  if (
+    !timingSafeEqual(digest, trailer.subarray(gcmTagLength, gcmTagLength + hashLength)) ||
+    BigInt(plaintextBytes) !== trailer.readBigUInt64BE(gcmTagLength + hashLength)
+  )
+    throw new Error("backup plaintext integrity check failed");
+  return {
+    createdAt: header.createdAt,
+    encryptedBytes: size,
+    plaintextBytes,
+    plaintextSha256: digest.toString("hex"),
+    publicKeyFingerprint: header.recipientPublicKeyFingerprint,
+    schemaVersion: header.schemaVersion,
+    ...(header.instanceId === undefined ? {} : { instanceId: header.instanceId }),
+    restoreEpoch: header.restoreEpoch ?? 0,
+  };
+}
+
+function validateEpoch(instanceId: unknown, epoch: unknown): void {
+  if (
+    typeof instanceId !== "string" ||
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(instanceId) ||
+    typeof epoch !== "number" ||
+    !Number.isSafeInteger(epoch) ||
+    epoch < 0
+  )
+    throw new Error("backup instance or restore epoch is invalid");
 }
 
 function encryptAesGcm(
@@ -386,10 +481,14 @@ function parseHeader(value: Buffer): BackupHeader {
     "sourceFormat",
     "wrappedKey",
   ];
+  if (parsed["schemaVersion"] === 2) {
+    expectedKeys.push("instanceId", "restoreEpoch");
+    validateEpoch(parsed["instanceId"], parsed["restoreEpoch"]);
+  }
   if (
     Object.keys(parsed).length !== expectedKeys.length ||
     expectedKeys.some((key) => !(key in parsed)) ||
-    parsed["schemaVersion"] !== 1 ||
+    (parsed["schemaVersion"] !== 1 && parsed["schemaVersion"] !== 2) ||
     parsed["contentAlgorithm"] !== "AES-256-GCM" ||
     parsed["keyWrapAlgorithm"] !== "AES-256-GCM" ||
     parsed["keyDerivation"] !== "X25519-HKDF-SHA256" ||
