@@ -1,9 +1,9 @@
 # Release 1D：Violet Continuity 最终规格
 
-> 状态：方案已批准；Phase 1 复盘后的运行时修复与精简已合入双主线并重新部署；
-> Phase 2 开发准备完成，Phase 3 未开始。本文是 Release 1D 的产品与技术事实源。
-> 实施顺序见 [任务拆分](./release-1d-tasks.md)，放行条件见
-> [验收清单](./release-1d-acceptance.md)。
+> 状态：方案已批准；Phase 1/2 已验收并合入双主线、完成部署与 Mac 激活，
+> Phase 3 未开始。本文定义 Release 1D 三个阶段的产品与技术合同，不把目标视为已实现。
+> 实施顺序见 [任务拆分](./release-1d-tasks.md)，实际交付证据与剩余门禁见
+> [验收清单](./release-1d-acceptance.md) 2.26—2.27。
 
 ## 1. 目标
 
@@ -23,6 +23,9 @@ Violet 官方恢复流程复活。
 ## 2. 范围
 
 ### 2.1 本次交付
+
+以下覆盖整个 Release 1D。普通轮次自动提取、自动记忆设置及其评估属于 Phase 3；
+Phase 2 已交付明确记忆、检索与治理闭环。
 
 - PostgreSQL 加密事件账本继续作为唯一原始事实源。
 - 原子长期记忆：内容、来源、时间、类型、版本、敏感级别和状态。
@@ -171,6 +174,8 @@ Realtime 的同一逻辑 turn 必须按规范化 ID 串行持久化，并由单�
 - `memory_jobs`：不含正文的异步提取任务；
 - `deletion_tombstones`：不含正文和语义的最小删除记录。
 
+`memory_jobs` 是 Phase 3 待建结构，其余状态已由 Phase 1/2 实现。
+
 所有语义正文使用现有 `EnvelopeCipher` 加密。来源引用不重复保存原文，只保存用户事件 ID
 和 UTF-8 byte offset；Core 解密原事件后必须逐字验证。
 
@@ -205,6 +210,8 @@ revision 不一致时完全停用。
 
 ### 5.4 自动记忆开关
 
+本节是 Phase 3 合同，目前尚未实现；按第 11 节通过验收并获准上线后才默认开启。
+
 - 默认开启。
 - 关闭只停止新增，不删除已有记忆。
 - 关闭期间的轮次在重开后不补提取。
@@ -228,6 +235,8 @@ revision 不一致时完全停用。
 ## 7. 查看、纠正与删除
 
 ### 7.1 Mac 记忆窗口
+
+Phase 2 已实现明确记忆的查看与治理；下列自动来源和自动记忆开关留到 Phase 3。
 
 菜单栏浮窗提供一个记忆图标，打开独立窗口。窗口包含：
 
@@ -274,6 +283,8 @@ revision 不一致时完全停用。
 
 ## 9. API 与事件
 
+自动记忆设置 API 属于 Phase 3，其余管理接口已由 Phase 2 交付。
+
 在现有 `/v1` 协议中增加最小管理面：
 
 - 列出记忆和读取单条来源；
@@ -301,7 +312,7 @@ revision 不一致时完全停用。
 - 复用现有 PostgreSQL、DeepSeek `deepseek-flash`（DeepSeek-V4.1-Flash）、Qwen、
   TOS、Mac Keychain、OpenAPI 和测试记录器。
 - 不新增 npm/Swift 依赖、外部账号或凭证；现有 `pgvector` 扩展不参与 1D 检索。
-- Swift 实现和验收前需由用户接受本机 Xcode license；规格本身不受影响。
+- Swift 构建要求本机 Xcode license 已接受；本机已完成，历史证据见验收清单 2.1。
 - 发布顺序是：统一上下文 → 明确记忆与治理 → 自动提取。
 - 自动提取验收完成前保持关闭；通过后才设为默认开启。
 - 可分别关闭自动提取、记忆注入和 checkpoint；已写记忆仍可查看、纠正和删除。

@@ -1,10 +1,11 @@
 # Violet 工程路线
 
 > 状态：执行路线基线。阶段按能力成熟度推进，不按产品类型限制 Violet。本文中的顺序是依赖顺序，不是未经评估的工期承诺。
-> 当前事实：1A/1B 已交付，1C/1C.1 已完成产品验收与源码工程收尾；1D Phase 1
-> 第五轮最终门禁修复已合入双主线并重新部署，Phase 2 可开始。当前状态分别见
+> 当前事实：1A/1B 已交付，1C/1C.1 已完成产品验收与源码工程收尾；1D Phase 1/2
+> 已合入双主线并部署，Mac 激活与生产备份官方隔离恢复通过，Phase 3 未开始。证据见
 > [Release 1C 验收](./release-1c-acceptance.md)和
-> [Release 1D 验收](./release-1d-acceptance.md)。后续章节的建设内容是目标，不是现有能力。
+> [Release 1D 验收](./release-1d-acceptance.md) 2.26—2.27。
+> 后续章节的建设内容是目标，不是现有能力。
 
 ## 1. 路线目标
 
@@ -34,7 +35,7 @@
 - **证据优先**：模型自信不是完成证明，交付必须经过独立验证。
 - **安全默认拒绝扩大权限**：权限、费用、隐私和不可逆影响必须经过确定性门禁。
 - **纵向交付**：每个阶段内版本都可独立使用；后续版本停止时，已有系统仍然有效。
-- **线性 Git 历史**：保护主分支，变更通过短分支、PR、审查和可回滚提交进入。
+- **可追溯 Git 历史**：保护主分支，变更通过短分支、PR、审查和可回滚提交进入。
 
 ## 3. 目标工程结构
 
@@ -43,24 +44,28 @@ Violet/
 ├── apps/
 │   ├── macos/                 Swift 原生身体与本机网关
 │   ├── dev-cli/               1A 文字入口与长期运维诊断工具
-│   └── browser-extension/     Sprinkle 演化后的浏览器增强感官
+│   └── browser-extension/     未来：Sprinkle 演化后的浏览器增强感官
 ├── services/
-│   ├── core/                  云端接入层、应用层与领域核心
-│   └── worker/                沙箱、Agent、验证、部署与运维
+│   ├── core/                  云端接入、对话、记忆与治理
+│   ├── backup/                加密备份、上传、清理与官方恢复
+│   └── worker/                未来：沙箱、Agent、验证、部署与运维
 ├── packages/
-│   ├── protocol/              JSON Schema 事实源、OpenAPI 与生成 SDK
+│   ├── protocol/              JSON Schema 事实源、OpenAPI 与生成类型
+│   ├── sdk/                   Core 客户端
 │   ├── domain/                纯 TypeScript 领域模型
 │   ├── policy/                确定性权限与安全策略
-│   ├── memory/                记忆写入、检索与评估
-│   └── evals/                 对话、记忆、任务和交付评估
+│   ├── crypto/                应用层信封加密
+│   └── backup/                备份格式与认证恢复纪元
 ├── infra/
 │   ├── compose/               可迁移的本地与 Devbox 部署
 │   ├── migrations/            PostgreSQL 迁移
-│   ├── backup/                导出、备份与恢复
 │   └── observability/         日志、指标与追踪
 ├── docs/
-└── scripts/
+└── scripts/                  生成、部署、备份、测试记录与评估入口
 ```
+
+记忆实现在 `services/core/src/memory/`，评估复用其中的 fixtures、测试与
+`scripts/eval-memory.mjs`；不要求新增 memory/evals 包。
 
 ## 4. 第一阶段：Violet 出生
 
@@ -93,7 +98,7 @@ Violet/
 
 **建设内容**
 
-- Git 仓库已在 Mac 初始化，内部 `bits` 与 GitHub `origin` 保存相同的 `main` 提交；Devbox 在 `bits` 上使用短分支和 MR 进入受保护主分支，合并后的确定提交同步到 GitHub 可迁移镜像，Mac 与 Devbox 使用独立克隆。
+- Git 仓库已在 Mac 初始化，内部 `bits` 与 GitHub `origin` 保存共同的源码提交并核对内容树一致；两个远端的合并提交可以不同。Devbox 在 `bits` 上使用短分支和 MR 进入受保护主分支，发布源码同步到 GitHub 可迁移镜像，Mac 与 Devbox 使用独立克隆。
 - 建立 pnpm workspace 和 Swift 工程边界。
 - 建立 `apps/dev-cli`，只通过生成 SDK 和 SSH 隧道进行流式文字对话、健康检查与诊断，不直接访问数据库。
 - 建立 `packages/protocol`：JSON Schema 2020-12 是数据与事件结构的唯一事实源，OpenAPI 3.1 引用这些 Schema 描述 HTTP API。
@@ -137,9 +142,13 @@ Violet/
 
 **回滚**
 
+以下保留 1A 阶段的回滚背景；当前部署必须遵守
+[Release 1D 验收](./release-1d-acceptance.md) 2.25—2.27 的迁移与恢复约束。
+
 - 每次数据库迁移提供向前修复方案和备份恢复说明。
-- Core 镜像保留上一健康版本；失败时回滚镜像并恢复兼容数据库快照。
-- 回滚不得恢复已删除内容；恢复流程必须先应用删除墓碑和密钥注册表状态。
+- Core 镜像保留兼容当前迁移和恢复纪元的健康版本。
+- 回滚不得恢复已删除内容；当前 1D 使用认证备份纪元与 Mac Keychain 最低纪元，
+  不建立逐记录密钥注册表，不能回退到不理解 `0003` 的旧程序或删除前快照。
 
 #### Release 1B：Violet Presence
 
@@ -271,7 +280,8 @@ Release 1B 必须保留全局快捷键作为可靠入口。语音唤醒候选必
 
 > 当前实现已完成产品验收。Natural Pointing 已收敛为完整单屏截图、冻结鼠标坐标、用户原问题和
 > 一次 DeepSeek 调用；只读问答不再使用 OCR、目标框、颜色或位置规则二次判定。
-> 最新代码、部署和验证结果以 [验收状态](./release-1c-acceptance.md) 为准。
+> 视觉证据见 [1C 验收](./release-1c-acceptance.md)，当前部署见
+> [1D 验收](./release-1d-acceptance.md)。
 
 **用户可获得**
 
@@ -319,8 +329,8 @@ Release 1B 必须保留全局快捷键作为可靠入口。语音唤醒候选必
 
 #### Release 1D：Violet Continuity
 
-> 当前状态：Phase 1 复盘后的运行时修复与精简已合入双主线并重新部署。
-> Phase 2 开发准备完成，Phase 3 尚未开始。
+> 当前状态：Phase 1/2 已完成验收、提交与部署，Mac 激活及官方隔离恢复通过。
+> Phase 3 自动提取与自动记忆开关尚未实现。
 
 **用户可获得**
 
@@ -333,10 +343,12 @@ Violet 跨关闭、重启、文字和语音保持同一身份，能基于可追�
   有界 `memory_summary` 和单一滚动 `ContextCheckpoint`。
 - 文字和语音统一通过 `ContextAssembler`，内部 epoch 在 Core 重启或连续 30 分钟
   无有效用户输入后结束。
-- 明确记住和纠正同步完成；普通完成轮次异步提取，不处理取消或部分语音。
+- Phase 2 明确记住和纠正同步完成；Phase 3 将增加普通完成轮次异步提取，
+  不处理取消或部分语音。
 - 首版使用一个 `recall_memory` 工具完成规范化文本与时间检索；只有验收召回率不达标
   且失败证据指向检索时，才单独评估向量检索。
-- Mac 提供独立记忆窗口、近期变化、来源追溯、纠正、删除预览和自动记忆开关。
+- Mac 已提供独立记忆窗口、近期变化、来源追溯、纠正、删除预览和清空；
+  自动记忆开关留在 Phase 3。
 - 删除完整来源轮次并立即传播到记忆、summary、checkpoint、任务和缓存；模型只提议
   目标，Core 解析真实 ID，用户确认后执行。
 - 备份携带恢复纪元；Mac Keychain 保存最低允许纪元，Violet 官方恢复拒绝旧备份。
@@ -346,6 +358,8 @@ Violet 跨关闭、重启、文字和语音保持同一身份，能基于可追�
   [Release 1D 验收](./release-1d-acceptance.md)。
 
 **验收**
+
+以下是 1D 全部阶段的门槛；Phase 2 已有证据，自动提取指标仍待 Phase 3 验收。
 
 - 明确记住成功率 100%；自动记忆精确率不低于 95%、召回率不低于 80%。
 - 明确历史 Top-5 召回率不低于 90%；本地检索 p95 不超过 300 ms。
@@ -357,8 +371,8 @@ Violet 跨关闭、重启、文字和语音保持同一身份，能基于可追�
 **回滚**
 
 - 派生记忆、摘要和 checkpoint 可由未删除事件与来源关系重建。
-- 可分别关闭自动记忆、记忆注入和 checkpoint；最低恢复纪元、删除墓碑和已失效版本
-  不得回滚。
+- 当前可分别关闭记忆注入和 checkpoint；Phase 3 增加自动记忆开关。最低恢复纪元、
+  删除墓碑和已失效版本不得回滚。
 
 #### Release 1E：Violet Agency
 
@@ -481,10 +495,10 @@ Sprinkle 作为浏览器结构化感官接入 Mac 网关。浏览器中获得 DO
 当前仓库可执行的命令：
 
 ```bash
-pnpm check:ci
-pnpm macos:test
-pnpm macos:app
-docker compose -f infra/compose/compose.yaml config
+fnm exec --using=.node-version -- pnpm test:record pnpm check:ci
+fnm exec --using=.node-version -- pnpm macos:test
+fnm exec --using=.node-version -- pnpm test:record pnpm macos:app
+fnm exec --using=.node-version -- pnpm test:record docker compose -f infra/compose/compose.yaml config --quiet
 ```
 
 现有测试包含在 Vitest/Swift Testing 中，没有单独的 `test:integration` 或 `test:e2e`

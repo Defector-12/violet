@@ -6,6 +6,8 @@ data_dir=${VIOLET_DATA_DIR:-/data00/violet}
 runtime_secrets_dir=${VIOLET_RUNTIME_SECRETS_DIR:-/dev/shm/violet}
 version=${VIOLET_VERSION:-0.1.0-dev}
 realtime_provider=${VIOLET_REALTIME_PROVIDER:-qwen-audio}
+memory_injection_enabled=${VIOLET_MEMORY_INJECTION_ENABLED:-true}
+context_checkpoint_enabled=${VIOLET_CONTEXT_CHECKPOINT_ENABLED:-true}
 pipeline_asr_model=${PIPELINE_ASR_MODEL:-paraformer-realtime-v2}
 pipeline_tts_model=${PIPELINE_TTS_MODEL:-cosyvoice-v3-flash}
 pipeline_tts_voice=${PIPELINE_TTS_VOICE:-longanyang}
@@ -24,6 +26,8 @@ run_compose() {
     sudo -n env \
       VIOLET_DATA_DIR="$data_dir" \
       VIOLET_REALTIME_PROVIDER="$realtime_provider" \
+      VIOLET_MEMORY_INJECTION_ENABLED="$memory_injection_enabled" \
+      VIOLET_CONTEXT_CHECKPOINT_ENABLED="$context_checkpoint_enabled" \
       VIOLET_RUNTIME_SECRETS_DIR="$runtime_secrets_dir" \
       VIOLET_VERSION="$version" \
       PIPELINE_ASR_MODEL="$pipeline_asr_model" \
@@ -33,6 +37,8 @@ run_compose() {
   else
     VIOLET_DATA_DIR="$data_dir" \
     VIOLET_REALTIME_PROVIDER="$realtime_provider" \
+    VIOLET_MEMORY_INJECTION_ENABLED="$memory_injection_enabled" \
+    VIOLET_CONTEXT_CHECKPOINT_ENABLED="$context_checkpoint_enabled" \
     VIOLET_RUNTIME_SECRETS_DIR="$runtime_secrets_dir" \
     VIOLET_VERSION="$version" \
     PIPELINE_ASR_MODEL="$pipeline_asr_model" \
