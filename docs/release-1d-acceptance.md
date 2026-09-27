@@ -10,7 +10,9 @@
 > 本地修复版已打包。用户已确认来源显示、键盘/VoiceOver、取消删除均正常（2.22）。
 > 三项短验收已通过：重启后文字召回、跨模态纠正、完整语音确认及删除后问答与用户体感一致（2.24）。
 > Phase 2 真人验收缺口已补齐，最终构建及打包验签通过；交付结论与迁移/回滚边界见 2.25。
-> 未提交或部署。
+> Phase 2 已合入双主线，Core、0003 迁移和新版备份调度已部署（2.26）。
+> 签名 Mac App 已准备；本机恢复保护初始化、生产备份的官方隔离恢复和 App 启动
+> 待普通终端完成，Agent 沙箱写入失败已留证，不能视为全部部署验收完成。
 > Phase 3 未开始。
 > 本文记录 Release 1D 的实际版本、失败、证据和剩余门禁。规格见
 > [最终规格](./release-1d-spec.md)，实施顺序见 [任务拆分](./release-1d-tasks.md)。
@@ -1415,6 +1417,94 @@ Mac 首音频为 01:39:37.164，收到 84,480 字节，即 **1.760 秒** PCM。
 P0—P2 自检问题。** 最终处置保留全部初始发现、复核反例和失败尝试；不把模型置信度
 或单纯提示检查当作放行依据。代码、签名 App、迁移/回滚交接均可审阅，
 无需用户重复真人故事。尚未提交、合并或部署；Phase 3 及全 Release 发布门禁继续独立保留。
+
+### 2.26 Phase 2 提交、云端部署与 Mac 激活交接（2026-09-27）
+
+用户明确要求“执行版本提交与部署”。发布前核对 **231 个源码文件**与 2.25 的
+验收指纹完全一致，Mac 二进制 hash 不变；run
+`6d2057d4-bca7-40ea-9f23-edafa2d2f7e9`。本轮没有重复真人故事或付费模型调用，
+累计文字费用仍为 8.958104/10 元。
+
+**提交与门禁。** 实现提交 `b3fa62c7bab9e3112f725e5882d076f759381ece`：
+
+- Codebase [!33](https://code.byted.org/user/violet/merge_requests/33) 合入
+  `a98036299850698edc71cb0b1ea73681329128e8`。
+- GitHub [#16](https://github.com/Defector-12/violet/pull/16) 合入
+  `e18e602ea23077bcb7c9c42ebb3464826ba91704`。
+- 两条主线与实现提交 tree 均为 `8ba93fccaf319c4aea4deb9b8813d080ef1bbd83`，
+  三方无内容差异，run `d9af3f31-cd12-49d9-8a93-1d02040e1cee`。
+- 提交后重新生成 TypeScript/Swift 输入且相对 HEAD 无差异，run
+  `36d3fdcc-2f1a-42cd-a364-853d692a848b`；确定提交构建全部通过，run
+  `838e2aed-abe1-4f5c-9575-8ac37166d249`。550 项 TS/脚本和 116 项 Mac
+  回归继续引用源码一致的 2.25，不冒称本轮重跑全量。
+- Codebase 自动门禁放行；Pipeline Overview 明确没有流水线配置，Aime 为 `neutral`；
+  GitHub 没有配置状态检查。默认 review 规则按既有个人仓库流程记录
+  `no_need_for_review`，run `cd8e300f-3c6f-40e6-9bda-86c87ca0c91d`。
+  合并队列接口返回 AccessDenied（`c992ff1a-0730-4a5b-bd89-b5007f0faa12`），
+  MR 状态确认无需队列且全部门禁可合并后，普通 merge 接口成功，run
+  `ccee95e5-8d68-4ac6-9510-1398216171c9`。没有修改保护规则。
+
+**实际部署。** 运行版本为 **`b3fa62c-release-1d-phase2`**，目录
+`/data00/home/baojunhan/violet-release-b3fa62c-release-1d-phase2`。
+
+| 产物 | SHA-256 |
+| --- | --- |
+| 发布归档，含已提交源码及 467 个运行时产物指纹 | `8802d594f8aef3b9a0416c2adeb783d18eff328631e487786277b8f8dff9da80` |
+| 运行中 Core 镜像 | `82409333e0bd71c4cdb88029a058f3a3edc63c80ad946a67966dc96e5e91d098` |
+| 最终 backup / backup-upload 镜像 | `534b98904a1b6438f46fd987b2aaaae836e2eaa98f06cd4d13640e1f0cca91c0` |
+| Mac 主二进制 | `2accc186f2e3cc65db69430f2f687f737a428fa3a3d991fd515275f2bdbd4b7f` |
+
+先暂停旧调度和 Core，生成迁移前 schema 1 加密备份
+`20260927T032704Z-75c1a5b6-b0e3-494b-8e4f-4e5cd06b48fb.vltbk`，
+密文 hash `66a735453a18d01c5456f7e13052ef77563300f2ee814b1dd1f4da8c44bd27bf`。
+随后向前应用 `0003_explicit_memory.sql`，更新 Core 及迁移镜像标签。
+迁移前后 `conversation_events` 都为 **1,113 条**；未写入合成生产记忆或执行生产删除。
+
+首次候选构建被原 `.dockerignore` 的 dist 排除规则阻止，run
+`7266cad7-cfa1-4c6f-90d7-b9288c659359`；仅在发布构建目录放行已核验 dist 后，
+Core/backup 模块加载通过，run `7960e478-0a07-428f-a578-1dcf4303311b`。
+迁移及 Core 启动成功后，备份因本地产物权限只允许 node 用户读取而失败：
+实际备份容器以宿主机 UID 执行，run `f841dcd5-4cc3-4e54-bd68-77e559de0619`。
+保留新版 Core，未回退数据库；修正备份镜像中程序文件的读取/目录遍历权限，
+以实际部署 UID 验证加载后，备份和调度交接成功，run
+`21591e3c-9221-49ec-abd7-af64df97ed7d`。两次发布失败均保留。
+
+新版 schema 2 备份为
+`20260927T032842Z-beae0bc2-63c6-4ea4-9fef-343449ecab1e.vltbk`，
+密文 hash `255774da547e54a97054d26383064141908a5a76bf0e10504592475aaa8826d4`；
+绑定实际实例 `2938b3dd-6781-49cd-8b93-ab9e74f22ac2`、`restoreEpoch = 0`，
+已上传 TOS 并通过 metadata、重新下载的完整密文 hash 校验。
+48 份旧 `/data00/home/baojunhan/violet-data/backups` 受管备份移入当前
+`/data00/violet/backups`，旧目录剩余 `.vltbk` 为 0。旧副本未因本次迁移被删除；
+后续真实删除的清理由同一目录和 TOS 受管前缀执行。
+
+cron 已指向本次发布目录与实际 `/data00/violet` 数据目录：每日 03:17 备份、
+每分钟 `--cleanup-only`。清理入口执行成功，当前无待清理删除记录，cron 日志为
+0 字节；不将本次空队列检查宣称为生产删除清理实测。
+
+**部署后验证。** `506f1924-f173-4354-9e41-2b586d155749` 对比运行中 Core、
+domain/policy/crypto/protocol、Schema、迁移及 backup 两个目录，全部与本地产物
+hash 相同。使用 Mac Keychain 设备凭据经 SSH 隧道只读访问，健康 `ok`、认证状态
+`ready`，记忆接口返回实际实例、revision/restoreEpoch 均为 0、记忆数为 0。
+`c2fbbbf7-8d1b-48db-8eca-043349a2b5d8` 确认 Core `healthy`、零重启，
+checkpoint 与记忆注入开启、模型 `deepseek-flash`、1,113 条事件及两条正确调度。
+
+**尚待本机完成。** App 已严格验签，run
+`41d0a991-c7c1-4ca3-962e-d4aaff9adb5e`，但本轮尚未启动。实际生产实例的
+Keychain 最低恢复纪元尚无记录（`9f991098-7360-4a63-8188-f3ecce7271a0`）；
+初始化被 Agent 沙箱拒绝创建
+`~/Library/Application Support/Violet/restore-locks`，失败 run
+`719c894d-0763-445c-bdbe-58d67868d90a`。未绕过该限制，也未发出删除请求。
+
+普通终端执行仓库内 `.local-acceptance/phase2-finish-mac.mjs` 可完成剩余步骤：
+校验 App/helper hash、读取当前生产纪元、写入并回读 Keychain、经官方入口解密上述
+生产备份、恢复到唯一命名的本地隔离库并核对 1,113 条事件与 `0003`、清除临时库
+和明文 dump、启动签名 App。每次执行建立独立 test-run；脚本语法检查通过
+（`a60875b8-a1fb-4439-969d-5067285afff7`），**其实际执行尚未完成**。
+未完成前不能宣称本轮生产备份的官方恢复或 Mac 激活已通过。
+
+回滚继续遵守 2.25：保留 `0003` 及所有单调纪元，需要时仅关闭记忆注入；
+不得退回不理解恢复纪元的 Phase 1 程序。Phase 3 未开始。
 
 ## 3. P0：事实与来源
 
