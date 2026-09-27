@@ -1,11 +1,12 @@
 import type { ModelGateway, ModelRequest, ModelStreamEvent } from "@violet/domain";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { ContextAssembler } from "../conversation/context-assembler.js";
 import { ContextEpochManager } from "../conversation/context-epoch-manager.js";
 import { InMemoryContextCheckpointRepository } from "../conversation/in-memory-context-checkpoint-repository.js";
 import { InMemoryConversationLedger } from "../conversation/in-memory-conversation-ledger.js";
 import { createPipelineContextAssembler } from "../conversation/pipeline-context.js";
+import type { MemoryService } from "../memory/memory-service.js";
 import {
   type DashScopeRealtimeMessage,
   type DashScopeRealtimeTransport,
@@ -19,7 +20,7 @@ describe("PipelineRealtimeConversationPort", () => {
     let observedHeaders: Readonly<Record<string, string>> | undefined;
     const port = new PipelineRealtimeConversationPort({
       apiKey: "test-dashscope-key",
-      assembleContext: async (input) => [input.currentMessage],
+      assembleContext: async (input) => ({ messages: [input.currentMessage] }),
       asrModel: "paraformer-realtime-v2",
       createAsrTransport: (url, headers) => {
         observedUrl = url;
@@ -217,7 +218,14 @@ describe("PipelineRealtimeConversationPort", () => {
     ]);
     const model = new StreamingModelGateway();
     const assemblyRequests: ModelRequest[] = [];
-    const generatedIds = ["asr-task", "response-1", "tts-task"];
+    const transports = [
+      tts,
+      new FakeTransport([
+        jsonEvent("task-started", "tts-task-2"),
+        jsonEvent("task-finished", "tts-task-2"),
+      ]),
+    ];
+    const generatedIds = ["asr-task", "response-1", "tts-task", "response-2", "tts-task-2"];
     const port = new PipelineRealtimeConversationPort({
       apiKey: "test-dashscope-key",
       asrModel: "paraformer-realtime-v2",
@@ -230,10 +238,10 @@ describe("PipelineRealtimeConversationPort", () => {
           requestId: input.requestId,
         };
         assemblyRequests.push(request);
-        return request.messages;
+        return { messages: request.messages, memoryRevision: assemblyRequests.length + 6 };
       },
       createAsrTransport: () => asr,
-      createTtsTransport: () => tts,
+      createTtsTransport: () => transports.shift() ?? new FakeTransport([]),
       generateId: () => generatedIds.shift() ?? "unexpected-id",
       modelGateway: model,
       ttsModel: "cosyvoice-v3-flash",
@@ -250,7 +258,10 @@ describe("PipelineRealtimeConversationPort", () => {
     const outputs = take(conversation.outputs(), 4);
 
     await conversation.send({ text: "Current turn", turnId: "turn-1", type: "text" });
-    await outputs;
+    expect((await outputs).at(-1)).toMatchObject({
+      type: "response-completed",
+      memoryRevision: 7,
+    });
 
     expect(assemblyRequests).toEqual([
       {
@@ -266,6 +277,13 @@ describe("PipelineRealtimeConversationPort", () => {
       content: "Legacy fixed history",
       role: "user",
     });
+    const nextOutputs = take(conversation.outputs(), 3);
+    await conversation.send({ text: "Next turn", turnId: "turn-2", type: "text" });
+    expect((await nextOutputs).at(-1)).toMatchObject({
+      type: "response-completed",
+      memoryRevision: 8,
+    });
+    expect(model.requests[1]?.messages).toEqual(assemblyRequests[1]?.messages);
     await conversation.close();
   });
 
@@ -276,7 +294,7 @@ describe("PipelineRealtimeConversationPort", () => {
     const generatedIds = ["asr-task", "response-1", "tts-task"];
     const port = new PipelineRealtimeConversationPort({
       apiKey: "test-dashscope-key",
-      assembleContext: async (input) => [input.currentMessage],
+      assembleContext: async (input) => ({ messages: [input.currentMessage] }),
       asrModel: "paraformer-realtime-v2",
       createAsrTransport: () => asr,
       createTtsTransport: () => tts,
@@ -321,6 +339,120 @@ describe("PipelineRealtimeConversationPort", () => {
 
     await conversation.close();
   });
+
+  it.each(["ordinary", "created", "source_added", "corrected"] as const)(
+    "keeps the assembled revision unless Core produces a fixed %s acknowledgement",
+    async (outcome) => {
+      let revision = 7;
+      const state = vi.fn(async () => ({ revision }));
+      const memory = {
+        repository: { state },
+        async prepareRequest() {
+          revision = 8;
+          return outcome === "ordinary"
+            ? { changes: [] }
+            : {
+                changes: [{ id: "memory", kind: outcome, version: 1 }],
+                reply: "Saved",
+                memoryTransition: { previousRevision: 7, revision: 8 },
+              };
+        },
+      } as unknown as MemoryService;
+      const model = new StreamingModelGateway();
+      const tts = new FakeTransport([
+        jsonEvent("task-started", "tts-task"),
+        jsonEvent("task-finished", "tts-task"),
+      ]);
+      const generatedIds = ["asr-task", "response-1", "tts-task"];
+      const port = new PipelineRealtimeConversationPort({
+        apiKey: "test-dashscope-key",
+        assembleContext: async (input) => ({
+          messages: [input.currentMessage],
+          memoryRevision: revision,
+        }),
+        asrModel: "paraformer-realtime-v2",
+        createAsrTransport: () => new FakeTransport([jsonEvent("task-started", "asr-task")]),
+        createTtsTransport: () => tts,
+        generateId: () => generatedIds.shift() ?? "unexpected-id",
+        modelGateway: model,
+        memoryService: memory,
+        ttsModel: "cosyvoice-v3-flash",
+        voice: "longanyang",
+        workspaceId: "ws-testworkspace",
+      });
+      const conversation = await port.open(configuration());
+      try {
+        const outputs = take(conversation.outputs(), 3);
+        await conversation.send({ text: "Current turn", turnId: "turn-1", type: "text" });
+        const result = await outputs;
+        expect(result[1]).toMatchObject({
+          type: "response-text",
+          text: outcome === "ordinary" ? "Hello from Violet." : "Saved",
+        });
+        expect(result[2]).toMatchObject({
+          type: "response-completed",
+          memoryRevision: outcome === "ordinary" ? 7 : 8,
+        });
+        expect(state).not.toHaveBeenCalled();
+        expect(model.requests).toHaveLength(outcome === "ordinary" ? 1 : 0);
+      } finally {
+        await conversation.close();
+      }
+    },
+  );
+
+  it("cancels before emitting a confirmation if its revision read finishes after close", async () => {
+    let entered = () => {};
+    let release = (_state: { revision: number }) => {};
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const state = new Promise<{ revision: number }>((resolve) => {
+      release = resolve;
+    });
+    const memory = {
+      repository: {
+        state: () => {
+          entered();
+          return state;
+        },
+      },
+      async prepareRequest() {
+        return { changes: [{ id: "memory", kind: "corrected", version: 2 }], reply: "Saved" };
+      },
+    } as unknown as MemoryService;
+    const createTtsTransport = vi.fn(() => new FakeTransport([]));
+    const port = new PipelineRealtimeConversationPort({
+      apiKey: "test-dashscope-key",
+      assembleContext: async (input) => ({ messages: [input.currentMessage], memoryRevision: 7 }),
+      asrModel: "paraformer-realtime-v2",
+      createAsrTransport: () => new FakeTransport([jsonEvent("task-started", "asr-task")]),
+      createTtsTransport,
+      generateId: () => "asr-task",
+      modelGateway: new StreamingModelGateway(),
+      memoryService: memory,
+      ttsModel: "cosyvoice-v3-flash",
+      voice: "longanyang",
+      workspaceId: "ws-testworkspace",
+    });
+    const conversation = await port.open(configuration());
+    const output = (async () => {
+      const values = [];
+      for await (const event of conversation.outputs()) values.push(event);
+      return values;
+    })();
+    try {
+      await conversation.send({ text: "Correction", turnId: "turn-1", type: "text" });
+      await started;
+      await conversation.close();
+      release({ revision: 8 });
+      expect((await output).map((event) => event.type)).toEqual(["response-started"]);
+      expect(createTtsTransport).not.toHaveBeenCalled();
+    } finally {
+      release({ revision: 8 });
+      await conversation.close();
+    }
+  });
 });
 
 class StreamingModelGateway implements ModelGateway {
@@ -341,8 +473,7 @@ class BlockingModelGateway implements ModelGateway {
   aborted = false;
 
   async *stream(_request: ModelRequest, signal?: AbortSignal): AsyncIterable<ModelStreamEvent> {
-    yield { content: "A long answer begins.", type: "delta" };
-    await new Promise<void>((resolve) => {
+    const cancelled = new Promise<void>((resolve) => {
       const onAbort = () => {
         this.aborted = true;
         resolve();
@@ -352,6 +483,8 @@ class BlockingModelGateway implements ModelGateway {
         onAbort();
       }
     });
+    yield { content: "A long answer begins.", type: "delta" };
+    await cancelled;
   }
 }
 

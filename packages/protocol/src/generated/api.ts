@@ -4,6 +4,142 @@
  */
 
 export interface paths {
+    "/v1/memories": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List current memories with sensitive content masked. */
+        get: operations["listMemories"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/memories/{memoryId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read memory versions and source turns. */
+        get: operations["getMemory"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/memories/{memoryId}/corrections": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Append an explicit correction and invalidate the prior version. */
+        post: operations["correctMemory"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/memory-deletions/previews": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Preview all affected source turns and memories without deleting them. */
+        post: operations["previewMemoryDeletion"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/memory-deletions/{deletionId}/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read a deletion preview proposed during conversation. */
+        get: operations["getMemoryDeletionPreview"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/memory-deletions/{deletionId}/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Confirm a preview after the Mac durably advances its minimum restore epoch. */
+        post: operations["confirmMemoryDeletion"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/memory-deletions/{deletionId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read backup cleanup status without exposing deleted content. */
+        get: operations["getMemoryDeletionStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/memory-deletions/{deletionId}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Retry failed backup cleanup without undoing online deletion. */
+        post: operations["retryMemoryBackupCleanup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/health/live": {
         parameters: {
             query?: never;
@@ -110,11 +246,153 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        Memory: components["schemas"]["memory"];
+        MemoryChange: components["schemas"]["change"];
+        MemoryList: components["schemas"]["list"];
+        MemoryDetail: components["schemas"]["detail"];
+        MemoryCorrection: components["schemas"]["correction"];
+        MemoryMutation: components["schemas"]["mutation"];
+        MemoryDeletionPreviewRequest: components["schemas"]["previewRequest"];
+        MemoryDeletionPreview: components["schemas"]["preview"];
+        MemoryDeletionConfirmation: components["schemas"]["confirmation"];
+        MemoryDeletionStatus: components["schemas"]["deletionStatus"];
         ChatStreamEvent: components["schemas"]["chat-stream-event.schema"];
         ContextEnvelope: components["schemas"]["context-envelope.schema"];
         ContextReceipt: components["schemas"]["context-receipt.schema"];
         RealtimeClientEvent: components["schemas"]["realtime-client-event.schema"];
         RealtimeServerEvent: components["schemas"]["realtime-server-event.schema"];
+        source: {
+            /** Format: uuid */
+            eventId: string;
+            startByte: number;
+            endByte: number;
+        };
+        memory: {
+            /** Format: uuid */
+            id: string;
+            version: number;
+            /** @enum {string} */
+            state: "current" | "superseded";
+            /** @constant */
+            origin: "explicit";
+            content: string;
+            /** @enum {string} */
+            kind: "preference" | "fact" | "goal" | "relationship";
+            /** @enum {string} */
+            sensitivity: "normal" | "controlled";
+            redacted?: boolean;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+            sources: components["schemas"]["source"][];
+        };
+        list: {
+            /** Format: uuid */
+            instanceId: string;
+            revision: number;
+            deletionRevision: number;
+            restoreEpoch: number;
+            memories: components["schemas"]["memory"][];
+        };
+        /** ApiError */
+        "error.schema": {
+            code: string;
+            message: string;
+            /** Format: uuid */
+            requestId: string;
+            retryable: boolean;
+        };
+        event: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            requestId: string;
+            /** @enum {string} */
+            role: "user" | "assistant";
+            content: string;
+            redacted?: boolean;
+            /** Format: date-time */
+            occurredAt: string;
+        };
+        detail: {
+            /** Format: uuid */
+            instanceId: string;
+            revision: number;
+            versions: components["schemas"]["memory"][];
+            events: components["schemas"]["event"][];
+        };
+        correction: {
+            /** Format: uuid */
+            requestId: string;
+            expectedVersion: number;
+            content: string;
+        };
+        change: {
+            /** Format: uuid */
+            id: string;
+            version: number;
+            /** @enum {string} */
+            kind: "created" | "corrected" | "source_added";
+        };
+        mutation: {
+            memoryChanges: components["schemas"]["change"][];
+        };
+        target: {
+            /** @constant */
+            kind: "memory";
+            /** Format: uuid */
+            id: string;
+            version: number;
+        } | {
+            /** @constant */
+            kind: "source";
+            /** Format: uuid */
+            eventId: string;
+        } | {
+            /** @constant */
+            kind: "all";
+        };
+        previewRequest: {
+            /** Format: uuid */
+            id: string;
+            target: components["schemas"]["target"];
+        };
+        preview: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            instanceId: string;
+            revision: number;
+            deletionRevision: number;
+            restoreEpoch: number;
+            nextRestoreEpoch: number;
+            eventSequence: number;
+            target: components["schemas"]["target"];
+            requestIds: string[];
+            eventIds: string[];
+            deletedMemoryIds: string[];
+            retainedMemoryIds: string[];
+            /** Format: date-time */
+            createdAt: string;
+            events: components["schemas"]["event"][];
+            memories: components["schemas"]["memory"][];
+        };
+        confirmation: {
+            /** Format: uuid */
+            instanceId: string;
+            minimumRestoreEpoch: number;
+        };
+        deletionStatus: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            instanceId: string;
+            restoreEpoch: number;
+            /** @enum {string} */
+            status: "pending" | "running" | "complete" | "failed";
+            failureCode?: string;
+        };
         /** Health */
         "health.schema": {
             /** @constant */
@@ -135,14 +413,6 @@ export interface components {
             /** Format: date-time */
             time: string;
             version: string;
-        };
-        /** ApiError */
-        "error.schema": {
-            code: string;
-            message: string;
-            /** Format: uuid */
-            requestId: string;
-            retryable: boolean;
         };
         probability: number;
         /** Format: uuid */
@@ -290,6 +560,9 @@ export interface components {
             requestId: string;
             /** @constant */
             type: "complete";
+            memoryChanges?: components["schemas"]["change"][];
+            /** Format: uuid */
+            memoryDeletionPreviewId?: string;
             usage: {
                 inputTokens: number;
                 outputTokens: number;
@@ -506,6 +779,9 @@ export interface components {
             turnId: components["schemas"]["uuid"];
             /** @constant */
             type: "response.completed";
+            memoryChanges?: components["schemas"]["change"][];
+            /** Format: uuid */
+            memoryDeletionPreviewId?: string;
             usage: components["schemas"]["usage"];
         } | {
             eventId: components["schemas"]["uuid"];
@@ -516,8 +792,8 @@ export interface components {
             type: "response.cancelled";
         } | {
             eventId: components["schemas"]["uuid"];
-            /** @constant */
-            reason: "user_intent";
+            /** @enum {unknown} */
+            reason: "user_intent" | "memory_changed";
             sequence: components["schemas"]["sequence"];
             sessionId: components["schemas"]["uuid"];
             turnId: components["schemas"]["uuid"];
@@ -545,6 +821,24 @@ export interface components {
         });
     };
     responses: {
+        /** @description Memory or deletion impact changed; refresh before retrying. */
+        MemoryConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["error.schema"];
+            };
+        };
+        /** @description The memory or deletion no longer exists. */
+        MemoryNotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["error.schema"];
+            };
+        };
         /** @description Device token is missing or invalid. */
         Unauthorized: {
             headers: {
@@ -555,13 +849,217 @@ export interface components {
             };
         };
     };
-    parameters: never;
+    parameters: {
+        MemoryId: string;
+        DeletionId: string;
+    };
     requestBodies: never;
     headers: never;
     pathItems: never;
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    listMemories: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Current memory snapshot. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["list"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    getMemory: {
+        parameters: {
+            query?: {
+                reveal?: boolean;
+            };
+            header?: never;
+            path: {
+                memoryId: components["parameters"]["MemoryId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Versions and source turns. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["detail"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["MemoryNotFound"];
+        };
+    };
+    correctMemory: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                memoryId: components["parameters"]["MemoryId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["correction"];
+            };
+        };
+        responses: {
+            /** @description Committed memory changes. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["mutation"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            409: components["responses"]["MemoryConflict"];
+        };
+    };
+    previewMemoryDeletion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["previewRequest"];
+            };
+        };
+        responses: {
+            /** @description Version-bound impact preview. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["preview"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            409: components["responses"]["MemoryConflict"];
+        };
+    };
+    getMemoryDeletionPreview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                deletionId: components["parameters"]["DeletionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Version-bound impact preview. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["preview"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["MemoryNotFound"];
+        };
+    };
+    confirmMemoryDeletion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                deletionId: components["parameters"]["DeletionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["confirmation"];
+            };
+        };
+        responses: {
+            /** @description Online deletion committed; backup cleanup status. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["deletionStatus"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            409: components["responses"]["MemoryConflict"];
+        };
+    };
+    getMemoryDeletionStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                deletionId: components["parameters"]["DeletionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Current deletion and cleanup status. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["deletionStatus"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["MemoryNotFound"];
+        };
+    };
+    retryMemoryBackupCleanup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                deletionId: components["parameters"]["DeletionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Current cleanup status. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["deletionStatus"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["MemoryNotFound"];
+        };
+    };
     getLiveHealth: {
         parameters: {
             query?: never;

@@ -7,6 +7,7 @@ import {
   groupConversationTurns,
   type LedgerMessage,
   type ListConversationTurns,
+  MemoryConflictError,
 } from "@violet/domain";
 import type { Pool, PoolClient } from "pg";
 
@@ -51,12 +52,38 @@ export class PostgresConversationLedger implements ConversationLedger {
     this.#pool = input.pool;
   }
 
-  async append(input: AppendLedgerMessage): Promise<LedgerMessage> {
-    assertContextReference(input);
+  async initialize(): Promise<void> {
     const client = await this.#pool.connect();
     try {
       await client.query("BEGIN");
+      await this.#lockInstance(client, new Date());
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async append(input: AppendLedgerMessage): Promise<LedgerMessage> {
+    assertContextReference(input);
+    input.signal?.throwIfAborted();
+    const client = await this.#pool.connect();
+    try {
+      input.signal?.throwIfAborted();
+      await client.query("BEGIN");
       const instanceId = await this.#lockInstance(client, input.occurredAt);
+      input.signal?.throwIfAborted();
+      if (input.expectedMemoryRevision !== undefined) {
+        const state = await client.query<{ memory_revision: string }>(
+          "SELECT memory_revision FROM violet_instances WHERE id = $1",
+          [instanceId],
+        );
+        if (Number(state.rows[0]?.memory_revision) !== input.expectedMemoryRevision) {
+          throw new MemoryConflictError();
+        }
+      }
       const existing = await this.#findByRequestInTransaction(
         client,
         instanceId,
@@ -67,6 +94,7 @@ export class PostgresConversationLedger implements ConversationLedger {
         if (input.role === "assistant") {
           await this.#clearRequestFailureInTransaction(client, instanceId, input.requestId);
         }
+        input.signal?.throwIfAborted();
         await client.query("COMMIT");
         return this.#toMessage(existing);
       }
@@ -150,6 +178,8 @@ export class PostgresConversationLedger implements ConversationLedger {
       if (input.role === "assistant") {
         await this.#clearRequestFailureInTransaction(client, instanceId, input.requestId);
       }
+      // Once COMMIT is dispatched, a later cancellation cannot undo this answer.
+      input.signal?.throwIfAborted();
       await client.query("COMMIT");
       const row = result.rows[0];
       if (!row) {
@@ -194,6 +224,19 @@ export class PostgresConversationLedger implements ConversationLedger {
         WHERE instance.singleton = true
         ORDER BY events.sequence
       `,
+    );
+    return result.rows.map((row) => this.#toMessage(row));
+  }
+
+  async sourceTurns(eventIds: readonly string[]): Promise<readonly LedgerMessage[]> {
+    const result = await this.#pool.query<EventRow>(
+      `SELECT e.* FROM conversation_events e
+       JOIN violet_instances i ON i.id = e.instance_id
+       WHERE i.singleton = true AND e.request_id IN (
+         SELECT request_id FROM conversation_events
+         WHERE instance_id = i.id AND id = ANY($1::uuid[])
+       ) ORDER BY e.sequence`,
+      [eventIds],
     );
     return result.rows.map((row) => this.#toMessage(row));
   }
@@ -384,7 +427,12 @@ export class PostgresConversationLedger implements ConversationLedger {
           [instanceId, requestId, contextEpochId],
         );
         if (user.rowCount !== 1) {
-          throw new Error("Cannot fail a request without its persisted user event");
+          const deleted = await client.query(
+            "SELECT 1 FROM deletion_tombstones WHERE instance_id = $1 AND request_id = $2",
+            [instanceId, requestId],
+          );
+          if (deleted.rowCount !== 1)
+            throw new Error("Cannot fail a request without its persisted user event");
         }
         await this.#clearRequestFailureInTransaction(client, instanceId, requestId);
       }

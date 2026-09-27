@@ -1,3 +1,4 @@
+import type { MemoryChange } from "./memory.js";
 import type { ModelContextProfile } from "./model-gateway.js";
 
 export type RealtimeModality = "audio" | "text";
@@ -24,10 +25,13 @@ export interface RealtimeSessionConfiguration {
   readonly outputModalities: readonly RealtimeModality[];
   readonly turnDetection?: RealtimeTurnDetection;
   readonly voice?: string;
+  readonly memoryLookupAvailable?: boolean;
 }
 
 export interface RealtimeHistoryMessage {
   readonly content: string;
+  /** Derived memory/checkpoint data, not a recorded conversation utterance. */
+  readonly contextData?: true;
   readonly role: "assistant" | "user";
 }
 
@@ -47,6 +51,7 @@ export type RealtimeConversationInput =
   | {
       readonly attemptId?: number;
       readonly text: string;
+      readonly confirmedReply?: string;
       readonly turnId: string;
       readonly type: "text";
     }
@@ -69,6 +74,17 @@ export type RealtimeConversationInput =
       readonly callId: string;
       readonly output: string;
       readonly type: "context-result";
+    }
+  | {
+      readonly type: "memory-result";
+      readonly turnId: string;
+      readonly attemptId?: number;
+      readonly reply: string;
+    }
+  | {
+      readonly type: "recall-result";
+      readonly callId: string;
+      readonly output: string;
     };
 
 export type RealtimeConversationOutput =
@@ -116,6 +132,10 @@ export type RealtimeConversationOutput =
       readonly responseId: string;
       readonly turnId: string;
       readonly type: "response-completed";
+      readonly memoryChanges?: readonly MemoryChange[];
+      readonly memoryDeletionPreviewId?: string;
+      /** Internal context revision used to guard assistant persistence. */
+      readonly memoryRevision?: number;
     }
   | {
       readonly attemptId?: number;
@@ -138,6 +158,14 @@ export type RealtimeConversationOutput =
       readonly responseId: string;
       readonly turnId: string;
       readonly type: "context-request";
+    }
+  | {
+      readonly type: "recall-request";
+      readonly attemptId?: number;
+      readonly callId: string;
+      readonly arguments: string;
+      readonly responseId: string;
+      readonly turnId: string;
     };
 
 export interface RealtimeConversation {

@@ -20,7 +20,9 @@
   报告生成成功不等于产品验收通过。
 
 自动化测试仍由 `pnpm test` / `pnpm macos:test` 保存独立 stdout、stderr 和退出码到
-`.local-acceptance/test-runs/`。其他验证用：
+`.local-acceptance/test-runs/`。Mac 入口显式使用 `--no-parallel`，避免独立 UI 测试
+争用 MainActor 并触发夹具的短等待超时；并发行为由用例内显式安排交错顺序和重复试验，
+不能用套件串行通过代替竞态验证。其他验证用：
 
 ```sh
 fnm exec --using=.node-version -- pnpm test:record <命令> <参数...>

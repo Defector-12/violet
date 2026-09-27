@@ -1,5 +1,14 @@
-import type { ContextEpoch, ConversationLedger, LedgerMessage, ModelGateway } from "@violet/domain";
+import {
+  type ContextEpoch,
+  type ConversationLedger,
+  type LedgerMessage,
+  MemoryConflictError,
+  type ModelGateway,
+} from "@violet/domain";
+import { assertMemoryContentAllowed, MemorySecretError } from "@violet/policy";
 import type { ChatRequest, ChatStreamEvent } from "@violet/protocol";
+import type { MemoryService } from "../memory/memory-service.js";
+import { confirmedMemoryReply, streamWithRecall } from "../memory/recall-memory-tool.js";
 import {
   RealtimeTurnFailureRecovery,
   type RealtimeTurnFailureRecoveryPort,
@@ -27,6 +36,7 @@ export interface ChatServiceOptions {
   readonly generateId: () => string;
   readonly ledger: ConversationLedger;
   readonly modelGateway: ModelGateway;
+  readonly memoryService?: MemoryService;
   readonly now?: () => Date;
   readonly turnFailureRecovery?: RealtimeTurnFailureRecoveryPort;
 }
@@ -39,6 +49,7 @@ export class ChatService {
   readonly #ledger: ConversationLedger;
   readonly #modelGateway: ModelGateway;
   readonly #now: () => Date;
+  readonly #memory: MemoryService | undefined;
   readonly #requestTails = new Map<string, Promise<void>>();
   #userAdmissionTail: Promise<void> = Promise.resolve();
 
@@ -48,6 +59,7 @@ export class ChatService {
     this.#generateId = options.generateId;
     this.#ledger = options.ledger;
     this.#modelGateway = options.modelGateway;
+    this.#memory = options.memoryService;
     this.#now = options.now ?? (() => new Date());
     this.#failureRecovery =
       options.turnFailureRecovery ?? new RealtimeTurnFailureRecovery({ ledger: options.ledger });
@@ -60,11 +72,18 @@ export class ChatService {
   ): AsyncIterable<ChatStreamEvent> {
     const requestKey = request.requestId.toLowerCase();
     const releaseRequest = await this.#acquireRequest(requestKey);
+    const invalidated = new AbortController();
+    signal = AbortSignal.any([invalidated.signal, ...(signal ? [signal] : [])]);
+    const unsubscribe = this.#memory?.onInvalidation((exceptRequestId) => {
+      if (exceptRequestId !== requestKey) invalidated.abort(new Error("Memory context changed"));
+    });
     let assistantPersisted = false;
     let failureGeneration: number | undefined;
     let failureScheduled = false;
     let userMessage: LedgerMessage | null = null;
     try {
+      assertMemoryContentAllowed(request.message);
+      signal.throwIfAborted();
       const occurredAt = this.#now();
       const admitted = await this.#admitUser(
         { ...request, requestId: requestKey },
@@ -75,6 +94,8 @@ export class ChatService {
       failureGeneration = admitted.failureGeneration;
       if (admitted.assistant) {
         assistantPersisted = true;
+        const memoryResult = await this.#memory?.replayTurn(requestKey);
+        signal.throwIfAborted();
         yield {
           eventId: this.#generateId(),
           requestId: request.requestId,
@@ -88,11 +109,20 @@ export class ChatService {
             type: "delta",
           };
         }
+        signal.throwIfAborted();
         yield {
           eventId: this.#generateId(),
           messageId: admitted.assistant.id,
           requestId: request.requestId,
           type: "complete",
+          ...(this.#memory
+            ? {
+                memoryChanges: [...(memoryResult?.changes ?? [])],
+              }
+            : {}),
+          ...(memoryResult?.deletionPreviewId
+            ? { memoryDeletionPreviewId: memoryResult.deletionPreviewId }
+            : {}),
           usage: {
             inputTokens: 0,
             outputTokens: 0,
@@ -116,6 +146,8 @@ export class ChatService {
             userRequest: userMessage.content,
           })
         : userMessage.content;
+      const memoryResult = await this.#memory?.prepareTurn(userMessage, signal);
+      signal.throwIfAborted();
       const assembled = await this.#contextAssembler.assemble({
         ...(contextEvidence
           ? {
@@ -145,13 +177,20 @@ export class ChatService {
       };
 
       let assistantContent = "";
-      for await (const event of this.#modelGateway.stream(
-        {
-          messages: assembled.messages,
-          requestId: requestKey,
-        },
-        signal,
-      )) {
+      const events = memoryResult?.reply
+        ? confirmedMemoryReply(memoryResult.reply)
+        : streamWithRecall(
+            this.#modelGateway,
+            {
+              messages: assembled.messages,
+              requestId: requestKey,
+            },
+            this.#memory,
+            memoryResult?.history ?? false,
+            signal,
+          );
+      for await (const event of events) {
+        signal.throwIfAborted();
         if (event.type === "delta") {
           assistantContent += event.content;
           yield {
@@ -170,16 +209,25 @@ export class ChatService {
           occurredAt: this.#now(),
           requestId: requestKey,
           role: "assistant",
+          signal,
+          ...(assembled.memoryRevision !== undefined
+            ? { expectedMemoryRevision: assembled.memoryRevision }
+            : {}),
         });
         assistantPersisted = true;
         if (failureGeneration !== undefined) {
           await this.#failureRecovery.complete(request.requestId, failureGeneration);
         }
+        signal.throwIfAborted();
         yield {
           eventId: this.#generateId(),
           messageId: assistantMessage.id,
           requestId: request.requestId,
           type: "complete",
+          ...(memoryResult?.changes.length ? { memoryChanges: [...memoryResult.changes] } : {}),
+          ...(memoryResult?.deletionPreviewId
+            ? { memoryDeletionPreviewId: memoryResult.deletionPreviewId }
+            : {}),
           usage: {
             inputTokens: event.inputTokens,
             outputTokens: event.outputTokens,
@@ -195,29 +243,40 @@ export class ChatService {
       yield {
         error: {
           code:
-            error instanceof ChatRequestContentMismatchError
-              ? "REQUEST_ID_CONFLICT"
-              : error instanceof ChatRequestInProgressError
-                ? "REQUEST_IN_PROGRESS"
-                : error instanceof ContextAssemblyError
-                  ? "CONTEXT_ASSEMBLY_FAILED"
-                  : "MODEL_GATEWAY_FAILED",
+            error instanceof MemorySecretError
+              ? "MEMORY_SECRET_REJECTED"
+              : invalidated.signal.aborted || error instanceof MemoryConflictError
+                ? "MEMORY_CONTEXT_CHANGED"
+                : error instanceof ChatRequestContentMismatchError
+                  ? "REQUEST_ID_CONFLICT"
+                  : error instanceof ChatRequestInProgressError
+                    ? "REQUEST_IN_PROGRESS"
+                    : error instanceof ContextAssemblyError
+                      ? "CONTEXT_ASSEMBLY_FAILED"
+                      : "MODEL_GATEWAY_FAILED",
           message:
-            error instanceof ChatRequestContentMismatchError
-              ? "A request ID cannot be reused with different content"
-              : error instanceof ChatRequestInProgressError
-                ? "The request is already in progress"
-                : error instanceof ContextAssemblyError
-                  ? "Violet could not assemble a safe bounded context"
-                  : "The configured model provider failed",
+            error instanceof MemorySecretError
+              ? "密码、验证码和密钥不能保存，请移除后重试。"
+              : invalidated.signal.aborted || error instanceof MemoryConflictError
+                ? "记忆或删除影响已变化，请重新发起请求；删除操作需要重新预览。"
+                : error instanceof ChatRequestContentMismatchError
+                  ? "A request ID cannot be reused with different content"
+                  : error instanceof ChatRequestInProgressError
+                    ? "The request is already in progress"
+                    : error instanceof ContextAssemblyError
+                      ? "Violet could not assemble a safe bounded context"
+                      : "The configured model provider failed",
           requestId: request.requestId,
-          retryable: !(error instanceof ChatRequestContentMismatchError),
+          retryable: !(
+            error instanceof ChatRequestContentMismatchError || error instanceof MemorySecretError
+          ),
         },
         eventId: this.#generateId(),
         requestId: request.requestId,
         type: "error",
       };
     } finally {
+      unsubscribe?.();
       if (!assistantPersisted && !failureScheduled) {
         await this.#terminalize(requestKey, userMessage, failureGeneration);
       }

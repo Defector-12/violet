@@ -20,6 +20,7 @@ import { type ContextService, ContextServiceError } from "../context/context-ser
 import type { ChatService } from "../conversation/chat-service.js";
 import type { ContextAssembler } from "../conversation/context-assembler.js";
 import type { ContextEpochManager } from "../conversation/context-epoch-manager.js";
+import type { MemoryService } from "../memory/memory-service.js";
 import type { ConversationEndIntentPort } from "../realtime/conversation-end-intent.js";
 import type { RealtimeTurnFailureRecoveryPort } from "../realtime/realtime-turn-failure-recovery.js";
 import {
@@ -36,6 +37,8 @@ import {
 } from "../realtime/test-trace.js";
 import { formatVisualResult } from "../realtime/visual-grounding.js";
 import { recordHttpRequest } from "../telemetry-signals.js";
+import { apiError, requestId } from "./api-error.js";
+import { registerMemoryRoutes } from "./memory-routes.js";
 
 const maximumRealtimePayloadBytes = 12 * 1024 * 1024;
 
@@ -47,6 +50,7 @@ export interface CoreAppOptions {
   readonly contextEpochManager: ContextEpochManager;
   readonly contextService: ContextService;
   readonly now?: () => Date;
+  readonly memoryService?: MemoryService;
   readonly realtimeConversationPort: RealtimeConversationPort;
   readonly realtimeFailureRecovery?: RealtimeTurnFailureRecoveryPort;
   readonly realtimeLedger: ConversationLedger;
@@ -117,7 +121,7 @@ export function buildCoreApp(options: CoreAppOptions): FastifyInstance {
     recordTestTrace("http.receive", {
       method: request.method,
       path: request.routeOptions.url,
-      body: request.body,
+      ...(request.routeOptions.url?.startsWith("/v1/memor") ? {} : { body: request.body }),
     });
   });
   app.addHook("onError", async (request, _reply, error) => {
@@ -170,6 +174,12 @@ export function buildCoreApp(options: CoreAppOptions): FastifyInstance {
       route: request.routeOptions.url ?? "unmatched",
       status: reply.statusCode,
     });
+  });
+
+  registerMemoryRoutes(app, {
+    authenticator: options.authenticator,
+    sealed: options.sealed,
+    ...(options.memoryService ? { memory: options.memoryService } : {}),
   });
 
   app.get(
@@ -419,6 +429,7 @@ export function buildCoreApp(options: CoreAppOptions): FastifyInstance {
             : {}),
           generateId: randomUUID,
           ledger: options.realtimeLedger,
+          ...(options.memoryService ? { memoryService: options.memoryService } : {}),
           ...(testTrace ? { testTrace } : {}),
         });
         realtimeConnections.add(connection);
@@ -430,20 +441,8 @@ export function buildCoreApp(options: CoreAppOptions): FastifyInstance {
   return app;
 }
 
-function apiError(request: FastifyRequest, error: Omit<ApiError, "requestId">): ApiError {
-  return {
-    ...error,
-    requestId: requestId(request),
-  };
-}
-
 function isAuthenticated(request: FastifyRequest, authenticator: DeviceAuthenticator): boolean {
   return authenticator.authenticate(request.headers.authorization);
-}
-
-function requestId(request: FastifyRequest): string {
-  const value = request.headers["x-request-id"];
-  return typeof value === "string" && /^[0-9a-f-]{36}$/i.test(value) ? value : randomUUID();
 }
 
 async function* serializeEvents(

@@ -1,4 +1,5 @@
-import type { ConversationLedger, ModelMessage } from "@violet/domain";
+import type { ConversationLedger } from "@violet/domain";
+import { assertMemoryContentAllowed } from "@violet/policy";
 
 import type { PipelineContextAssembler } from "../realtime/pipeline-realtime-conversation.js";
 import type { ContextAssembler } from "./context-assembler.js";
@@ -12,7 +13,8 @@ export function createPipelineContextAssembler(options: {
   readonly now?: () => Date;
 }): PipelineContextAssembler {
   const now = options.now ?? (() => new Date());
-  return async (input, signal): Promise<readonly ModelMessage[]> => {
+  return async (input, signal) => {
+    assertMemoryContentAllowed(input.currentMessage.content);
     let userMessage = await options.ledger.findByRequest(input.requestId, "user");
     if (!userMessage) {
       const occurredAt = now();
@@ -26,17 +28,21 @@ export function createPipelineContextAssembler(options: {
         role: "user",
       });
     }
-    return (
-      await options.contextAssembler.assemble({
-        additionalSystemInstructions: input.additionalSystemInstructions,
-        beforeSequence: userMessage.sequence,
-        ...(userMessage.contextEpochId ? { contextEpochId: userMessage.contextEpochId } : {}),
-        currentMessage: {
-          content: userMessage.content,
-          role: "user",
-        },
-        ...(signal ? { signal } : {}),
-      })
-    ).messages;
+    const assembled = await options.contextAssembler.assemble({
+      additionalSystemInstructions: input.additionalSystemInstructions,
+      beforeSequence: userMessage.sequence,
+      ...(userMessage.contextEpochId ? { contextEpochId: userMessage.contextEpochId } : {}),
+      currentMessage: {
+        content: userMessage.content,
+        role: "user",
+      },
+      ...(signal ? { signal } : {}),
+    });
+    return {
+      messages: assembled.messages,
+      ...(assembled.memoryRevision !== undefined
+        ? { memoryRevision: assembled.memoryRevision }
+        : {}),
+    };
   };
 }

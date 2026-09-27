@@ -30,6 +30,7 @@ public enum RealtimeAcceptanceReason: String, Codable, Sendable {
   case inactivityTimeout = "inactivity_timeout"
   case localSpeech = "local_speech"
   case menuBar = "menu_bar"
+  case memoryChanged = "memory_changed"
   case modelIntent = "model_intent"
   case popoverClosed = "popover_closed"
   case screenSleep = "screen_sleep"

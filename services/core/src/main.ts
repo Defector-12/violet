@@ -18,6 +18,7 @@ import { InMemoryContextCheckpointRepository } from "./conversation/in-memory-co
 import { InMemoryConversationLedger } from "./conversation/in-memory-conversation-ledger.js";
 import { createPipelineContextAssembler } from "./conversation/pipeline-context.js";
 import { buildCoreApp } from "./http/app.js";
+import { MemoryService } from "./memory/memory-service.js";
 import { DeepSeekModelGateway } from "./model/deepseek-model-gateway.js";
 import { DeterministicModelGateway } from "./model/deterministic-model-gateway.js";
 import { ModelConversationEndIntent } from "./realtime/conversation-end-intent.js";
@@ -28,6 +29,7 @@ import { RealtimeTurnFailureRecovery } from "./realtime/realtime-turn-failure-re
 import { TestTraceStore } from "./realtime/test-trace.js";
 import { PostgresContextCheckpointRepository } from "./storage/postgres-context-checkpoint-repository.js";
 import { PostgresConversationLedger } from "./storage/postgres-conversation-ledger.js";
+import { PostgresMemoryRepository } from "./storage/postgres-memory-repository.js";
 
 const coreAdvisoryLock = [0x5649_4f4c, 0x4554_434f];
 const config = loadCoreRuntimeConfig(process.env);
@@ -79,6 +81,7 @@ const ledger =
         pool,
       })
     : new InMemoryConversationLedger();
+if (ledger instanceof PostgresConversationLedger) await ledger.initialize();
 await ledger.recoverIncompleteRequests(new Date());
 const realtimeFailureRecovery = new RealtimeTurnFailureRecovery({ ledger });
 const modelGateway: ModelGateway =
@@ -105,11 +108,22 @@ const checkpoints =
     ? new PostgresContextCheckpointRepository({ cipher, pool })
     : new InMemoryContextCheckpointRepository();
 const contextEpochManager = new ContextEpochManager({ generateId: randomUUID });
+const memoryService =
+  pool && cipher
+    ? new MemoryService({
+        repository: new PostgresMemoryRepository({ cipher, pool }),
+        ledger,
+        epochManager: contextEpochManager,
+        model: modelGateway,
+        injectionEnabled: config.memoryInjectionEnabled,
+      })
+    : undefined;
 const contextAssembler = new ContextAssembler({
   checkpointEnabled: config.contextCheckpointEnabled,
   checkpoints,
   ledger,
   model: modelGateway,
+  ...(memoryService ? { memoryService } : {}),
 });
 const realtimeConversationPort: RealtimeConversationPort =
   config.realtime.provider === "qwen-audio"
@@ -132,6 +146,7 @@ const realtimeConversationPort: RealtimeConversationPort =
           }),
           generateId: randomUUID,
           modelGateway: realtimeModelGateway,
+          ...(memoryService ? { memoryService } : {}),
           ttsModel: config.realtime.ttsModel,
           voice: config.realtime.voice,
           workspaceId: config.realtime.workspaceId,
@@ -178,12 +193,14 @@ const app = buildCoreApp({
     generateId: randomUUID,
     ledger,
     modelGateway,
+    ...(memoryService ? { memoryService } : {}),
     turnFailureRecovery: realtimeFailureRecovery,
   }),
   conversationEndIntent: new ModelConversationEndIntent(modelGateway),
   contextAssembler,
   contextEpochManager,
   contextService,
+  ...(memoryService ? { memoryService } : {}),
   realtimeConversationPort,
   realtimeFailureRecovery,
   realtimeLedger: ledger,

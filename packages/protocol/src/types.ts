@@ -20,3 +20,13 @@ export type RealtimeClientEvent = RawRealtimeClientEvent extends infer Event
 export type RealtimeServerEvent = WithoutSchemaDefinitions<
   components["schemas"]["RealtimeServerEvent"]
 >;
+export type Memory = components["schemas"]["Memory"];
+export type MemoryChange = components["schemas"]["MemoryChange"];
+export type MemoryList = components["schemas"]["MemoryList"];
+export type MemoryDetail = components["schemas"]["MemoryDetail"];
+export type MemoryCorrection = components["schemas"]["MemoryCorrection"];
+export type MemoryMutation = components["schemas"]["MemoryMutation"];
+export type MemoryDeletionPreviewRequest = components["schemas"]["MemoryDeletionPreviewRequest"];
+export type MemoryDeletionPreview = components["schemas"]["MemoryDeletionPreview"];
+export type MemoryDeletionConfirmation = components["schemas"]["MemoryDeletionConfirmation"];
+export type MemoryDeletionStatus = components["schemas"]["MemoryDeletionStatus"];

@@ -6,14 +6,27 @@ import {
   groupConversationTurns,
   type LedgerMessage,
   type ListConversationTurns,
+  MemoryConflictError,
 } from "@violet/domain";
 
 export class InMemoryConversationLedger implements ConversationLedger {
   readonly #failedRequests = new Map<string, string>();
   readonly #messages: LedgerMessage[] = [];
+  readonly #memoryRevision: () => number;
+
+  constructor(memoryRevision: () => number = () => 0) {
+    this.#memoryRevision = memoryRevision;
+  }
 
   async append(input: AppendLedgerMessage): Promise<LedgerMessage> {
     assertContextReference(input);
+    input.signal?.throwIfAborted();
+    if (
+      input.expectedMemoryRevision !== undefined &&
+      input.expectedMemoryRevision !== this.#memoryRevision()
+    ) {
+      throw new MemoryConflictError();
+    }
     const existing = this.#messages.find(
       (message) => message.requestId === input.requestId && message.role === input.role,
     );
@@ -119,6 +132,18 @@ export class InMemoryConversationLedger implements ConversationLedger {
           .map(([requestId]) => requestId),
       ),
     );
+  }
+
+  async sourceTurns(eventIds: readonly string[]): Promise<readonly LedgerMessage[]> {
+    const ids = new Set(eventIds.map((id) => id.toLowerCase()));
+    const requests = new Set(
+      this.#messages
+        .filter((message) => ids.has(message.id.toLowerCase()))
+        .map((message) => message.requestId),
+    );
+    return this.#messages
+      .filter((message) => requests.has(message.requestId))
+      .map((message) => ({ ...message, occurredAt: new Date(message.occurredAt) }));
   }
 
   async markRequestFailed(
