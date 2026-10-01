@@ -136,6 +136,7 @@ export type RealtimeConversationOutput =
       readonly memoryDeletionPreviewId?: string;
       /** Internal context revision used to guard assistant persistence. */
       readonly memoryRevision?: number;
+      readonly automaticMemoryEligible?: boolean;
     }
   | {
       readonly attemptId?: number;

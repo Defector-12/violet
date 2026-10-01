@@ -17,6 +17,8 @@ export type {
   MemoryDetail,
   MemoryList,
   MemoryMutation,
+  MemorySettings,
+  MemorySettingsUpdate,
   RealtimeClientEvent,
   RealtimeServerEvent,
 } from "./types.js";
@@ -35,6 +37,8 @@ export {
   assertMemoryDetail,
   assertMemoryList,
   assertMemoryMutation,
+  assertMemorySettings,
+  assertMemorySettingsUpdate,
   assertRealtimeClientEvent,
   assertRealtimeServerEvent,
   ProtocolValidationError,

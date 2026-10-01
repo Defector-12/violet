@@ -53,6 +53,12 @@ describe("Memory HTTP error contract", () => {
   ])("returns complete $name errors on every memory route", async (access) => {
     const { baseUrl } = await startMemoryRoutes({ sealed: access.sealed, unavailable: true });
     for (const [method, path, body] of [
+      ["GET", "/v1/memory-settings", undefined],
+      [
+        "POST",
+        "/v1/memory-settings",
+        { requestId: randomUUID(), expectedRevision: 0, enabled: true },
+      ],
       ["GET", "/v1/memories", undefined],
       ["GET", `/v1/memories/${memoryId}`, undefined],
       ["POST", correctionPath, correction],
@@ -215,6 +221,11 @@ async function startMemoryRoutes(options: { sealed?: boolean; unavailable?: bool
   });
   // Keep persistence local; parsing, authentication, service checks and HTTP serialization are real.
   const repository: MemoryRepository = {
+    settings: vi.fn(async () => ({ instanceId, revision: 0, enabled: false, memoryRevision: 2 })),
+    updateSettings: unexpected,
+    recoverJobs: unexpected,
+    claimJob: unexpected,
+    finishJob: unexpected,
     state: vi.fn(async () => state),
     snapshot: vi.fn(async () => ({
       ...state,

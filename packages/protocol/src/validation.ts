@@ -34,6 +34,8 @@ import type {
   MemoryDetail,
   MemoryList,
   MemoryMutation,
+  MemorySettings,
+  MemorySettingsUpdate,
   RealtimeClientEvent,
   RealtimeServerEvent,
 } from "./types.js";
@@ -49,6 +51,12 @@ ajv.addSchema(contextEnvelopeSchema);
 ajv.addSchema(memorySchema);
 
 const memoryListValidator = ajv.compile<MemoryList>({ $ref: `${memorySchema.$id}#/$defs/list` });
+const memorySettingsValidator = ajv.compile<MemorySettings>({
+  $ref: `${memorySchema.$id}#/$defs/settings`,
+});
+const memorySettingsUpdateValidator = ajv.compile<MemorySettingsUpdate>({
+  $ref: `${memorySchema.$id}#/$defs/settingsUpdate`,
+});
 const memoryDetailValidator = ajv.compile<MemoryDetail>({
   $ref: `${memorySchema.$id}#/$defs/detail`,
 });
@@ -134,6 +142,12 @@ export function assertRealtimeServerEvent(value: unknown): asserts value is Real
 
 export function assertMemoryList(value: unknown): asserts value is MemoryList {
   assertValid("MemoryList", memoryListValidator, value);
+}
+export function assertMemorySettings(value: unknown): asserts value is MemorySettings {
+  assertValid("MemorySettings", memorySettingsValidator, value);
+}
+export function assertMemorySettingsUpdate(value: unknown): asserts value is MemorySettingsUpdate {
+  assertValid("MemorySettingsUpdate", memorySettingsUpdateValidator, value);
 }
 export function assertMemoryDetail(value: unknown): asserts value is MemoryDetail {
   assertValid("MemoryDetail", memoryDetailValidator, value);

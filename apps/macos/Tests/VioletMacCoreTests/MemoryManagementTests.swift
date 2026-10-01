@@ -5,6 +5,94 @@ import Testing
 @Suite("Memory management")
 @MainActor
 struct MemoryManagementTests {
+  @Test func settingsUseAcknowledgedStateAndRetryIdentity() async {
+    let client = MemoryFixtureClient()
+    let model = MemoryManagementModel(client: client, epochs: FixtureEpochStore())
+    await model.refresh()
+    #expect(model.settings?.enabled == false)
+    client.failSettingsWrite = true
+    await model.setAutomaticMemory(true)
+    #expect(model.settings?.enabled == false)
+    #expect(model.settingsError != nil)
+    client.failSettingsWrite = false
+    await model.setAutomaticMemory(true)
+    #expect(model.settings?.enabled == true)
+    #expect(model.settingsError == nil)
+    #expect(client.settingRequests.count == 2)
+    #expect(client.settingRequests[0] == client.settingRequests[1])
+    await model.setAutomaticMemory(false)
+    #expect(model.settings?.enabled == false)
+  }
+
+  @Test func lostSettingsResponseRefreshesRealStateAndUnknownReadStaysUnknown() async {
+    let client = MemoryFixtureClient()
+    let model = MemoryManagementModel(client: client, epochs: FixtureEpochStore())
+    await model.refresh()
+    client.loseSettingsResponse = true
+    await model.setAutomaticMemory(true)
+    #expect(model.settings?.enabled == true)
+    #expect(model.settingsError != nil)
+    client.failSettingsRead = true
+    await model.setAutomaticMemory(false)
+    #expect(model.settings == nil)
+    #expect(!model.savingSettings)
+    client.failSettingsRead = false
+    await model.refresh()
+    #expect(model.settings?.enabled == false)
+  }
+
+  @Test func automaticOriginAndMetadataChangesAreVisibleWithoutReadingSources() async {
+    let client = MemoryFixtureClient()
+    client.memory.origin = .automatic
+    let model = MemoryManagementModel(client: client, epochs: FixtureEpochStore())
+    await model.refresh()
+    #expect(model.memories.first?.originLabel == "自动学习")
+    #expect(!model.hasChanges)
+    client.memoryRevision = 2
+    await model.checkForChanges()
+    #expect(model.hasChanges)
+    #expect(model.detail == nil)
+    await model.refresh()
+    #expect(!model.hasChanges)
+  }
+
+  @Test func staleSettingsPollCannotUndoAnAcknowledgedDisable() async {
+    let client = MemoryFixtureClient()
+    let model = MemoryManagementModel(client: client, epochs: FixtureEpochStore())
+    await model.refresh()
+    await model.setAutomaticMemory(true)
+    client.beforeSettings = {
+      client.beforeSettings = nil
+      await model.setAutomaticMemory(false)
+    }
+    await model.checkForChanges()
+    #expect(model.settings?.enabled == false)
+    #expect(model.settings?.revision == 2)
+  }
+
+  @Test func settingsRevisionAndRetriesBelongToTheirInstance() async {
+    let client = MemoryFixtureClient()
+    let model = MemoryManagementModel(client: client, epochs: FixtureEpochStore())
+    await model.refresh()
+    await model.setAutomaticMemory(true)
+    client.failSettingsWrite = true
+    await model.setAutomaticMemory(false)
+    client.beforeSettings = {
+      client.beforeSettings = nil
+      client.instanceId = UUID().uuidString.lowercased()
+      client.settingsRevision = 0
+      await model.refresh()
+    }
+    await model.checkForChanges()
+    #expect(model.settings?.instanceId == client.instanceId)
+    #expect(model.settings?.revision == 0)
+    client.failSettingsWrite = false
+    await model.setAutomaticMemory(false)
+    #expect(client.settingRequests.count == 3)
+    #expect(client.settingRequests[1] != client.settingRequests[2])
+    #expect(model.settings?.enabled == false)
+  }
+
   @Test func previewRetentionIsPerVersionNotPerMemoryId() async throws {
     let client = MemoryFixtureClient()
     let eventA = UUID().uuidString.lowercased()
@@ -371,9 +459,9 @@ private final class FixtureEpochStore: RestoreEpochStore {
 
 @MainActor
 private final class MemoryFixtureClient: MemoryClientPort {
-  let instanceId = UUID().uuidString.lowercased()
+  var instanceId = UUID().uuidString.lowercased()
   var memory = VioletMemory(
-    id: UUID().uuidString.lowercased(), version: 1, state: .current, origin: "explicit",
+    id: UUID().uuidString.lowercased(), version: 1, state: .current, origin: .explicit,
     content: "受控敏感内容", kind: .fact, sensitivity: .controlled, redacted: true,
     createdAt: Date(), updatedAt: Date(), sources: []
   )
@@ -387,10 +475,34 @@ private final class MemoryFixtureClient: MemoryClientPort {
   var beforeDetail: (() -> Void)?
   var beforeList: (() -> Void)?
   var beforePreview: (() async -> Void)?
+  var memoryRevision = 1
+  var settingsRevision = 0
+  var enabled = false
+  var failSettingsWrite = false
+  var loseSettingsResponse = false
+  var failSettingsRead = false
+  var settingRequests: [String] = []
+  var beforeSettings: (() async -> Void)?
+
+  func settings() async throws -> MemorySettings {
+    if failSettingsRead { throw MemoryClientError.unavailable }
+    let value = MemorySettings(instanceId: instanceId, revision: settingsRevision,
+      enabled: enabled, memoryRevision: memoryRevision)
+    await beforeSettings?()
+    return value
+  }
+  func updateSettings(requestId: String, revision: Int, enabled: Bool) async throws -> MemorySettings {
+    settingRequests.append(requestId)
+    if failSettingsWrite { throw MemoryClientError.unavailable }
+    if self.enabled != enabled { settingsRevision += 1 }
+    self.enabled = enabled
+    if loseSettingsResponse { throw MemoryClientError.unavailable }
+    return try await settings()
+  }
 
   func list() async throws -> MemoryList {
     beforeList?()
-    return .init(instanceId: instanceId, revision: 1, deletionRevision: restoreEpoch,
+    return .init(instanceId: instanceId, revision: memoryRevision, deletionRevision: restoreEpoch,
       restoreEpoch: restoreEpoch, memories: restoreEpoch > 0 ? [] : [memory])
   }
   func detail(id: String, reveal: Bool) async throws -> MemoryDetail {

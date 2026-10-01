@@ -76,11 +76,18 @@ export class PostgresConversationLedger implements ConversationLedger {
       const instanceId = await this.#lockInstance(client, input.occurredAt);
       input.signal?.throwIfAborted();
       if (input.expectedMemoryRevision !== undefined) {
-        const state = await client.query<{ memory_revision: string }>(
-          "SELECT memory_revision FROM violet_instances WHERE id = $1",
-          [instanceId],
-        );
-        if (Number(state.rows[0]?.memory_revision) !== input.expectedMemoryRevision) {
+        const state = await client.query<{
+          memory_revision: string;
+          minimum_context_revision: string;
+        }>("SELECT memory_revision, minimum_context_revision FROM violet_instances WHERE id = $1", [
+          instanceId,
+        ]);
+        if (
+          !state.rows[0] ||
+          !Number.isSafeInteger(input.expectedMemoryRevision) ||
+          input.expectedMemoryRevision < Number(state.rows[0].minimum_context_revision) ||
+          input.expectedMemoryRevision > Number(state.rows[0].memory_revision)
+        ) {
           throw new MemoryConflictError();
         }
       }
@@ -177,6 +184,25 @@ export class PostgresConversationLedger implements ConversationLedger {
       );
       if (input.role === "assistant") {
         await this.#clearRequestFailureInTransaction(client, instanceId, input.requestId);
+        if (input.automaticMemoryEligible && input.content.trim()) {
+          await client.query(
+            `INSERT INTO memory_jobs (
+              instance_id, request_id, source_event_id, assistant_event_id,
+              settings_revision, deletion_revision
+            )
+            SELECT i.id, u.request_id, u.id, $3, i.memory_settings_revision, i.deletion_revision
+            FROM violet_instances i JOIN conversation_events u ON u.instance_id = i.id
+            WHERE i.id = $1 AND u.request_id = $2 AND u.role = 'user'
+              AND i.automatic_memory_enabled
+              AND u.memory_settings_revision = i.memory_settings_revision
+              AND NOT EXISTS (SELECT 1 FROM memory_operations o
+                WHERE o.instance_id = i.id AND o.request_id = u.request_id)
+              AND NOT EXISTS (SELECT 1 FROM memory_deletions d
+                WHERE d.instance_id = i.id AND d.id = u.request_id)
+            ON CONFLICT DO NOTHING`,
+            [instanceId, input.requestId, input.id],
+          );
+        }
       }
       // Once COMMIT is dispatched, a later cancellation cannot undo this answer.
       input.signal?.throwIfAborted();

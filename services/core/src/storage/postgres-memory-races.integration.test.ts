@@ -16,6 +16,7 @@ import { MemoryService } from "../memory/memory-service.js";
 import { PostgresContextCheckpointRepository } from "./postgres-context-checkpoint-repository.js";
 import { PostgresConversationLedger } from "./postgres-conversation-ledger.js";
 import { PostgresMemoryRepository } from "./postgres-memory-repository.js";
+import { initializeTestExtensions } from "./postgres-test-database.js";
 
 const databaseUrl = process.env["VIOLET_TEST_DATABASE_URL"];
 const trials = [1, 2, 3];
@@ -37,6 +38,7 @@ describe.skipIf(!databaseUrl)("PostgreSQL memory commit boundaries", () => {
 
   beforeAll(async () => {
     admin = new Pool({ connectionString: databaseUrl, max: 1 });
+    await initializeTestExtensions(admin);
     await admin.query(`CREATE SCHEMA "${schema}"`);
     const options = { connectionString: databaseUrl, options: `-c search_path=${schema},public` };
     pool = new Pool({ ...options, max: 4 });
@@ -47,6 +49,7 @@ describe.skipIf(!databaseUrl)("PostgreSQL memory commit boundaries", () => {
       "0002b_context_turn_failures.sql",
       "0002c_context_event_ids.sql",
       "0003_explicit_memory.sql",
+      "0004_memory_jobs.sql",
     ]) {
       await pool.query(
         await readFile(
@@ -297,7 +300,8 @@ describe.skipIf(!databaseUrl)("PostgreSQL memory commit boundaries", () => {
         .catch((error: unknown) => error);
       await waitForDatabaseLock();
       // Simulate the correction commit before the service has emitted invalidation.
-      await holder.query("UPDATE violet_instances SET memory_revision = memory_revision + 1");
+      await holder.query(`UPDATE violet_instances SET memory_revision = memory_revision + 1,
+        minimum_context_revision = memory_revision + 1`);
       await holder.query("COMMIT");
       expect(await pending).toBeInstanceOf(MemoryConflictError);
       expect(await ledger.findByRequest(correction.message.requestId, "assistant")).toBeNull();

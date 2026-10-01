@@ -5,7 +5,9 @@ import {
   type Memory,
   type MemoryChange,
   MemoryConflictError,
+  type MemoryJob,
   type MemoryRepository,
+  MemorySourceError,
   type MemoryWriteRequest,
   type ModelGateway,
 } from "@violet/domain";
@@ -32,10 +34,12 @@ export interface TurnMemoryResult {
   readonly memoryTransition?: {
     readonly previousRevision: number;
     readonly revision: number;
+    readonly minimumPreviousRevision?: number;
   };
   readonly reply?: string;
   readonly deletionPreviewId?: string;
   readonly history?: boolean;
+  readonly automaticMemoryEligible?: boolean;
 }
 
 export class MemoryNotFoundError extends Error {
@@ -106,7 +110,14 @@ export class MemoryService {
       intent: proposal.intent,
       elapsedMs: performance.now() - started,
     });
-    if (proposal.intent === "none") return { changes: [], history: proposal.history };
+    if (proposal.intent === "none")
+      return {
+        changes: [],
+        history: proposal.history,
+        ...(classifyMemoryContent(source.content) === "normal"
+          ? { automaticMemoryEligible: true }
+          : {}),
+      };
     if (proposal.intent === "clarify") {
       return { changes: [], reply: "请明确要记住的原话，或在记忆窗口选择要纠正、删除的内容。" };
     }
@@ -144,6 +155,10 @@ export class MemoryService {
             memoryTransition: {
               previousRevision: snapshot.revision,
               revision: snapshot.revision + 1,
+              ...(snapshot.minimumContextRevision !== undefined &&
+              snapshot.minimumContextRevision < snapshot.revision
+                ? { minimumPreviousRevision: snapshot.minimumContextRevision }
+                : {}),
             },
           }
         : {}),
@@ -250,8 +265,43 @@ export class MemoryService {
     return changes;
   }
 
-  async list(): Promise<MemoryList> {
+  async processAutomaticJob(job: MemoryJob, signal: AbortSignal): Promise<void> {
+    const source = await this.#ledger.findByRequest(job.requestId, "user");
+    if (!source || source.id !== job.sourceEventId) throw new MemorySourceError();
+    if (classifyMemoryContent(source.content) !== "normal") {
+      await this.repository.finishJob(job, "skipped", "sensitive_source");
+      return;
+    }
+    if (!this.#model) throw new Error("Memory model is unavailable");
     const snapshot = await this.repository.snapshot();
+    const proposal = await proposeMemory(
+      this.#model,
+      source,
+      snapshot.memories,
+      signal,
+      "automatic",
+    );
+    signal.throwIfAborted();
+    if (proposal.intent !== "write" && proposal.intent !== "none") throw new MemorySourceError();
+    const changes = await this.commit(
+      {
+        requestId: job.requestId,
+        sourceEventId: job.sourceEventId,
+        expectedRevision: snapshot.revision,
+        writes: proposal.intent === "write" ? proposal.writes : [],
+        automaticJob: job,
+      },
+      signal,
+    );
+    recordTestTrace("memory.automatic.committed", {
+      requestId: job.requestId,
+      attempt: job.attempt,
+      changes,
+    });
+  }
+
+  async list(): Promise<MemoryList> {
+    const { minimumContextRevision: _floor, ...snapshot } = await this.repository.snapshot();
     return { ...snapshot, memories: snapshot.memories.map((memory) => maskMemory(memory, false)) };
   }
 

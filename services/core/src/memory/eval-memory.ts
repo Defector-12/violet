@@ -9,6 +9,7 @@ import { ContextEpochManager } from "../conversation/context-epoch-manager.js";
 import { DeepSeekModelGateway } from "../model/deepseek-model-gateway.js";
 import { PostgresConversationLedger } from "../storage/postgres-conversation-ledger.js";
 import { PostgresMemoryRepository } from "../storage/postgres-memory-repository.js";
+import { initializeTestExtensions } from "../storage/postgres-test-database.js";
 import { proposeMemory } from "./memory-proposal.js";
 import { MemoryService } from "./memory-service.js";
 
@@ -31,11 +32,12 @@ export async function loadMemoryFixtures(): Promise<Fixture[]> {
     new URL("../../src/memory/fixtures/release-1d-memory.jsonl", import.meta.url),
     "utf8",
   );
-  const fixtures: Fixture[] = text
+  const all: Fixture[] = text
     .trim()
     .split("\n")
     .map((line) => JSON.parse(line));
-  assert.equal(new Set(fixtures.map((fixture) => fixture.id)).size, fixtures.length);
+  assert.equal(new Set(all.map((fixture) => fixture.id)).size, all.length);
+  const fixtures = all.filter((fixture) => String(fixture.group) !== "automatic");
   for (const [group, count] of Object.entries({
     write: 40,
     correct: 10,
@@ -76,7 +78,7 @@ export function distribution(values: readonly number[]) {
   };
 }
 
-async function database() {
+export async function database() {
   const connectionString = process.env["VIOLET_TEST_DATABASE_URL"];
   assert.ok(connectionString, "VIOLET_TEST_DATABASE_URL is required (isolated local PostgreSQL)");
   const address = new URL(connectionString);
@@ -96,6 +98,7 @@ async function database() {
     }
   };
   try {
+    await initializeTestExtensions(admin);
     await admin.query(`CREATE SCHEMA "${schema}"`);
     for (const migration of [
       "0001_violet_seed.sql",
@@ -103,6 +106,7 @@ async function database() {
       "0002b_context_turn_failures.sql",
       "0002c_context_event_ids.sql",
       "0003_explicit_memory.sql",
+      "0004_memory_jobs.sql",
     ]) {
       await pool.query(
         await readFile(
@@ -138,13 +142,14 @@ async function database() {
         contextEpoch: epochs.acceptUserInput(occurredAt),
       });
     }
-    async function complete(message: LedgerMessage) {
-      await ledger.append({
+    async function complete(message: LedgerMessage, automaticMemoryEligible = false) {
+      return ledger.append({
         content: "Synthetic completion.",
         role: "assistant",
         id: randomUUID(),
         requestId: message.requestId,
         occurredAt: message.occurredAt,
+        automaticMemoryEligible,
       });
     }
     return { pool, ledger, repository, makeService, source, complete, close };
@@ -681,8 +686,13 @@ async function collectModelProposals(
 }
 
 async function main() {
-  const fixtures = await loadMemoryFixtures();
   const args = process.argv.slice(2);
+  if (args.includes("--automatic")) {
+    const { automaticMain } = await import("./eval-automatic-memory.js");
+    await automaticMain(args.filter((arg) => arg !== "--automatic"));
+    return;
+  }
+  const fixtures = await loadMemoryFixtures();
   assert.ok(
     args.every(
       (arg) =>
@@ -725,4 +735,10 @@ async function main() {
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) await main();
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  // Finish module initialization before loading modes that reuse the database/statistics helpers.
+  void main().catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  });
+}

@@ -21,6 +21,8 @@ export type RealtimeServerEvent = WithoutSchemaDefinitions<
   components["schemas"]["RealtimeServerEvent"]
 >;
 export type Memory = components["schemas"]["Memory"];
+export type MemorySettings = components["schemas"]["MemorySettings"];
+export type MemorySettingsUpdate = components["schemas"]["MemorySettingsUpdate"];
 export type MemoryChange = components["schemas"]["MemoryChange"];
 export type MemoryList = components["schemas"]["MemoryList"];
 export type MemoryDetail = components["schemas"]["MemoryDetail"];

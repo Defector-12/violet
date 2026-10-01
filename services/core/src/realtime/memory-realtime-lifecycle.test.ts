@@ -15,6 +15,72 @@ import { AsyncQueue } from "./async-queue.js";
 import { RealtimeSession } from "./realtime-session.js";
 
 describe("Realtime memory lifecycle", () => {
+  it.each(["integrated", "pipeline"] as const)(
+    "passes ordinary eligibility only at the committed %s answer boundary",
+    async (runtimeKind) => {
+      const h = createSession(undefined, runtimeKind);
+      const append = vi.spyOn(h.ledger, "append");
+      h.prepare.mockResolvedValue({ changes: [], automaticMemoryEligible: true });
+      const iterator = h.session.outputs()[Symbol.asyncIterator]();
+      try {
+        await h.configure();
+        await h.text();
+        expect(append.mock.calls.filter(([input]) => input.role === "assistant")).toHaveLength(0);
+        h.queue.push({ type: "response-started", turnId: h.turnId, responseId: h.responseId });
+        h.queue.push({
+          type: "response-text",
+          turnId: h.turnId,
+          responseId: h.responseId,
+          text: "普通回答",
+        });
+        h.queue.push({
+          type: "response-completed",
+          turnId: h.turnId,
+          responseId: h.responseId,
+          inputTokens: 1,
+          outputTokens: 1,
+          memoryRevision: 7,
+          ...(runtimeKind === "pipeline" ? { automaticMemoryEligible: true } : {}),
+        });
+        for (const type of ["response.started", "response.text", "response.completed"]) {
+          expect((await iterator.next()).value?.type).toBe(type);
+        }
+        expect(append.mock.calls.find(([input]) => input.role === "assistant")?.[0]).toMatchObject({
+          automaticMemoryEligible: true,
+          expectedMemoryRevision: 7,
+        });
+      } finally {
+        await h.session.close();
+        await iterator.return?.();
+      }
+    },
+  );
+
+  it("advances an explicit confirmation across proven intervening automatic additions", async () => {
+    const h = createSession();
+    h.prepare.mockImplementationOnce(async () => {
+      h.setRevision(9);
+      return {
+        changes: [{ id: randomUUID(), kind: "created", version: 1 }],
+        reply: "Saved",
+        memoryTransition: { previousRevision: 8, minimumPreviousRevision: 7, revision: 9 },
+      };
+    });
+    const iterator = h.session.outputs()[Symbol.asyncIterator]();
+    try {
+      await h.configure();
+      await h.text();
+      h.respond(h.turnId, "Saved");
+      for (const type of ["response.started", "response.text", "response.completed"]) {
+        expect((await iterator.next()).value?.type).toBe(type);
+      }
+      expect(h.session.closed).toBe(false);
+    } finally {
+      await h.session.close();
+      await iterator.return?.();
+    }
+  });
+
   it.each(["cancelled", "scoped-error", "unscoped-error"] as const)(
     "closes a corrected context before exposing confirmation %s",
     async (outcome) => {

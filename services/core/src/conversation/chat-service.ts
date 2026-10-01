@@ -210,6 +210,7 @@ export class ChatService {
           requestId: requestKey,
           role: "assistant",
           signal,
+          ...(memoryResult?.automaticMemoryEligible ? { automaticMemoryEligible: true } : {}),
           ...(assembled.memoryRevision !== undefined
             ? { expectedMemoryRevision: assembled.memoryRevision }
             : {}),

@@ -53,6 +53,7 @@ interface PendingContextCapture {
 interface PendingAssistantTurn {
   readonly content: string;
   readonly memoryRevision?: number;
+  readonly automaticMemoryEligible: boolean;
   readonly occurredAt: Date;
 }
 
@@ -993,7 +994,10 @@ export class RealtimeSession {
       result.changes.length &&
       result.changes.every((change) => change.kind !== "corrected") &&
       transition &&
-      transition.previousRevision === this.#turnMemoryRevisions.get(key)
+      this.#turnMemoryRevisions.get(key) !== undefined &&
+      (this.#turnMemoryRevisions.get(key) as number) >=
+        (transition.minimumPreviousRevision ?? transition.previousRevision) &&
+      (this.#turnMemoryRevisions.get(key) as number) <= transition.previousRevision
     ) {
       // These additive facts came from this turn, not a newly fetched global snapshot.
       this.#turnMemoryRevisions.set(key, transition.revision);
@@ -1296,6 +1300,10 @@ export class RealtimeSession {
         this.#assistantContent.delete(output.responseId);
         if (content) {
           const result = this.#memoryResults.get(turnKey);
+          const automaticMemoryEligible =
+            this.#conversation?.capabilities.runtimeKind === "pipeline"
+              ? output.automaticMemoryEligible === true
+              : result?.automaticMemoryEligible === true;
           const turnRevision =
             this.#turnMemoryRevisions.get(turnKey) ?? this.#sessionMemoryRevision;
           // Only a correction's exact acknowledgement can outlive superseded context.
@@ -1313,11 +1321,13 @@ export class RealtimeSession {
               contextEpoch,
               this.#now(),
               memoryRevision,
+              automaticMemoryEligible,
             );
           } else {
             this.#pendingAssistantTurns.set(turnKey, {
               content,
               occurredAt: this.#now(),
+              automaticMemoryEligible,
               ...(memoryRevision !== undefined ? { memoryRevision } : {}),
             });
           }
@@ -1529,6 +1539,7 @@ export class RealtimeSession {
       contextEpoch,
       pending.occurredAt,
       pending.memoryRevision,
+      pending.automaticMemoryEligible,
     );
     this.#pendingAssistantTurns.delete(turnKey);
     this.#turnEpochs.delete(turnKey);
@@ -1540,11 +1551,13 @@ export class RealtimeSession {
     contextEpoch: ContextEpoch,
     occurredAt: Date,
     memoryRevision?: number,
+    automaticMemoryEligible = false,
   ): Promise<void> {
     const turnKey = canonicalId(turnId);
     if (this.#memory && memoryRevision === undefined) {
       throw new MemoryConflictError("The response has no memory context revision");
     }
+    const result = this.#memoryResults.get(turnKey);
     const message = await this.#ledger.append({
       content,
       contextEpoch,
@@ -1553,9 +1566,9 @@ export class RealtimeSession {
       requestId: turnKey,
       role: "assistant",
       signal: this.#memoryController.signal,
+      ...(automaticMemoryEligible ? { automaticMemoryEligible: true } : {}),
       ...(memoryRevision !== undefined ? { expectedMemoryRevision: memoryRevision } : {}),
     });
-    const result = this.#memoryResults.get(turnKey);
     const transition = result?.memoryTransition;
     if (
       !this.#closed &&
@@ -1563,7 +1576,10 @@ export class RealtimeSession {
       result?.changes.length &&
       result.changes.every((change) => change.kind !== "corrected") &&
       transition &&
-      transition.previousRevision === this.#sessionMemoryRevision &&
+      this.#sessionMemoryRevision !== undefined &&
+      this.#sessionMemoryRevision >=
+        (transition.minimumPreviousRevision ?? transition.previousRevision) &&
+      this.#sessionMemoryRevision <= transition.previousRevision &&
       transition.revision === memoryRevision
     ) {
       this.#sessionMemoryRevision = transition.revision;

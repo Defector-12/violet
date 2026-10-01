@@ -33,6 +33,161 @@ const memory: Memory = {
 };
 
 describe("memory proposal and bounded context", () => {
+  it("rejects automatic governance proposals and prioritizes explicit summary entries", async () => {
+    for (const proposal of [
+      { intent: "forget", id: memory.id, version: 1 },
+      { intent: "clarify" },
+      {
+        intent: "write",
+        writes: [
+          {
+            content: memory.content,
+            quote: memory.content,
+            kind: memory.kind,
+            targetId: memory.id,
+            targetVersion: 1,
+            action: "correct",
+          },
+        ],
+      },
+    ]) {
+      expect(() => validateProposal(proposal, source, [memory], "automatic")).toThrow("Automatic");
+    }
+    expect(
+      buildMemorySummary({
+        instanceId: randomUUID(),
+        revision: 1,
+        deletionRevision: 0,
+        restoreEpoch: 0,
+        memories: [
+          { ...memory, id: "automatic", origin: "automatic", updatedAt: "2026-09-29" },
+          memory,
+        ],
+      })
+        .content.split("\n")
+        .map((line) => JSON.parse(line).id),
+    ).toEqual([memory.id, "automatic"]);
+    let calls = 0;
+    const model: ModelGateway = {
+      stream() {
+        calls++;
+        throw new Error("must not call");
+      },
+    };
+    for (const content of [
+      "请记住，我对花生过敏。",
+      "我的密码是 synthetic-test-value",
+      "我养了一只鸟，但不要保存这件事。",
+      "I enjoy hiking, but don't remember this about me.",
+    ]) {
+      expect(
+        await proposeMemory(model, { ...source, content }, [], undefined, "automatic"),
+      ).toEqual({
+        intent: "none",
+        history: false,
+      });
+    }
+    expect(calls).toBe(0);
+  });
+
+  it("keeps automatic new claims verbatim without changing explicit writes or duplicate identity", () => {
+    const quote = "I hope to repair my aunt's bicycle";
+    const input = { ...source, content: `${quote}.` };
+    const proposal = {
+      intent: "write",
+      writes: [{ content: "He hopes to repair his aunt's bicycle", quote, kind: "goal" }],
+    };
+    expect(validateProposal(proposal, input, [], "automatic")).toMatchObject({
+      writes: [{ content: quote, source: { quote, startByte: 0, endByte: quote.length } }],
+    });
+    expect(
+      validateProposal(proposal, { ...input, content: `Please remember: ${quote}.` }, []),
+    ).toMatchObject({
+      writes: [{ content: proposal.writes[0]?.content }],
+    });
+    const duplicate = {
+      intent: "write",
+      writes: [{ content: memory.content, quote: memory.content, kind: memory.kind }],
+    };
+    expect(validateProposal(duplicate, source, [memory], "automatic")).toMatchObject({
+      writes: [
+        {
+          content: memory.content,
+          target: { id: memory.id, version: memory.version, action: "add_source" },
+        },
+      ],
+    });
+    for (const candidates of [
+      [{ ...memory, content: `${memory.content}。` }],
+      [{ ...memory, kind: "fact" as const }],
+      [memory, { ...memory, id: randomUUID() }],
+    ]) {
+      const result = validateProposal(duplicate, source, candidates, "automatic");
+      if (result.intent !== "write") throw new Error("Expected writes");
+      expect(result.writes[0]?.target).toBeUndefined();
+    }
+    expect(() =>
+      validateProposal(
+        {
+          ...duplicate,
+          writes: [{ ...duplicate.writes[0], action: "supersede" }],
+        },
+        source,
+        [memory],
+        "automatic",
+      ),
+    ).toThrow("target");
+  });
+
+  it.each([
+    "我平时喜欢用紫色书签",
+    "我平常喜欢用橙色笔记本",
+    "我平常喜欢用蓝色文件夹",
+    "我现在喜欢橙色",
+    "I prefer quiet rooms.",
+    "我喜欢喝茶，但不要保存。",
+    "I enjoy gardening, but don't remember this.",
+  ])(
+    "rejects an erroneous explicit write for a statement without authorization: %s",
+    async (content) => {
+      const model: ModelGateway = {
+        async *stream(): AsyncIterable<ModelStreamEvent> {
+          yield {
+            type: "delta",
+            content: JSON.stringify({
+              intent: "write",
+              writes: [{ content, quote: content, kind: "preference" }],
+            }),
+          };
+          yield { type: "complete", inputTokens: 1, outputTokens: 1 };
+        },
+      };
+      expect(await proposeMemory(model, { ...source, content }, [])).toEqual({
+        intent: "none",
+        history: false,
+      });
+      expect(
+        validateProposal(
+          {
+            intent: "write",
+            writes: [
+              {
+                content,
+                quote: content,
+                kind: "preference",
+                targetId: memory.id,
+                targetVersion: memory.version,
+                action: "correct",
+              },
+            ],
+          },
+          { ...source, content },
+          [memory],
+        ),
+      ).toEqual({ intent: "none", history: false });
+    },
+  );
+
   it("derives exact UTF-8 offsets from the final user's quote and rejects invented sources", () => {
     const proposal = {
       intent: "write",
@@ -129,23 +284,32 @@ describe("memory proposal and bounded context", () => {
     },
   );
 
-  it("uses only final user and bounded normal candidates for model proposals", async () => {
-    let sent: ModelRequest | undefined;
-    const model: ModelGateway = {
-      async *stream(request): AsyncIterable<ModelStreamEvent> {
-        sent = request;
-        yield { type: "delta", content: '{"intent":"none","history":true}' };
-        yield { type: "complete", inputTokens: 1, outputTokens: 1 };
-      },
-    };
-    expect(
-      await proposeMemory(model, source, [
-        { ...memory, sensitivity: "controlled", content: "诊断原文" },
-      ]),
-    ).toEqual({ intent: "none", history: true });
-    expect(JSON.stringify(sent)).not.toContain("诊断原文");
-    expect(sent?.jsonOutput).toBe(true);
-  });
+  it.each(["explicit", "automatic"] as const)(
+    "uses only final user and normal candidates with the provider JSON contract (%s)",
+    async (mode) => {
+      let sent: ModelRequest | undefined;
+      const model: ModelGateway = {
+        async *stream(request): AsyncIterable<ModelStreamEvent> {
+          if (request.jsonOutput && !request.messages.some((item) => /json/i.test(item.content)))
+            throw new Error("400 Prompt must contain the word 'json'");
+          sent = request;
+          yield { type: "delta", content: '{"intent":"none","history":true}' };
+          yield { type: "complete", inputTokens: 1, outputTokens: 1 };
+        },
+      };
+      expect(
+        await proposeMemory(
+          model,
+          source,
+          [{ ...memory, sensitivity: "controlled", content: "诊断原文" }],
+          undefined,
+          mode,
+        ),
+      ).toEqual({ intent: "none", history: true });
+      expect(JSON.stringify(sent)).not.toContain("诊断原文");
+      expect(sent?.jsonOutput).toBe(true);
+    },
+  );
 
   it.each([
     "你记住我对花生过敏了吗？",

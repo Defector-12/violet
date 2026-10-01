@@ -350,7 +350,7 @@ describe("PipelineRealtimeConversationPort", () => {
         async prepareRequest() {
           revision = 8;
           return outcome === "ordinary"
-            ? { changes: [] }
+            ? { changes: [], automaticMemoryEligible: true }
             : {
                 changes: [{ id: "memory", kind: outcome, version: 1 }],
                 reply: "Saved",
@@ -393,6 +393,11 @@ describe("PipelineRealtimeConversationPort", () => {
           type: "response-completed",
           memoryRevision: outcome === "ordinary" ? 7 : 8,
         });
+        if (outcome === "ordinary") {
+          expect(result[2]).toHaveProperty("automaticMemoryEligible", true);
+        } else {
+          expect(result[2]).not.toHaveProperty("automaticMemoryEligible");
+        }
         expect(state).not.toHaveBeenCalled();
         expect(model.requests).toHaveLength(outcome === "ordinary" ? 1 : 0);
       } finally {

@@ -7,6 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { ContextEpochManager } from "../conversation/context-epoch-manager.js";
 import { PostgresContextCheckpointRepository } from "./postgres-context-checkpoint-repository.js";
 import { PostgresConversationLedger } from "./postgres-conversation-ledger.js";
+import { initializeTestExtensions } from "./postgres-test-database.js";
 
 const databaseUrl = process.env["VIOLET_TEST_DATABASE_URL"];
 const integration = describe.skipIf(!databaseUrl);
@@ -18,6 +19,7 @@ integration("PostgreSQL conversation context", () => {
 
   beforeAll(async () => {
     admin = new Pool({ connectionString: databaseUrl, max: 1 });
+    await initializeTestExtensions(admin);
     await admin.query(`CREATE SCHEMA "${schema}"`);
     pool = new Pool({
       connectionString: databaseUrl,

@@ -58,6 +58,9 @@ struct LocalContextPrivacyTests {
       "access_token: abcdefghijklmnop",
       "TOS_SECRET_ACCESS_KEY=abcdefghijklmnop",
       "Authorization: Bearer abcdefghijklmnop",
+      "我的 API token 是 synthetic-only-value",
+      "access_key 为 synthetic-only-value",
+      "password is synthetic-only-value",
     ])
   func blocksCommonLabeledCredentialFormats(_ secret: String) {
     let filter = LocalContextPrivacyFilter(excludedBundleIds: [])

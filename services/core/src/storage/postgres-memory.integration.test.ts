@@ -22,6 +22,7 @@ import { MemoryService } from "../memory/memory-service.js";
 import { PostgresContextCheckpointRepository } from "./postgres-context-checkpoint-repository.js";
 import { PostgresConversationLedger } from "./postgres-conversation-ledger.js";
 import { PostgresMemoryRepository } from "./postgres-memory-repository.js";
+import { initializeTestExtensions } from "./postgres-test-database.js";
 
 const databaseUrl = process.env["VIOLET_TEST_DATABASE_URL"];
 describe.skipIf(!databaseUrl)("PostgreSQL explicit memory", () => {
@@ -34,6 +35,7 @@ describe.skipIf(!databaseUrl)("PostgreSQL explicit memory", () => {
 
   beforeAll(async () => {
     admin = new Pool({ connectionString: databaseUrl, max: 1 });
+    await initializeTestExtensions(admin);
     await admin.query(`CREATE SCHEMA "${schema}"`);
     pool = new Pool({
       connectionString: databaseUrl,
@@ -69,6 +71,12 @@ describe.skipIf(!databaseUrl)("PostgreSQL explicit memory", () => {
     await pool.query(
       await readFile(
         new URL("../../../../infra/migrations/0003_explicit_memory.sql", import.meta.url),
+        "utf8",
+      ),
+    );
+    await pool.query(
+      await readFile(
+        new URL("../../../../infra/migrations/0004_memory_jobs.sql", import.meta.url),
         "utf8",
       ),
     );
@@ -433,6 +441,34 @@ describe.skipIf(!databaseUrl)("PostgreSQL explicit memory", () => {
     });
     try {
       expect((await app.inject({ url: "/v1/memories" })).statusCode).toBe(401);
+      const settings = await client.getMemorySettings();
+      expect(settings.enabled).toBe(false);
+      const enable = {
+        requestId: randomUUID(),
+        expectedRevision: settings.revision,
+        enabled: true,
+      };
+      expect((await client.updateMemorySettings(enable)).enabled).toBe(true);
+      const disable = {
+        requestId: randomUUID(),
+        expectedRevision: settings.revision + 1,
+        enabled: false,
+      };
+      expect((await client.updateMemorySettings(disable)).enabled).toBe(false);
+      expect((await client.updateMemorySettings(enable)).enabled).toBe(false);
+      await expect(
+        client.updateMemorySettings({ ...enable, requestId: randomUUID() }),
+      ).rejects.toMatchObject({ status: 409 });
+      expect(
+        (
+          await app.inject({
+            method: "POST",
+            url: "/v1/memory-settings",
+            headers: { authorization: `Bearer ${token}` },
+            payload: { ...enable, extra: true },
+          })
+        ).statusCode,
+      ).toBe(400);
       const sensitive = await source("请记住，我对花生过敏。");
       const created = required(
         (

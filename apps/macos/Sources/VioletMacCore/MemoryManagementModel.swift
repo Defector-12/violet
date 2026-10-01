@@ -13,6 +13,9 @@ public final class MemoryManagementModel: ObservableObject {
   @Published public private(set) var hasChanges = false
   @Published public private(set) var pendingPreviewId: String?
   @Published public private(set) var pendingConfirmation = false
+  @Published public private(set) var settings: MemorySettings?
+  @Published public private(set) var settingsError: String?
+  @Published public private(set) var savingSettings = false
   @Published public var search = ""
   @Published public var kind = ""
   @Published public var recentOnly = false
@@ -24,6 +27,10 @@ public final class MemoryManagementModel: ObservableObject {
   private var instanceId: String?
   private var detailGeneration = 0
   private var correctionAttempt: (id: String, version: Int, content: String, requestId: String)?
+  private var settingsAttempt: (requestId: String, revision: Int, enabled: Bool)?
+  private var settingsRevisionFloor = 0
+  private var seenRevision = 0
+  private var changeWatch: Task<Void, Never>?
 
   public init(client: any MemoryClientPort, epochs: any RestoreEpochStore) {
     self.client = client
@@ -44,6 +51,58 @@ public final class MemoryManagementModel: ObservableObject {
       pendingPreviewId = id
       onPreviewRequested?()
     }
+    // Only observe metadata for one minute after an interaction; no perception or content polling.
+    changeWatch?.cancel()
+    changeWatch = Task { [weak self] in
+      for _ in 0..<30 {
+        guard !Task.isCancelled, let self else { return }
+        await self.checkForChanges()
+        if self.settings?.enabled == false { return }
+        do { try await Task.sleep(for: .seconds(2)) } catch { return }
+      }
+    }
+  }
+
+  public func checkForChanges() async {
+    do {
+      let value = try await client.settings()
+      guard !Task.isCancelled else { return }
+      try acceptSettings(value)
+    } catch {
+      // A failed metadata poll does not erase the last acknowledged state.
+    }
+  }
+
+  public func setAutomaticMemory(_ enabled: Bool) async {
+    guard !savingSettings, let current = settings else { return }
+    savingSettings = true
+    settingsError = nil
+    defer { savingSettings = false }
+    let prior = settingsAttempt
+    let attempt = prior?.enabled == enabled ? prior!
+      : (requestId: UUID().uuidString.lowercased(), revision: current.revision, enabled: enabled)
+    settingsAttempt = attempt
+    do {
+      let result = try await client.updateSettings(
+        requestId: attempt.requestId, revision: attempt.revision, enabled: attempt.enabled
+      )
+      try acceptSettings(result)
+      settingsAttempt = nil
+    } catch {
+      if error as? MemoryClientError == .conflict { settingsAttempt = nil }
+      // The write may have committed despite a lost response. Show only verified state.
+      settings = nil
+      if let value = try? await client.settings() { try? acceptSettings(value) }
+      settingsError = error.localizedDescription
+    }
+  }
+
+  private func acceptSettings(_ value: MemorySettings) throws {
+    if let instanceId, value.instanceId != instanceId { throw RestoreEpochError.invalidRecord }
+    guard value.revision >= settingsRevisionFloor else { return }
+    settingsRevisionFloor = value.revision
+    settings = value
+    if value.memoryRevision > seenRevision { hasChanges = true }
   }
 
   public func refresh() async {
@@ -67,6 +126,13 @@ public final class MemoryManagementModel: ObservableObject {
         if self.pendingPreviewId == id { self.pendingPreviewId = nil }
       }
       self.hasChanges = false
+      do {
+        try self.acceptSettings(try await self.client.settings())
+        self.settingsError = nil
+      } catch {
+        self.settings = nil
+        self.settingsError = error.localizedDescription
+      }
     }
   }
 
@@ -150,6 +216,11 @@ public final class MemoryManagementModel: ObservableObject {
 
   private func reload() async throws {
     let snapshot = try await client.list()
+    if instanceId != snapshot.instanceId {
+      settings = nil
+      settingsRevisionFloor = 0
+      settingsAttempt = nil
+    }
     instanceId = snapshot.instanceId
     var record = try epochs.load(instanceId: snapshot.instanceId)
       ?? RestoreEpochRecord(instanceId: snapshot.instanceId)
@@ -157,6 +228,7 @@ public final class MemoryManagementModel: ObservableObject {
     record.minimumRestoreEpoch = max(record.minimumRestoreEpoch, snapshot.restoreEpoch)
     _ = try epochs.save(record)
     memories = snapshot.memories
+    seenRevision = snapshot.revision
   }
 
   private func sendPendingConfirmation(_ stored: RestoreEpochRecord) async throws {

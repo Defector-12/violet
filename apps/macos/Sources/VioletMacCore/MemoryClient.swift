@@ -7,6 +7,11 @@ public typealias MemoryDetail = Components.Schemas.detail
 public typealias MemoryChange = Components.Schemas.change
 public typealias MemoryDeletionPreview = Components.Schemas.preview
 public typealias MemoryDeletionStatus = Components.Schemas.deletionStatus
+public typealias MemorySettings = Components.Schemas.settings
+
+public extension VioletMemory {
+  var originLabel: String { origin == .automatic ? "自动学习" : "明确记住" }
+}
 
 public extension MemoryDeletionPreview {
   func retainsSources(for memory: VioletMemory) -> Bool {
@@ -44,6 +49,8 @@ public enum MemoryClientError: Error, LocalizedError {
 }
 
 public protocol MemoryClientPort: Sendable {
+  func settings() async throws -> MemorySettings
+  func updateSettings(requestId: String, revision: Int, enabled: Bool) async throws -> MemorySettings
   func list() async throws -> MemoryList
   func detail(id: String, reveal: Bool) async throws -> MemoryDetail
   func correct(id: String, requestId: String, version: Int, content: String) async throws
@@ -72,6 +79,22 @@ public struct GeneratedMemoryClient: MemoryClientPort {
   public func list() async throws -> MemoryList {
     try await traced("list") {
       try await client.listMemories(.init()).ok.body.json
+    }
+  }
+
+  public func settings() async throws -> MemorySettings {
+    try await traced("settings.read") {
+      try await client.getMemorySettings(.init()).ok.body.json
+    }
+  }
+
+  public func updateSettings(requestId: String, revision: Int, enabled: Bool) async throws -> MemorySettings {
+    try await traced("settings.update", id: requestId) {
+      let output = try await client.updateMemorySettings(.init(
+        body: .json(.init(requestId: requestId, expectedRevision: revision, enabled: enabled))
+      ))
+      if case .conflict = output { throw MemoryClientError.conflict }
+      return try output.ok.body.json
     }
   }
 
