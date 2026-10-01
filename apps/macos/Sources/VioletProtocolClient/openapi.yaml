@@ -6,6 +6,44 @@ info:
 servers:
   - url: http://127.0.0.1:4310
 paths:
+  /v1/memory-settings:
+    get:
+      operationId: getMemorySettings
+      summary: Read automatic learning state and the current memory revision.
+      security:
+        - deviceToken: []
+      responses:
+        '200':
+          description: Authoritative settings; contains no memory content.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/settings'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    post:
+      operationId: updateMemorySettings
+      summary: Change automatic learning with version and request identity checks.
+      description: Disabling invalidates queued and running tasks. Enabling does not backfill history. A replay returns current settings without undoing newer changes.
+      security:
+        - deviceToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/settingsUpdate'
+      responses:
+        '200':
+          description: Current authoritative settings.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/settings'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/MemoryConflict'
   /v1/memories:
     get:
       operationId: listMemories
@@ -1054,6 +1092,10 @@ components:
         type: string
         format: uuid
   schemas:
+    MemorySettings:
+      $ref: '#/components/schemas/settings'
+    MemorySettingsUpdate:
+      $ref: '#/components/schemas/settingsUpdate'
     Memory:
       $ref: '#/components/schemas/memory'
     MemoryChange:
@@ -1084,6 +1126,65 @@ components:
       $ref: '#/components/schemas/realtime-client-event.schema'
     RealtimeServerEvent:
       $ref: '#/components/schemas/realtime-server-event.schema'
+    settings:
+      type: object
+      additionalProperties: false
+      required:
+        - instanceId
+        - revision
+        - enabled
+        - memoryRevision
+      properties:
+        instanceId:
+          type: string
+          format: uuid
+        revision:
+          type: integer
+          minimum: 0
+        enabled:
+          type: boolean
+        memoryRevision:
+          type: integer
+          minimum: 0
+    error.schema:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      $id: https://violet.local/schemas/v1/error.schema.json
+      title: ApiError
+      type: object
+      additionalProperties: false
+      required:
+        - code
+        - message
+        - requestId
+        - retryable
+      properties:
+        code:
+          type: string
+          pattern: ^[A-Z][A-Z0-9_]+$
+        message:
+          type: string
+          minLength: 1
+        requestId:
+          type: string
+          format: uuid
+        retryable:
+          type: boolean
+    settingsUpdate:
+      type: object
+      additionalProperties: false
+      required:
+        - requestId
+        - expectedRevision
+        - enabled
+      properties:
+        requestId:
+          type: string
+          format: uuid
+        expectedRevision:
+          type: integer
+          minimum: 0
+        enabled:
+          type: boolean
     source:
       type: object
       additionalProperties: false
@@ -1128,7 +1229,10 @@ components:
             - current
             - superseded
         origin:
-          const: explicit
+          type: string
+          enum:
+            - explicit
+            - automatic
         content:
           type: string
         kind:
@@ -1181,29 +1285,6 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/memory'
-    error.schema:
-      $schema: https://json-schema.org/draft/2020-12/schema
-      $id: https://violet.local/schemas/v1/error.schema.json
-      title: ApiError
-      type: object
-      additionalProperties: false
-      required:
-        - code
-        - message
-        - requestId
-        - retryable
-      properties:
-        code:
-          type: string
-          pattern: ^[A-Z][A-Z0-9_]+$
-        message:
-          type: string
-          minLength: 1
-        requestId:
-          type: string
-          format: uuid
-        retryable:
-          type: boolean
     event:
       type: object
       additionalProperties: false

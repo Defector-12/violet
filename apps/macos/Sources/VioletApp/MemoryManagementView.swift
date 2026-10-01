@@ -8,6 +8,24 @@ struct MemoryManagementView: View {
   var body: some View {
     VStack(spacing: 0) {
       HStack {
+        Toggle("自动学习记忆", isOn: Binding(
+          get: { model.settings?.enabled ?? false },
+          set: { enabled in Task { await model.setAutomaticMemory(enabled) } }
+        ))
+        .disabled(model.settings == nil || model.savingSettings)
+        .accessibilityHint("关闭后停止自动学习，明确记住和记忆管理仍可使用。")
+        if model.savingSettings { ProgressView().controlSize(.small) }
+        Text(model.settings == nil ? "设置状态待确认" : "只学习开启期间的新对话，重开不补提取。")
+          .font(.caption).foregroundStyle(.secondary)
+        Spacer()
+        if model.hasChanges {
+          Button("有新变化，刷新查看") { Task { await model.refresh() } }.disabled(model.busy)
+        }
+      }.padding()
+      if let error = model.settingsError {
+        Text(error).foregroundStyle(.red).padding(.horizontal)
+      }
+      HStack {
         TextField("搜索记忆", text: $model.search)
           .textFieldStyle(.roundedBorder)
           .accessibilityLabel("搜索记忆")
@@ -48,14 +66,14 @@ struct MemoryManagementView: View {
               VStack(alignment: .leading, spacing: 6) {
                 Text(memory.redacted == true ? "受控敏感内容 · 已遮挡" : memory.content)
                   .lineLimit(3)
-                Text("v\(memory.version) · \(memory.updatedAt.formatted(date: .abbreviated, time: .shortened))")
+                Text("\(memory.originLabel) · v\(memory.version) · \(memory.updatedAt.formatted(date: .abbreviated, time: .shortened))")
                   .font(.caption).foregroundStyle(.secondary)
               }.tag(memory.id).padding(.vertical, 4)
             }
           }
           .overlay {
             if model.memories.isEmpty && !model.busy {
-              Text("还没有明确记住的内容").foregroundStyle(.secondary)
+              Text("还没有已学习的记忆").foregroundStyle(.secondary)
             }
           }
         }.frame(minWidth: 260, idealWidth: 310)
@@ -72,7 +90,7 @@ struct MemoryManagementView: View {
                   Text(memory.state == .current ? "当前 · v\(memory.version)" : "已被纠正 · v\(memory.version)")
                     .font(.headline)
                   Text(memory.content).textSelection(.enabled)
-                  Text("明确记住 · \(memory.updatedAt.formatted(date: .abbreviated, time: .shortened))")
+                  Text("\(memory.originLabel) · \(memory.updatedAt.formatted(date: .abbreviated, time: .shortened))")
                     .font(.caption).foregroundStyle(.secondary)
                   if memory.state == .current {
                     Button("删除这条记忆…", role: .destructive) {

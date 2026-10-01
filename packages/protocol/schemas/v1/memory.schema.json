@@ -2,6 +2,27 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://violet.local/schemas/v1/memory.schema.json",
   "$defs": {
+    "settings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["instanceId", "revision", "enabled", "memoryRevision"],
+      "properties": {
+        "instanceId": { "type": "string", "format": "uuid" },
+        "revision": { "type": "integer", "minimum": 0 },
+        "enabled": { "type": "boolean" },
+        "memoryRevision": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "settingsUpdate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requestId", "expectedRevision", "enabled"],
+      "properties": {
+        "requestId": { "type": "string", "format": "uuid" },
+        "expectedRevision": { "type": "integer", "minimum": 0 },
+        "enabled": { "type": "boolean" }
+      }
+    },
     "source": {
       "type": "object",
       "additionalProperties": false,
@@ -31,7 +52,7 @@
         "id": { "type": "string", "format": "uuid" },
         "version": { "type": "integer", "minimum": 1 },
         "state": { "type": "string", "enum": ["current", "superseded"] },
-        "origin": { "const": "explicit" },
+        "origin": { "type": "string", "enum": ["explicit", "automatic"] },
         "content": { "type": "string" },
         "kind": { "type": "string", "enum": ["preference", "fact", "goal", "relationship"] },
         "sensitivity": { "type": "string", "enum": ["normal", "controlled"] },

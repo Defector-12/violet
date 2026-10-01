@@ -17,7 +17,7 @@ export interface Memory extends MemoryContent {
   readonly id: string;
   readonly version: number;
   readonly state: "current" | "superseded";
-  readonly origin: "explicit";
+  readonly origin: "explicit" | "automatic";
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly sources: readonly MemorySource[];
@@ -32,6 +32,8 @@ export interface MemoryState {
 
 export interface MemorySnapshot extends MemoryState {
   readonly memories: readonly Memory[];
+  /** Earlier contexts remain valid across automatic additions only. */
+  readonly minimumContextRevision?: number;
 }
 
 export interface MemorySummary {
@@ -59,6 +61,29 @@ export interface MemoryWriteRequest {
   readonly sourceEventId: string;
   readonly expectedRevision: number;
   readonly writes: readonly MemoryWrite[];
+  readonly automaticJob?: MemoryJob;
+}
+
+export interface MemorySettings {
+  readonly instanceId: string;
+  readonly revision: number;
+  readonly enabled: boolean;
+  readonly memoryRevision: number;
+}
+
+export interface MemorySettingsUpdate {
+  readonly requestId: string;
+  readonly expectedRevision: number;
+  readonly enabled: boolean;
+}
+
+export interface MemoryJob {
+  readonly requestId: string;
+  readonly sourceEventId: string;
+  readonly claimId: string;
+  readonly settingsRevision: number;
+  readonly deletionRevision: number;
+  readonly attempt: number;
 }
 
 export type MemoryDeletionTarget =
@@ -87,6 +112,11 @@ export interface MemoryDeletionStatus {
 }
 
 export interface MemoryRepository {
+  settings(): Promise<MemorySettings>;
+  updateSettings(input: MemorySettingsUpdate): Promise<MemorySettings>;
+  recoverJobs(): Promise<void>;
+  claimJob(): Promise<MemoryJob | null>;
+  finishJob(job: MemoryJob, outcome: "skipped" | "retry", failureCode: string): Promise<void>;
   state(): Promise<MemoryState>;
   snapshot(): Promise<MemorySnapshot>;
   get(id: string): Promise<readonly Memory[]>;

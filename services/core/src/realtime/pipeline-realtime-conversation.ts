@@ -486,6 +486,7 @@ class PipelineRealtimeConversation implements RealtimeConversation {
         responseId: response.responseId,
         turnId: response.turnId,
         type: "response-completed",
+        ...(memoryResult?.automaticMemoryEligible ? { automaticMemoryEligible: true } : {}),
         ...(memoryRevision !== undefined ? { memoryRevision } : {}),
         ...(memoryResult?.changes.length ? { memoryChanges: memoryResult.changes } : {}),
         ...(memoryResult?.deletionPreviewId

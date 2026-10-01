@@ -11,11 +11,20 @@ export async function* streamWithRecall(
   history: boolean,
   signal?: AbortSignal,
 ): AsyncIterable<ModelStreamEvent> {
-  if (!memory || memory.injectionEnabled === false) {
+  if (!memory) {
     yield* model.stream(request, signal);
     return;
   }
   const messages: ModelMessage[] = [...request.messages];
+  messages.unshift({
+    role: "system",
+    content:
+      "Core has NOT confirmed a memory write, correction or deletion for this turn. Respond to the user's message without claiming or promising storage (including '记下了', '记住了', 'I will remember'). Ordinary conversation and possible background learning are not confirmations. A personal statement in the current message is available directly: acknowledge its content naturally; do not search history to check whether the user said it before, or ask them to repeat what they just told you.",
+  });
+  if (memory.injectionEnabled === false) {
+    yield* model.stream({ ...request, messages }, signal);
+    return;
+  }
   if (history) {
     messages.unshift({
       role: "system",

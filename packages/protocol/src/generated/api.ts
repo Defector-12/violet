@@ -4,6 +4,27 @@
  */
 
 export interface paths {
+    "/v1/memory-settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read automatic learning state and the current memory revision. */
+        get: operations["getMemorySettings"];
+        put?: never;
+        /**
+         * Change automatic learning with version and request identity checks.
+         * @description Disabling invalidates queued and running tasks. Enabling does not backfill history. A replay returns current settings without undoing newer changes.
+         */
+        post: operations["updateMemorySettings"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/memories": {
         parameters: {
             query?: never;
@@ -246,6 +267,8 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        MemorySettings: components["schemas"]["settings"];
+        MemorySettingsUpdate: components["schemas"]["settingsUpdate"];
         Memory: components["schemas"]["memory"];
         MemoryChange: components["schemas"]["change"];
         MemoryList: components["schemas"]["list"];
@@ -261,6 +284,27 @@ export interface components {
         ContextReceipt: components["schemas"]["context-receipt.schema"];
         RealtimeClientEvent: components["schemas"]["realtime-client-event.schema"];
         RealtimeServerEvent: components["schemas"]["realtime-server-event.schema"];
+        settings: {
+            /** Format: uuid */
+            instanceId: string;
+            revision: number;
+            enabled: boolean;
+            memoryRevision: number;
+        };
+        /** ApiError */
+        "error.schema": {
+            code: string;
+            message: string;
+            /** Format: uuid */
+            requestId: string;
+            retryable: boolean;
+        };
+        settingsUpdate: {
+            /** Format: uuid */
+            requestId: string;
+            expectedRevision: number;
+            enabled: boolean;
+        };
         source: {
             /** Format: uuid */
             eventId: string;
@@ -273,8 +317,8 @@ export interface components {
             version: number;
             /** @enum {string} */
             state: "current" | "superseded";
-            /** @constant */
-            origin: "explicit";
+            /** @enum {string} */
+            origin: "explicit" | "automatic";
             content: string;
             /** @enum {string} */
             kind: "preference" | "fact" | "goal" | "relationship";
@@ -294,14 +338,6 @@ export interface components {
             deletionRevision: number;
             restoreEpoch: number;
             memories: components["schemas"]["memory"][];
-        };
-        /** ApiError */
-        "error.schema": {
-            code: string;
-            message: string;
-            /** Format: uuid */
-            requestId: string;
-            retryable: boolean;
         };
         event: {
             /** Format: uuid */
@@ -859,6 +895,53 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    getMemorySettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Authoritative settings; contains no memory content. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["settings"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    updateMemorySettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["settingsUpdate"];
+            };
+        };
+        responses: {
+            /** @description Current authoritative settings. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["settings"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            409: components["responses"]["MemoryConflict"];
+        };
+    };
     listMemories: {
         parameters: {
             query?: never;

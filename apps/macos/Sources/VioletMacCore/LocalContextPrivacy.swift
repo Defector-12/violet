@@ -209,7 +209,7 @@ private func recognizedTextLines(
 
 private let absoluteSecretPatterns: [NSRegularExpression] = [
   regex(
-    #"(?i)(?<![A-Za-z0-9])(?:[A-Za-z0-9]+[_-])*(?:password|passwd|token|secret|api[_-]?key|access[_-]?key|验证码)(?:[_-][A-Za-z0-9]+)*\s*[:=：]\s*\S+"#
+    #"(?i)(?<![A-Za-z0-9])(?:[A-Za-z0-9]+[_-])*(?:password|passwd|token|secret|api[_-]?key|access[_-]?key|验证码)(?:[_-][A-Za-z0-9]+)*\s*(?:[:=：]|is\b|是|为)\s*\S+"#
   ),
   regex(#"(?i)\bBearer\s+\S+"#),
   regex(#"-----BEGIN [A-Z ]*PRIVATE KEY-----"#),

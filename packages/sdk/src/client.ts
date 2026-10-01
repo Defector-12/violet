@@ -9,6 +9,7 @@ import {
   assertMemoryDetail,
   assertMemoryList,
   assertMemoryMutation,
+  assertMemorySettings,
   type ChatRequest,
   type ChatStreamEvent,
   type ContextEnvelope,
@@ -23,6 +24,8 @@ import {
   type MemoryDetail,
   type MemoryList,
   type MemoryMutation,
+  type MemorySettings,
+  type MemorySettingsUpdate,
 } from "@violet/protocol";
 
 export interface VioletClientOptions {
@@ -109,6 +112,21 @@ export class VioletClient {
   async listMemories(signal?: AbortSignal): Promise<MemoryList> {
     const value = await this.#memoryRequest("/v1/memories", "GET", undefined, signal);
     assertMemoryList(value);
+    return value;
+  }
+
+  async getMemorySettings(signal?: AbortSignal): Promise<MemorySettings> {
+    const value = await this.#memoryRequest("/v1/memory-settings", "GET", undefined, signal);
+    assertMemorySettings(value);
+    return value;
+  }
+
+  async updateMemorySettings(
+    input: MemorySettingsUpdate,
+    signal?: AbortSignal,
+  ): Promise<MemorySettings> {
+    const value = await this.#memoryRequest("/v1/memory-settings", "POST", input, signal);
+    assertMemorySettings(value);
     return value;
   }
 

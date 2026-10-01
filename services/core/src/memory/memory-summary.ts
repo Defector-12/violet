@@ -8,7 +8,9 @@ export function buildMemorySummary(snapshot: MemorySnapshot): MemorySummary {
   let bytes = 0;
   for (const memory of [...snapshot.memories].sort(
     (left, right) =>
-      right.updatedAt.localeCompare(left.updatedAt) || left.id.localeCompare(right.id),
+      Number(right.origin === "explicit") - Number(left.origin === "explicit") ||
+      right.updatedAt.localeCompare(left.updatedAt) ||
+      left.id.localeCompare(right.id),
   )) {
     // Controlled content is only revealed in the explicitly requested management detail.
     const line = JSON.stringify({

@@ -8,7 +8,10 @@ import {
   type MemoryDeletionPreview,
   type MemoryDeletionStatus,
   type MemoryDeletionTarget,
+  type MemoryJob,
   type MemoryRepository,
+  type MemorySettings,
+  type MemorySettingsUpdate,
   type MemorySnapshot,
   type MemorySource,
   MemorySourceError,
@@ -26,13 +29,16 @@ interface InstanceRow {
   deletion_revision: string;
   restore_epoch: string;
   next_event_sequence: string;
+  minimum_context_revision: string;
+  automatic_memory_enabled: boolean;
+  memory_settings_revision: string;
 }
 
 interface MemoryRow {
   id: string;
   version: number;
   state: Memory["state"];
-  origin: "explicit";
+  origin: Memory["origin"];
   envelope: ReturnType<typeof encryptJson>;
   created_at: Date;
   updated_at: Date;
@@ -70,6 +76,169 @@ export class PostgresMemoryRepository implements MemoryRepository {
     this.#cipher = input.cipher;
   }
 
+  async settings(): Promise<MemorySettings> {
+    return toSettings(await this.#instance(this.#pool));
+  }
+
+  async updateSettings(input: MemorySettingsUpdate): Promise<MemorySettings> {
+    return this.#transaction(async (client, instance) => {
+      const previous = await client.query<{ expected_revision: string; enabled: boolean }>(
+        "SELECT * FROM memory_settings_operations WHERE instance_id = $1 AND request_id = $2",
+        [instance.id, input.requestId],
+      );
+      if (previous.rows[0]) {
+        if (
+          Number(previous.rows[0].expected_revision) !== input.expectedRevision ||
+          previous.rows[0].enabled !== input.enabled
+        )
+          throw new MemoryConflictError();
+        // A delayed retry must never undo a newer setting.
+        return toSettings(instance);
+      }
+      if (Number(instance.memory_settings_revision) !== input.expectedRevision) {
+        throw new MemoryConflictError();
+      }
+      await client.query(
+        `INSERT INTO memory_settings_operations (instance_id, request_id, expected_revision, enabled)
+         VALUES ($1, $2, $3, $4)`,
+        [instance.id, input.requestId, input.expectedRevision, input.enabled],
+      );
+      if (instance.automatic_memory_enabled !== input.enabled) {
+        await client.query(
+          `UPDATE violet_instances SET automatic_memory_enabled = $2,
+           memory_settings_revision = memory_settings_revision + 1 WHERE id = $1`,
+          [instance.id, input.enabled],
+        );
+        if (!input.enabled) {
+          await client.query(
+            `UPDATE memory_jobs SET status = 'skipped', claim_id = NULL,
+             failure_code = 'settings_changed', updated_at = now()
+             WHERE instance_id = $1 AND status IN ('pending', 'running')`,
+            [instance.id],
+          );
+        }
+      }
+      return toSettings(await this.#instance(client));
+    });
+  }
+
+  /** Called only after acquiring the existing exclusive Core lease. */
+  async recoverJobs(): Promise<void> {
+    await this.#transaction(async (client, instance) => {
+      await client.query(
+        `UPDATE memory_jobs SET status = CASE
+           WHEN NOT $2 OR settings_revision <> $3 OR deletion_revision <> $4 THEN 'skipped'
+           WHEN attempts >= 3 THEN 'failed' ELSE 'pending' END,
+         claim_id = NULL, available_at = now(), updated_at = now(),
+         failure_code = 'interrupted'
+         WHERE instance_id = $1 AND status = 'running'`,
+        [
+          instance.id,
+          instance.automatic_memory_enabled,
+          instance.memory_settings_revision,
+          instance.deletion_revision,
+        ],
+      );
+    });
+  }
+
+  async claimJob(): Promise<MemoryJob | null> {
+    return this.#transaction(async (client, instance) => {
+      await client.query(
+        `UPDATE memory_jobs SET status = 'skipped', claim_id = NULL,
+         failure_code = 'state_changed', updated_at = now()
+         WHERE instance_id = $1 AND status = 'pending'
+         AND (NOT $2 OR settings_revision <> $3 OR deletion_revision <> $4)`,
+        [
+          instance.id,
+          instance.automatic_memory_enabled,
+          instance.memory_settings_revision,
+          instance.deletion_revision,
+        ],
+      );
+      if (!instance.automatic_memory_enabled) return null;
+      const result = await client.query<{
+        request_id: string;
+        source_event_id: string;
+        claim_id: string;
+        settings_revision: string;
+        deletion_revision: string;
+        attempts: number;
+      }>(
+        `UPDATE memory_jobs SET status = 'running', attempts = attempts + 1,
+         claim_id = $2, updated_at = now() WHERE instance_id = $1 AND request_id = (
+           SELECT request_id FROM memory_jobs WHERE instance_id = $1 AND status = 'pending'
+           AND attempts < 3 AND available_at <= now() ORDER BY created_at, request_id LIMIT 1
+         ) RETURNING *`,
+        [instance.id, randomUUID()],
+      );
+      const row = result.rows[0];
+      return row
+        ? {
+            requestId: row.request_id,
+            sourceEventId: row.source_event_id,
+            claimId: row.claim_id,
+            settingsRevision: Number(row.settings_revision),
+            deletionRevision: Number(row.deletion_revision),
+            attempt: row.attempts,
+          }
+        : null;
+    });
+  }
+
+  async finishJob(
+    job: MemoryJob,
+    outcome: "skipped" | "retry",
+    failureCode: string,
+  ): Promise<void> {
+    await this.#transaction(async (client, instance) => {
+      await client.query(
+        `UPDATE memory_jobs SET status = CASE WHEN $4 = 'skipped' THEN 'skipped'
+           WHEN attempts >= 3 THEN 'failed' ELSE 'pending' END,
+         claim_id = NULL, failure_code = $5, available_at = now() + interval '5 seconds',
+         updated_at = now()
+         WHERE instance_id = $1 AND request_id = $2 AND claim_id = $3 AND status = 'running'`,
+        [instance.id, job.requestId, job.claimId, outcome, failureCode],
+      );
+    });
+  }
+
+  async #assertJob(
+    client: PoolClient,
+    instance: InstanceRow,
+    job: MemoryJob,
+    input: MemoryWriteRequest,
+  ): Promise<void> {
+    if (
+      !instance.automatic_memory_enabled ||
+      Number(instance.memory_settings_revision) !== job.settingsRevision ||
+      Number(instance.deletion_revision) !== job.deletionRevision ||
+      input.requestId !== job.requestId ||
+      input.sourceEventId !== job.sourceEventId
+    ) {
+      throw new MemorySourceError("Automatic memory task expired");
+    }
+    const valid = await client.query(
+      `SELECT 1 FROM memory_jobs j
+       JOIN conversation_events u ON u.id = j.source_event_id AND u.instance_id = j.instance_id
+       JOIN conversation_events a ON a.id = j.assistant_event_id AND a.instance_id = j.instance_id
+       WHERE j.instance_id = $1 AND j.request_id = $2 AND j.claim_id = $3 AND j.status = 'running'
+       AND j.source_event_id = $4 AND j.settings_revision = $5 AND j.deletion_revision = $6
+       AND u.role = 'user' AND a.role = 'assistant'
+       AND u.request_id = j.request_id AND a.request_id = j.request_id
+       AND u.memory_settings_revision = j.settings_revision`,
+      [
+        instance.id,
+        job.requestId,
+        job.claimId,
+        job.sourceEventId,
+        job.settingsRevision,
+        job.deletionRevision,
+      ],
+    );
+    if (valid.rowCount !== 1) throw new MemorySourceError("Automatic memory task expired");
+  }
+
   async state(): Promise<MemoryState> {
     const row = await this.#instance(this.#pool);
     return toState(row);
@@ -80,7 +249,11 @@ export class PostgresMemoryRepository implements MemoryRepository {
       const result = await client.query<MemoryRow>(
         `${memorySelection} AND m.state = 'current' ORDER BY m.updated_at DESC, m.id`,
       );
-      return { ...toState(instance), memories: result.rows.map((row) => this.#memory(row)) };
+      return {
+        ...toState(instance),
+        minimumContextRevision: Number(instance.minimum_context_revision),
+        memories: result.rows.map((row) => this.#memory(row)),
+      };
     });
   }
 
@@ -96,7 +269,7 @@ export class PostgresMemoryRepository implements MemoryRepository {
     const result = await this.#pool.query<{ changes: MemoryChange[] }>(
       `SELECT o.changes FROM memory_operations o
        JOIN violet_instances i ON i.id = o.instance_id
-       WHERE i.singleton = true AND o.request_id = $1`,
+       WHERE i.singleton = true AND o.request_id = $1 AND o.origin = 'explicit'`,
       [requestId],
     );
     return result.rows[0]?.changes ?? null;
@@ -115,12 +288,22 @@ export class PostgresMemoryRepository implements MemoryRepository {
 
   async write(input: MemoryWriteRequest, signal?: AbortSignal): Promise<readonly MemoryChange[]> {
     return this.#transaction(async (client, instance) => {
-      const previous = await client.query<{ changes: MemoryChange[]; source_event_id: string }>(
-        "SELECT changes, source_event_id FROM memory_operations WHERE instance_id = $1 AND request_id = $2",
+      const automatic = input.automaticJob;
+      if (automatic) await this.#assertJob(client, instance, automatic, input);
+      const origin = automatic ? "automatic" : "explicit";
+      const previous = await client.query<{
+        changes: MemoryChange[];
+        source_event_id: string;
+        origin: string;
+      }>(
+        "SELECT changes, source_event_id, origin FROM memory_operations WHERE instance_id = $1 AND request_id = $2",
         [instance.id, input.requestId],
       );
       if (previous.rows[0]) {
-        if (previous.rows[0].source_event_id !== input.sourceEventId.toLowerCase()) {
+        if (
+          previous.rows[0].source_event_id !== input.sourceEventId.toLowerCase() ||
+          previous.rows[0].origin !== origin
+        ) {
           throw new MemoryConflictError("Request ID already belongs to a different source");
         }
         return previous.rows[0].changes;
@@ -130,12 +313,20 @@ export class PostgresMemoryRepository implements MemoryRepository {
       }
       const source = await this.#source(client, instance.id, input.sourceEventId, input.requestId);
       assertMemoryContentAllowed(source);
+      if (automatic && classifyMemoryContent(source) !== "normal") throw new MemorySourceError();
       const bytes = Buffer.from(source, "utf8");
       const changes: MemoryChange[] = [];
       const touched = new Set<string>();
       let corrected = false;
       for (const write of input.writes) {
         assertMemoryContentAllowed(write.content);
+        if (
+          automatic &&
+          (write.target?.action === "correct" ||
+            write.sensitivity !== "normal" ||
+            classifyMemoryContent(write.content) !== "normal")
+        )
+          throw new MemorySourceError("Automatic memory cannot correct or store sensitive content");
         if (
           write.source.eventId.toLowerCase() !== input.sourceEventId.toLowerCase() ||
           !Number.isInteger(write.source.startByte) ||
@@ -209,8 +400,8 @@ export class PostgresMemoryRepository implements MemoryRepository {
           await client.query(
             `INSERT INTO memories (
               instance_id, id, version, state, origin, envelope, created_at, updated_at
-            ) VALUES ($1, $2, $3, 'current', 'explicit', $4, $5, now())`,
-            [instance.id, id, version, encryptJson(this.#cipher, content), createdAt],
+            ) VALUES ($1, $2, $3, 'current', $6, $4, $5, now())`,
+            [instance.id, id, version, encryptJson(this.#cipher, content), createdAt, origin],
           );
         } else {
           await client.query(
@@ -234,11 +425,18 @@ export class PostgresMemoryRepository implements MemoryRepository {
         changes.push({ id, version, kind });
       }
       await client.query(
-        "INSERT INTO memory_operations (instance_id, request_id, source_event_id, changes) VALUES ($1, $2, $3, $4)",
-        [instance.id, input.requestId, input.sourceEventId, JSON.stringify(changes)],
+        "INSERT INTO memory_operations (instance_id, request_id, source_event_id, changes, origin) VALUES ($1, $2, $3, $4, $5)",
+        [instance.id, input.requestId, input.sourceEventId, JSON.stringify(changes), origin],
       );
       if (changes.length > 0) {
-        await this.#invalidate(client, instance.id, corrected);
+        await this.#invalidate(client, instance.id, corrected, !automatic);
+      }
+      if (automatic) {
+        await client.query(
+          `UPDATE memory_jobs SET status = 'complete', claim_id = NULL, updated_at = now(),
+           failure_code = NULL WHERE instance_id = $1 AND request_id = $2`,
+          [instance.id, input.requestId],
+        );
       }
       return changes;
     }, signal);
@@ -459,10 +657,17 @@ export class PostgresMemoryRepository implements MemoryRepository {
     return previous;
   }
 
-  async #invalidate(client: PoolClient, instanceId: string, context: boolean): Promise<void> {
+  async #invalidate(
+    client: PoolClient,
+    instanceId: string,
+    context: boolean,
+    advanceFloor = true,
+  ): Promise<void> {
     await client.query(
-      "UPDATE violet_instances SET memory_revision = memory_revision + 1, deletion_revision = deletion_revision + $2 WHERE id = $1",
-      [instanceId, context ? 1 : 0],
+      `UPDATE violet_instances SET memory_revision = memory_revision + 1,
+       minimum_context_revision = CASE WHEN $3 THEN memory_revision + 1 ELSE minimum_context_revision END,
+       deletion_revision = deletion_revision + $2 WHERE id = $1`,
+      [instanceId, context ? 1 : 0, advanceFloor],
     );
     await client.query("DELETE FROM memory_summary WHERE instance_id = $1", [instanceId]);
     if (context) {
@@ -576,6 +781,15 @@ function toState(row: InstanceRow): MemoryState {
     revision: Number(row.memory_revision),
     deletionRevision: Number(row.deletion_revision),
     restoreEpoch: Number(row.restore_epoch),
+  };
+}
+
+function toSettings(row: InstanceRow): MemorySettings {
+  return {
+    instanceId: row.id,
+    revision: Number(row.memory_settings_revision),
+    enabled: row.automatic_memory_enabled,
+    memoryRevision: Number(row.memory_revision),
   };
 }
 

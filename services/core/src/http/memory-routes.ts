@@ -5,6 +5,7 @@ import {
   assertMemoryCorrection,
   assertMemoryDeletionConfirmation,
   assertMemoryDeletionPreviewRequest,
+  assertMemorySettingsUpdate,
   ProtocolValidationError,
 } from "@violet/protocol";
 import { errorCodes, type FastifyInstance, type FastifyRequest } from "fastify";
@@ -98,6 +99,11 @@ export function registerMemoryRoutes(
       );
     });
     routes.get("/v1/memories", async () => options.memory?.list());
+    routes.get("/v1/memory-settings", async () => options.memory?.repository.settings());
+    routes.post("/v1/memory-settings", async (request) => {
+      assertMemorySettingsUpdate(request.body);
+      return options.memory?.repository.updateSettings(request.body);
+    });
     routes.get("/v1/memories/:memoryId", async (request) => {
       const query = request.query as { reveal?: string };
       return options.memory?.detail(pathId(request, "memoryId"), query.reveal === "true");

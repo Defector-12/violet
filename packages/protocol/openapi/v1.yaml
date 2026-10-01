@@ -6,6 +6,44 @@ info:
 servers:
   - url: http://127.0.0.1:4310
 paths:
+  /v1/memory-settings:
+    get:
+      operationId: getMemorySettings
+      summary: Read automatic learning state and the current memory revision.
+      security:
+        - deviceToken: []
+      responses:
+        "200":
+          description: Authoritative settings; contains no memory content.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MemorySettings"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    post:
+      operationId: updateMemorySettings
+      summary: Change automatic learning with version and request identity checks.
+      description: Disabling invalidates queued and running tasks. Enabling does not backfill history. A replay returns current settings without undoing newer changes.
+      security:
+        - deviceToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MemorySettingsUpdate"
+      responses:
+        "200":
+          description: Current authoritative settings.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MemorySettings"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/MemoryConflict"
   /v1/memories:
     get:
       operationId: listMemories
@@ -331,6 +369,10 @@ components:
         type: string
         format: uuid
   schemas:
+    MemorySettings:
+      $ref: ../schemas/v1/memory.schema.json#/$defs/settings
+    MemorySettingsUpdate:
+      $ref: ../schemas/v1/memory.schema.json#/$defs/settingsUpdate
     Memory:
       $ref: ../schemas/v1/memory.schema.json#/$defs/memory
     MemoryChange:

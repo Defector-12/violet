@@ -18,6 +18,7 @@ import { InMemoryContextCheckpointRepository } from "./conversation/in-memory-co
 import { InMemoryConversationLedger } from "./conversation/in-memory-conversation-ledger.js";
 import { createPipelineContextAssembler } from "./conversation/pipeline-context.js";
 import { buildCoreApp } from "./http/app.js";
+import { MemoryJobRunner } from "./memory/memory-job-runner.js";
 import { MemoryService } from "./memory/memory-service.js";
 import { DeepSeekModelGateway } from "./model/deepseek-model-gateway.js";
 import { DeterministicModelGateway } from "./model/deterministic-model-gateway.js";
@@ -213,15 +214,23 @@ await app.listen({
   port: config.port,
 });
 
+const memoryJobs = memoryService ? new MemoryJobRunner(memoryService) : undefined;
+await memoryJobs?.start();
+
 let shuttingDown = false;
 const shutdown = async () => {
   if (shuttingDown) return;
   shuttingDown = true;
   let failure: unknown;
   try {
-    await app.close();
+    await memoryJobs?.stop();
   } catch (error) {
     failure = error;
+  }
+  try {
+    await app.close();
+  } catch (error) {
+    failure ??= error;
   }
   if (traceCleanup) clearInterval(traceCleanup);
   try {

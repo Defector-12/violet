@@ -23,6 +23,8 @@ export interface AppendLedgerMessage {
   readonly contextEventId?: string;
   readonly contextSourceId?: string;
   readonly expectedMemoryRevision?: number;
+  /** Only an ordinary, completed assistant turn may request atomic enqueue. */
+  readonly automaticMemoryEligible?: boolean;
   readonly id: string;
   readonly occurredAt: Date;
   readonly requestId: string;
