@@ -10,7 +10,8 @@ import WebSocket from "ws";
 import { defaultConversationInstructions } from "../conversation/context-assembler.js";
 import { recallMemoryTool } from "../memory/memory-search.js";
 import { qwenAudioRealtimeContextProfile } from "../model/model-context.js";
-import { AsyncQueue, abortReason, timeoutSignal } from "./async-queue.js";
+import { AsyncQueue, timeoutSignal } from "./async-queue.js";
+import { connectProviderSocket, sendProviderData } from "./provider-websocket.js";
 import { recordTestTrace, testTraceEnabled } from "./test-trace.js";
 
 const inputAudio = {
@@ -1010,57 +1011,12 @@ class WebSocketQwenRealtimeTransport implements QwenRealtimeTransport {
     });
   }
 
-  async connect(signal?: AbortSignal): Promise<void> {
-    if (this.#socket.readyState === WebSocket.OPEN) {
-      return;
-    }
-    await new Promise<void>((resolve, reject) => {
-      const onOpen = () => {
-        cleanup();
-        resolve();
-      };
-      const onError = (error: Error) => {
-        cleanup();
-        reject(error);
-      };
-      const onClose = () => {
-        cleanup();
-        reject(new Error("Qwen realtime connection closed during setup"));
-      };
-      const onAbort = () => {
-        cleanup();
-        reject(abortReason(signal));
-      };
-      const cleanup = () => {
-        this.#socket.off("open", onOpen);
-        this.#socket.off("error", onError);
-        this.#socket.off("close", onClose);
-        signal?.removeEventListener("abort", onAbort);
-      };
-
-      this.#socket.once("open", onOpen);
-      this.#socket.once("error", onError);
-      this.#socket.once("close", onClose);
-      signal?.addEventListener("abort", onAbort, { once: true });
-      if (signal?.aborted) {
-        onAbort();
-      }
-    });
+  connect(signal?: AbortSignal): Promise<void> {
+    return connectProviderSocket(this.#socket, "Qwen", signal);
   }
 
-  async send(event: Readonly<Record<string, unknown>>): Promise<void> {
-    if (this.#socket.readyState !== WebSocket.OPEN) {
-      throw new Error("Qwen realtime connection is not open");
-    }
-    await new Promise<void>((resolve, reject) => {
-      this.#socket.send(JSON.stringify(event), (error) => {
-        if (error) {
-          reject(error);
-        } else {
-          resolve();
-        }
-      });
-    });
+  send(event: Readonly<Record<string, unknown>>): Promise<void> {
+    return sendProviderData(this.#socket, "Qwen", JSON.stringify(event));
   }
 
   receive(signal?: AbortSignal): Promise<unknown> {

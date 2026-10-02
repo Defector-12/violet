@@ -18,8 +18,8 @@
 - `manifest.json`、原始文件、stdout/stderr、退出码与所有失败尝试均可检查；
   manifest 记录提交与完整工作树指纹（含未跟踪源码），命令结束后另存最终指纹。
   报告生成成功不等于产品验收通过。
-- `acceptance.ndjson` 只保存延迟、停止原因等性能元数据，不含对话正文；旧
-  `start-macos-acceptance.sh` 的元数据日志不能代替上述完整 test-run。
+- `acceptance.ndjson` 只保存延迟、停止原因等性能元数据，不含对话正文，不能代替完整
+  test-run。用 `pnpm acceptance:report -- <run-dir>/acceptance.ndjson` 计算性能门禁。
 
 自动化测试由以下入口保存独立 stdout、stderr 和退出码到
 `.local-acceptance/test-runs/`。Mac 入口显式使用 `--no-parallel`，避免独立 UI 测试

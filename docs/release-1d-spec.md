@@ -1,16 +1,8 @@
 # Release 1D：Violet Continuity 最终规格
 
-> 状态：Release 1D 三阶段已验收并合入双主线，完成部署与 Mac 激活；
-> Phase 3 的 Core、0004、备份与自动学习已上线。
-> 1D-10 第二次修复后的 100×3 真实复验已通过：precision 96.92%、recall 98.44%、
-> Core 可见 p95 5.079 秒。后续并行初始化和沟通偏好问题已修复，最终关键边界
-> 2×3 定向复验 9/9 正确；最新提示未重跑完整矩阵，证据分别记录。
-> 普通偏好误入明确记忆及未保存却声称保存的问题已修复，真实 Core 与 Mac 补验通过。
-> 生产迁移、产物与能力回滚验证通过；普通终端已完成本次生产备份官方隔离恢复、
-> 自动学习启用（settings revision 1）及正式 Mac 激活。
-> 本文定义三个阶段的产品与技术合同。
-> 实施顺序见 [任务拆分](./release-1d-tasks.md)，实际交付证据与剩余门禁见
-> [验收清单](./release-1d-acceptance.md) 2.26—2.39。
+本文维护 Release 1D 的产品与技术合同。三个阶段均已交付；版本、测量结果和发布范围
+只在 [验收总览](./release-1d-acceptance.md) 维护，逐次过程见
+[历史证据](./release-1d-evidence.md)。
 
 ## 1. 目标
 
@@ -181,7 +173,7 @@ Realtime 的同一逻辑 turn 必须按规范化 ID 串行持久化，并由单�
 - `memory_jobs`：不含正文的异步提取任务；
 - `deletion_tombstones`：不含正文和语义的最小删除记录。
 
-`memory_jobs` 已由 Phase 3 的 `0004` 在本地实现；同一迁移增加实例级自动记忆设置、
+`memory_jobs` 由 Phase 3 的 `0004` 引入；同一迁移增加实例级自动记忆设置、
 设置版本与无正文幂等操作记录。其余结构已由 Phase 1/2 交付。
 
 所有语义正文使用现有 `EnvelopeCipher` 加密。来源引用不重复保存原文，只保存用户事件 ID
@@ -223,9 +215,7 @@ revision 不一致时完全停用。
 
 ### 5.4 自动记忆开关
 
-开关合同已在 1D-09 本地实现，迁移默认关闭；按第 11 节通过验收并获准上线后才默认开启。
-
-- 发布目标为默认开启；1D-10 验收与生产启用授权前保持关闭。
+- 新实例迁移默认关闭；验收及生产启用授权完成后，通过版本化 API 开启。
 - 关闭只停止新增，不删除已有记忆。
 - 关闭期间的轮次在重开后不补提取。
 - 用户事件入账时绑定已开启的设置版本；关闭会使排队和在途任务失效，重开不恢复。
@@ -250,7 +240,7 @@ revision 不一致时完全停用。
 
 ### 7.1 Mac 记忆窗口
 
-Phase 2 已交付明确记忆的查看与治理；自动来源和开关已在 Phase 3 的 1D-09 本地实现。
+Phase 2 提供明确记忆的查看与治理；Phase 3 增加自动来源和开关。
 
 菜单栏浮窗提供一个记忆图标，打开独立窗口。窗口包含：
 
@@ -294,12 +284,16 @@ Phase 2 已交付明确记忆的查看与治理；自动来源和开关已在 Ph
 - 清理失败不撤销在线删除；旧备份仍因 Keychain 纪元被官方恢复流程拒绝。
 - 新备份恢复后，事件、记忆、summary、checkpoint 和检索中都不能出现已删除内容。
 
+备份纪元和 `pg_dump` 必须来自同一 PostgreSQL 同步快照；导出快照的事务保持到 dump
+完成。解密认证和最低纪元检查通过前不落明文。先验证干净备份，再清理受管的旧本地
+副本、TOS versions、delete markers 和 multipart uploads；失败可查询、可重试。
+
 这满足“Violet 恢复流程不可复活”。用户自行绕过 Violet、复制并手工读取数据库文件，
 不在 1D 的承诺范围内。
 
 ## 9. API 与事件
 
-自动记忆设置 API 已在 Phase 3 的 1D-09 本地实现，其余管理接口已由 Phase 2 交付。
+自动记忆设置 API 由 Phase 3 引入，其余管理接口由 Phase 2 交付。
 
 在现有 `/v1` 协议中增加最小管理面：
 
@@ -328,17 +322,29 @@ Phase 2 已交付明确记忆的查看与治理；自动来源和开关已在 Ph
 
 ## 11. 依赖、发布与回滚
 
+原任务书的实现顺序与定位合并如下；每个 Phase 独立交付，Phase 2 的写入、治理和恢复
+必须一起完成。实现链接指向仓库内的文件或目录。
+
+| 原任务 | 职责 | 主要实现 |
+|---|---|---|
+| 1D-01 | epoch、账本和完整轮次 | [领域](../packages/domain/src/)、[epoch](../services/core/src/conversation/context-epoch-manager.ts)、[0002 系列迁移](../infra/migrations/) |
+| 1D-02 | 上下文装配和 checkpoint | [装配](../services/core/src/conversation/context-assembler.ts)、[checkpoint 仓储](../services/core/src/storage/postgres-context-checkpoint-repository.ts) |
+| 1D-03 | 文字和两种语音运行时接入 | [文字](../services/core/src/conversation/chat-service.ts)、[Pipeline 上下文](../services/core/src/conversation/pipeline-context.ts)、[实时运行时](../services/core/src/realtime/) |
+| 1D-04 | 加密记忆、来源与版本 | [领域](../packages/domain/src/memory.ts)、[仓储](../services/core/src/storage/postgres-memory-repository.ts)、[0003 迁移](../infra/migrations/0003_explicit_memory.sql) |
+| 1D-05 | 明确记住、纠正与 summary | [服务](../services/core/src/memory/memory-service.ts)、[提议](../services/core/src/memory/memory-proposal.ts)、[摘要](../services/core/src/memory/memory-summary.ts)、[隐私规则](../packages/policy/src/memory-content.ts) |
+| 1D-06 | 同一召回工具 | [搜索](../services/core/src/memory/memory-search.ts)、[工具](../services/core/src/memory/recall-memory-tool.ts) |
+| 1D-07 | 管理协议和 Mac 窗口 | [协议](../packages/protocol/)、[SDK](../packages/sdk/)、[路由](../services/core/src/http/memory-routes.ts)、[窗口模型](../apps/macos/Sources/VioletMacCore/MemoryManagementModel.swift) |
+| 1D-08 | 删除与官方恢复 | 同一记忆服务/仓储、[备份包](../packages/backup/)、[备份服务](../services/backup/)、[备份脚本](../scripts/backup-devbox.sh)、[恢复脚本](../scripts/restore-backup.sh)、[Mac 恢复纪元](../apps/macos/Sources/VioletMacCore/RestoreEpochStore.swift) |
+| 1D-09 | 自动提取任务与开关 | [任务运行器](../services/core/src/memory/memory-job-runner.ts)、[0004 迁移](../infra/migrations/0004_memory_jobs.sql)，沿用记忆服务及窗口 |
+| 1D-10 | 合成语料、真实提取和治理评估 | [语料](../services/core/src/memory/fixtures/)、[评估测试](../services/core/src/memory/release-1d-memory.eval.test.ts)、[评估脚本](../scripts/eval-memory.mjs) |
+
+协议从 Schema/OpenAPI 生成，TypeScript 与 Swift 生成物不手改。所有阶段沿用现有
+模块化 Core、PostgreSQL 和测试入口；每次验证按 [留证规则](./testing/README.md) 保存。
+
 - 复用现有 PostgreSQL、DeepSeek `deepseek-flash`（DeepSeek-V4.1-Flash）、Qwen、
   TOS、Mac Keychain、OpenAPI 和测试记录器。
 - 不新增 npm/Swift 依赖、外部账号或凭证；现有 `pgvector` 扩展不参与 1D 检索。
-- Swift 构建要求本机 Xcode license 已接受；本机已完成，历史证据见验收清单 2.1。
+- Swift 构建要求本机 Xcode license 已接受，工具链与命令见 [Mac README](../apps/macos/README.md)。
 - 发布顺序是：统一上下文 → 明确记忆与治理 → 自动提取。
-- 自动提取验收完成前保持关闭；通过后才设为默认开启。
 - 可分别关闭自动提取、记忆注入和 checkpoint；已写记忆仍可查看、纠正和删除。
 - 回滚不得降低 `restore_epoch`、恢复旧版本或重新关联已删除来源。
-
-## 12. 与基线文档的关系
-
-本规格把路线图中的六类完整记忆、混合向量检索和逐记录密钥销毁从 1D 必做项移出，
-但不否定它们作为有证据后的长期候选。相关表述已同步到
-[工程路线图](./engineering-roadmap.md)和[总体架构方向](./architecture-direction.md)。

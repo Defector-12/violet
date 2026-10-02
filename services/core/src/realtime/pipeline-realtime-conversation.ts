@@ -12,7 +12,8 @@ import type {
 import WebSocket, { type RawData } from "ws";
 import type { MemoryService } from "../memory/memory-service.js";
 import { confirmedMemoryReply, streamWithRecall } from "../memory/recall-memory-tool.js";
-import { AsyncQueue, abortReason, timeoutSignal } from "./async-queue.js";
+import { AsyncQueue, timeoutSignal } from "./async-queue.js";
+import { connectProviderSocket, sendProviderData } from "./provider-websocket.js";
 
 const inputAudio = {
   channels: 1,
@@ -622,54 +623,20 @@ class WebSocketDashScopeTransport implements DashScopeRealtimeTransport {
     });
   }
 
-  async connect(signal?: AbortSignal): Promise<void> {
-    if (this.#socket.readyState === WebSocket.OPEN) {
-      return;
-    }
-    await new Promise<void>((resolve, reject) => {
-      const onOpen = () => {
-        cleanup();
-        resolve();
-      };
-      const onError = (error: Error) => {
-        cleanup();
-        reject(error);
-      };
-      const onClose = () => {
-        cleanup();
-        reject(new Error("DashScope realtime connection closed during setup"));
-      };
-      const onAbort = () => {
-        cleanup();
-        reject(abortReason(signal));
-      };
-      const cleanup = () => {
-        this.#socket.off("open", onOpen);
-        this.#socket.off("error", onError);
-        this.#socket.off("close", onClose);
-        signal?.removeEventListener("abort", onAbort);
-      };
-
-      this.#socket.once("open", onOpen);
-      this.#socket.once("error", onError);
-      this.#socket.once("close", onClose);
-      signal?.addEventListener("abort", onAbort, { once: true });
-      if (signal?.aborted) {
-        onAbort();
-      }
-    });
+  connect(signal?: AbortSignal): Promise<void> {
+    return connectProviderSocket(this.#socket, "DashScope", signal);
   }
 
   receive(signal?: AbortSignal): Promise<DashScopeRealtimeMessage> {
     return this.#events.nextRequired(signal);
   }
 
-  async sendBinary(data: Uint8Array): Promise<void> {
-    await this.#send(data);
+  sendBinary(data: Uint8Array): Promise<void> {
+    return sendProviderData(this.#socket, "DashScope", data);
   }
 
-  async sendJson(event: Readonly<Record<string, unknown>>): Promise<void> {
-    await this.#send(JSON.stringify(event));
+  sendJson(event: Readonly<Record<string, unknown>>): Promise<void> {
+    return sendProviderData(this.#socket, "DashScope", JSON.stringify(event));
   }
 
   close(): void {
@@ -684,21 +651,6 @@ class WebSocketDashScopeTransport implements DashScopeRealtimeTransport {
     ) {
       this.#socket.close(1000, "SESSION_CLOSED");
     }
-  }
-
-  async #send(data: string | Uint8Array): Promise<void> {
-    if (this.#socket.readyState !== WebSocket.OPEN) {
-      throw new Error("DashScope realtime connection is not open");
-    }
-    await new Promise<void>((resolve, reject) => {
-      this.#socket.send(data, (error) => {
-        if (error) {
-          reject(error);
-        } else {
-          resolve();
-        }
-      });
-    });
   }
 }
 

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { EncryptedEnvelope, EnvelopeCipher } from "@violet/crypto";
+import type { EnvelopeCipher } from "@violet/crypto";
 import {
   type Memory,
   type MemoryChange,
@@ -21,7 +21,12 @@ import {
 } from "@violet/domain";
 import { assertMemoryContentAllowed, classifyMemoryContent } from "@violet/policy";
 import type { Pool, PoolClient } from "pg";
-import { decryptJson, encryptJson } from "./encrypted-json.js";
+import {
+  decryptContent,
+  decryptJson,
+  type EncryptedContentRow,
+  encryptJson,
+} from "./encrypted-content.js";
 
 interface InstanceRow {
   id: string;
@@ -681,16 +686,7 @@ export class PostgresMemoryRepository implements MemoryRepository {
     eventId: string,
     requestId: string,
   ): Promise<string> {
-    const result = await client.query<{
-      algorithm: "AES-256-GCM";
-      ciphertext: Buffer;
-      content_nonce: Buffer;
-      content_tag: Buffer;
-      wrapped_key: Buffer;
-      key_nonce: Buffer;
-      key_tag: Buffer;
-      key_version: string;
-    }>(
+    const result = await client.query<EncryptedContentRow>(
       `SELECT e.* FROM conversation_events e
        WHERE e.instance_id = $1 AND e.id = $2 AND e.role = 'user'
          AND e.request_id = $3
@@ -704,17 +700,7 @@ export class PostgresMemoryRepository implements MemoryRepository {
     if (!row) {
       throw new MemorySourceError();
     }
-    const envelope: EncryptedEnvelope = {
-      algorithm: row.algorithm,
-      ciphertext: row.ciphertext,
-      contentNonce: row.content_nonce,
-      contentTag: row.content_tag,
-      wrappedKey: row.wrapped_key,
-      keyNonce: row.key_nonce,
-      keyTag: row.key_tag,
-      keyVersion: row.key_version,
-    };
-    return this.#cipher.decrypt(envelope).toString("utf8");
+    return decryptContent(this.#cipher, row);
   }
 
   #memory(row: MemoryRow): Memory {
