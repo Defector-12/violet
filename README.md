@@ -42,10 +42,9 @@ Mac 配置、权限、启动与一次性失败样本录制见 [Mac README](./app
 
 - [Release 1D 当前状态](./docs/release-1d-acceptance.md)：当前开发、部署与测试证据。
 - [Release 1C 验收](./docs/release-1c-acceptance.md)：视觉与 Natural Pointing 基线。
-- [Natural Pointing](./docs/natural-pointing-handoff.md)：当前实现合同与边界。
 - [历史记录](./docs/历史记录.md)：阶段变化，不代替当前健康状态。
 - [架构方向](./docs/architecture-direction.md)、[工程路线](./docs/engineering-roadmap.md)：
-  已实现边界与未来方向。
+  当前 Natural Pointing 等系统边界与未来方向。
 - [产品宪法](./docs/product-philosophy-and-constitution.md)：产品与授权原则，不是实现清单。
 
 诊断图片、秘密、本地日志和构建产物不进入 Git 或 Docker 构建上下文。
