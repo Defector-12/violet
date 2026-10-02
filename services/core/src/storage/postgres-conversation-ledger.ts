@@ -1,4 +1,4 @@
-import type { EncryptedEnvelope, EnvelopeCipher } from "@violet/crypto";
+import type { EnvelopeCipher } from "@violet/crypto";
 import {
   type AppendLedgerMessage,
   assertContextReference,
@@ -10,24 +10,17 @@ import {
   MemoryConflictError,
 } from "@violet/domain";
 import type { Pool, PoolClient } from "pg";
+import { decryptContent, type EncryptedContentRow } from "./encrypted-content.js";
 
-interface EventRow {
-  readonly algorithm: "AES-256-GCM";
-  readonly ciphertext: Buffer;
-  readonly content_nonce: Buffer;
-  readonly content_tag: Buffer;
+interface EventRow extends EncryptedContentRow {
   readonly context_epoch_id: string | null;
   readonly context_event_id: string | null;
   readonly context_source_id: string | null;
   readonly id: string;
-  readonly key_nonce: Buffer;
-  readonly key_tag: Buffer;
-  readonly key_version: string;
   readonly occurred_at: Date;
   readonly request_id: string;
   readonly role: "assistant" | "user";
   readonly sequence: string;
-  readonly wrapped_key: Buffer;
 }
 
 interface TurnEventRow extends EventRow {
@@ -569,18 +562,8 @@ export class PostgresConversationLedger implements ConversationLedger {
   }
 
   #toMessage(row: EventRow): LedgerMessage {
-    const envelope: EncryptedEnvelope = {
-      algorithm: row.algorithm,
-      ciphertext: row.ciphertext,
-      contentNonce: row.content_nonce,
-      contentTag: row.content_tag,
-      keyNonce: row.key_nonce,
-      keyTag: row.key_tag,
-      keyVersion: row.key_version,
-      wrappedKey: row.wrapped_key,
-    };
     return {
-      content: this.#cipher.decrypt(envelope).toString("utf8"),
+      content: decryptContent(this.#cipher, row),
       ...(row.context_epoch_id ? { contextEpochId: row.context_epoch_id } : {}),
       ...(row.context_event_id ? { contextEventId: row.context_event_id } : {}),
       ...(row.context_source_id ? { contextSourceId: row.context_source_id } : {}),

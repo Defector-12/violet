@@ -153,7 +153,7 @@
 ## 1C 历史部署与回滚
 
 1C.2 交付时的运行版本如下。它们不能用于已升级 `0003` 的当前环境；现行迁移、
-能力回滚和官方恢复约束见 [Release 1D 验收](./release-1d-acceptance.md) 2.25—2.27。
+能力回滚和官方恢复约束见 [Release 1D 验收](./release-1d-acceptance.md#后续维护)。
 
 - Core：`97aee4a-release-1c2`，镜像
   `sha256:46070d90ce613da245391958a85c5af0065d2d76d55a8a803b6dfe84114f4975`，

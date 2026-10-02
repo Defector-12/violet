@@ -1,25 +1,18 @@
-import type { EncryptedEnvelope, EnvelopeCipher } from "@violet/crypto";
+import type { EnvelopeCipher } from "@violet/crypto";
 import type {
   ContextCheckpoint,
   ContextCheckpointRepository,
   SaveContextCheckpoint,
 } from "@violet/domain";
 import type { Pool } from "pg";
+import { decryptContent, type EncryptedContentRow } from "./encrypted-content.js";
 
-interface CheckpointRow {
-  readonly algorithm: "AES-256-GCM";
-  readonly ciphertext: Buffer;
-  readonly content_nonce: Buffer;
-  readonly content_tag: Buffer;
+interface CheckpointRow extends EncryptedContentRow {
   readonly context_epoch_id: string;
   readonly deletion_revision: string;
   readonly from_sequence: string;
-  readonly key_nonce: Buffer;
-  readonly key_tag: Buffer;
-  readonly key_version: string;
   readonly through_sequence: string;
   readonly updated_at: Date;
-  readonly wrapped_key: Buffer;
 }
 
 export class PostgresContextCheckpointRepository implements ContextCheckpointRepository {
@@ -176,18 +169,8 @@ export class PostgresContextCheckpointRepository implements ContextCheckpointRep
   }
 
   #toCheckpoint(row: CheckpointRow): ContextCheckpoint {
-    const envelope: EncryptedEnvelope = {
-      algorithm: row.algorithm,
-      ciphertext: row.ciphertext,
-      contentNonce: row.content_nonce,
-      contentTag: row.content_tag,
-      keyNonce: row.key_nonce,
-      keyTag: row.key_tag,
-      keyVersion: row.key_version,
-      wrappedKey: row.wrapped_key,
-    };
     return {
-      content: this.#cipher.decrypt(envelope).toString("utf8"),
+      content: decryptContent(this.#cipher, row),
       contextEpochId: row.context_epoch_id,
       deletionRevision: Number(row.deletion_revision),
       fromSequence: Number(row.from_sequence),

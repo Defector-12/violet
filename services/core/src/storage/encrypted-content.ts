@@ -1,5 +1,31 @@
 import type { EnvelopeCipher } from "@violet/crypto";
 
+export interface EncryptedContentRow {
+  readonly algorithm: "AES-256-GCM";
+  readonly ciphertext: Buffer;
+  readonly content_nonce: Buffer;
+  readonly content_tag: Buffer;
+  readonly wrapped_key: Buffer;
+  readonly key_nonce: Buffer;
+  readonly key_tag: Buffer;
+  readonly key_version: string;
+}
+
+export function decryptContent(cipher: EnvelopeCipher, row: EncryptedContentRow): string {
+  return cipher
+    .decrypt({
+      algorithm: row.algorithm,
+      ciphertext: row.ciphertext,
+      contentNonce: row.content_nonce,
+      contentTag: row.content_tag,
+      wrappedKey: row.wrapped_key,
+      keyNonce: row.key_nonce,
+      keyTag: row.key_tag,
+      keyVersion: row.key_version,
+    })
+    .toString("utf8");
+}
+
 interface StoredEnvelope {
   readonly algorithm: "AES-256-GCM";
   readonly keyVersion: string;

@@ -24,7 +24,6 @@ fnm exec --using=.node-version -- pnpm acceptance:report -- .local-acceptance/te
 - 使用启动脚本打印的实际 run 路径，先确认 Mac/Core recorder ready；结束后收集 Core
   证据并生成报告。日志写入被 Git 忽略的 `.local-acceptance/test-runs/`。
 - `acceptance:report` 退出码：全部通过为 0，样本不足或门禁失败为 1，日志/schema 非法为 2。
-- 旧 `start-macos-acceptance.sh` 是性能元数据入口，单独使用不能满足完整验收留证要求。
 
 ## 2. 验收门槛
 
