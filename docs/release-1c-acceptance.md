@@ -50,71 +50,41 @@
 - 验收版本曾包含未移动的 cursor；收尾审查发现异步移动仍可造成双目标，因此最终代码
   固定不画 cursor，只保留冻结坐标。该变更需由自动化与最终构建覆盖，不要求重复真人样本。
 
-## 自动化与收尾
+## 自动化与交付证据
 
-- 1C 部署基线 Core/Node 全量 150/150：
-  `03b12862-5beb-4c36-966f-23cfa984c10a`。
-- Swift 全量 92/92：
-  `1340867c-ed31-45fa-b54e-735214e7cb0c`。
-- TypeScript 全仓 build/typecheck：
-  `10f70493-3af8-4b52-b286-3bd65de82d22`。
-- 受控 HTTP/WebSocket 集成 116 个事件、0 个证据缺口：
-  `81357081-8e37-4e64-b982-2c37e6db604b`，不是视觉识别准确率证据。
-- 协议生成前后 hash 一致：
-  `e66a0784-cefa-44dc-8928-5e06f19c7725`。
-- Compose 全 profile 配置校验：
-  `ff598c9e-b7a0-413a-a145-a53d2e96f062`。
-- Mac App 构建及严格签名校验：
-  `0e3a2568-35c9-4e60-87c5-f747f9dc7267`，二进制 SHA-256
-  `f19888af4dba2fe6fa0ca5f12717383439efa3c0c2bb2f0d978e8d7a69a890ad`。
-- Biome 全仓 114 个文件无问题：
+1C 经多轮交叉审查修复取消隔离、轮次关联、隐私 fail-closed、证据留存、关闭握手、
+恢复输出所有权和签名启动问题。中间状态不再逐段复述，原 run 按阶段保留：
+
+- 初始交付：Node 150/150 `03b12862-5beb-4c36-966f-23cfa984c10a`；Swift 92/92
+  `1340867c-ed31-45fa-b54e-735214e7cb0c`；build/typecheck
+  `10f70493-3af8-4b52-b286-3bd65de82d22`；集成
+  `81357081-8e37-4e64-b982-2c37e6db604b`；协议
+  `e66a0784-cefa-44dc-8928-5e06f19c7725`；Compose
+  `ff598c9e-b7a0-413a-a145-a53d2e96f062`；签名
+  `0e3a2568-35c9-4e60-87c5-f747f9dc7267`；Biome
   `2afec476-4d48-43d2-9aa9-474eb40c2bc1`。
-- 全仓交叉审查发现的取消隔离、证据保留、隐私记录顺序、HTTP 报告、关闭握手、
-  备份失败发布、恢复输出所有权和本地配置保留问题均已修复并增加回归。
-- 部署提交 `3b9ffc12728dd7634d0fca160d8a766be98db442` 的后续源码硬化已合入两个
-  远端主线：`origin/main` 为 `5a93817`，`bits/main` 为 `02b3939`；两者树
-  `b190cfef` 一致并包含 `be794c2`，远端功能分支已删除。
-- Core exact commit 产物部署验证：
-  `ec5a59bc-4c30-4159-a4a7-2facdd5d87d6`；Mac 最终运行与隧道验证：
+- 交付后删减：Node 148/148 `f3387aa4-d32f-49b5-b2a5-dd4386559454`；
+  build/typecheck `71758662-3f84-4393-a703-10bd18db40df`；Swift
+  `e36c02df-a8b4-4857-89a6-ab4f4a4d2be3`；集成
+  `2f46e393-4ef3-4904-91a5-435a433e5eee`；协议
+  `71b9b5a0-e0e8-45fb-a691-5ab2e1a86a20`；Core
+  `ec5a59bc-4c30-4159-a4a7-2facdd5d87d6`；Mac
   `2132fb63-c60a-4a5b-ad97-eef966586bfb`。
-- 交付后删减回归：Node 148/148 `f3387aa4-d32f-49b5-b2a5-dd4386559454`，
-  TypeScript build/typecheck `71758662-3f84-4393-a703-10bd18db40df`，
-  Swift 92/92 `e36c02df-a8b4-4857-89a6-ab4f4a4d2be3`，受控 trace 116 事件且
-  0 缺口 `2f46e393-4ef3-4904-91a5-435a433e5eee`，协议生成一致
-  `71b9b5a0-e0e8-45fb-a691-5ab2e1a86a20`。
-- 上述删减是源码与文档整理，本轮不重新部署；运行态继续使用下方已验收的
-  `3b9ffc1-release-1c`。
-- 2026-09-15 进入 1D 前复审又发现并修复：Swift UUID 大小写导致取消失效、低置信
-  图片 Context 绕过门禁、Qwen 晚到响应错绑轮次、唤醒授权竞态、测试输出凭据脱敏遗漏，
-  以及结束意图分类阻塞实时输出。修复提交为 `65fa42c`、`f3c966f`。
-- 运行时工具随后合并重复异步队列、使用 Node 原生超时组合、合并 Devbox 密钥注入脚本，
-  并将 Natural Pointing 的 AX 指针读取收窄为安全字段检查；提交 `eea6a39`，净减少
-  292 行，无新增依赖。
-- 复审后 Node 全量 152/152、生成一致、类型检查与 Biome 通过：
-  `b438086f-ce08-4dcc-9460-cb16d786130c`；Swift 全量 92/92：
+- 进入 1D 前复审：提交 `65fa42c`、`f3c966f`、`eea6a39`；Node 152/152、生成、
+  类型与 Biome `b438086f-ce08-4dcc-9460-cb16d786130c`；Swift 92/92
   `d5d3fe64-e7d0-4621-a9a3-a44e0bbaba32`。
-- 上述复审硬化已随 Release 1C.2 部署；当时的回滚基线作为历史证据保留。
-- Release 1C.2 本地候选进一步修复：区域框选绕过保密应用、常见凭证格式漏检、
-  OCR 失败时图片 fail-open、手动图片 Context 无法进入后续问答，以及 Smart-turn
-  迟到响应错绑新轮次。
-- 1C.2 候选 Node 全量 154/154、生成一致、类型检查与 Biome 通过：
-  `778ed4c1-74d2-479c-8eb3-3997ae68b53c`；Swift 全量 95/95：
-  `444b5506-277a-4b0a-ad6a-46400ed84080`。
-- 确定源码提交 `97aee4a7f2e1f3f58acc2635082404428f3462f1` 已通过 Bits MR !21
-  合入 `1168bd7`，并通过 GitHub PR #4 合入 `26aea81`；该源码合并树为
-  `8143dac5`。
-- exact commit Core 构建 `24fa8e1b-fc66-4698-8aff-dca9b64119b1`，部署
-  `dfa51803-0567-4a95-979d-db114702ebe2`；完整 `dist` 清单哈希比对、容器状态、
-  Trace 权限和回滚镜像验证为 `9ec14771-0fdd-4a6f-a469-2334ddf78f28`，认证状态验证为
-  `5b78e9d6-8101-4095-bb3f-3e6c6f6cc076`。
-- Mac exact commit 构建、签名记录为 `6a71707e-43c8-4843-9cbd-38c41ded0d66`；
-  普通启动、隧道和无 Debug/Test 环境验证为 `9d190251-edc8-4dc0-8bed-9c4d4dc1a65f`。
+- 1C.2 最终交付：源码 `97aee4a` 经 Bits !21、GitHub #4 合入，树 `8143dac5`；
+  Node 154/154 `778ed4c1-74d2-479c-8eb3-3997ae68b53c`；Swift 95/95
+  `444b5506-277a-4b0a-ad6a-46400ed84080`；Core 构建、部署、完整性、认证依次为
+  `24fa8e1b-fc66-4698-8aff-dca9b64119b1`、`dfa51803-0567-4a95-979d-db114702ebe2`、
+  `9ec14771-0fdd-4a6f-a469-2334ddf78f28`、`5b78e9d6-8101-4095-bb3f-3e6c6f6cc076`；
+  Mac 签名、启动为 `6a71707e-43c8-4843-9cbd-38c41ded0d66`、
+  `9d190251-edc8-4dc0-8bed-9c4d4dc1a65f`。
 
 ## 历史失败与修复
 
-所有历史失败仍保留，不因新版成功覆盖。长版过程记录快照位于
-`.local-acceptance/closeout-review/release-1c-before-closeout.md`；原始记录均在
-`.local-acceptance/test-runs/` 或历史 fixtures 中，按原授权留存范围管理。
+所有历史失败仍保留，不因新版成功覆盖。原始记录位于
+`.local-acceptance/test-runs/` 或历史 fixtures，按原授权留存范围管理。
 
 | 失败或实验 | 证据 | 当前处理 |
 |---|---|---|
@@ -149,28 +119,3 @@
 - Context 默认 5 分钟过期；关闭、取消、轮次替换和生命周期停止后不得接受晚到结果。
 - 临时图按现有独立 DEK 加密，TOS 会话清理删除全部版本/delete marker，
   生命周期 24 小时兜底。敏感原文、凭据与原始音频不进入记录或 Git。
-
-## 1C 历史部署与回滚
-
-1C.2 交付时的运行版本如下。它们不能用于已升级 `0003` 的当前环境；现行迁移、
-能力回滚和官方恢复约束见 [Release 1D 验收](./release-1d-acceptance.md#后续维护)。
-
-- Core：`97aee4a-release-1c2`，镜像
-  `sha256:46070d90ce613da245391958a85c5af0065d2d76d55a8a803b6dfe84114f4975`，
-  健康且 restart count 为 0。完整 `dist` 清单 SHA-256
-  `1366b96f0b10b61435b0748b16494058327c0e9bc4af33716a4637fb196337f3`
-  与本地 exact commit 构建一致。
-- Core test-trace 目录为容器内 `1000:1000 / 0700`；运行环境不存在
-  `VIOLET_DEBUG_TRACE`。
-- Mac 二进制 SHA-256：
-  `05bd929694c6970f86752d83812b506fb4044ca0e226142db9a722e97d40c083`，
-  严格签名验证通过；普通启动未设置 Debug 或 test-run 环境。
-- Core 部署、完整哈希和认证状态证据分别为
-  `dfa51803-0567-4a95-979d-db114702ebe2`、
-  `9ec14771-0fdd-4a6f-a469-2334ddf78f28` 和
-  `5b78e9d6-8101-4095-bb3f-3e6c6f6cc076`。
-- 当时的 Core 回滚标签 `violet-core:pre-release-1c2-20260915` 指向原
-  `3b9ffc1-release-1c` 镜像；当时的 Mac 回滚包
-  `.local-acceptance/rollback/Violet-freshness-v6-before-clean-vision.app`。
-- 关闭 Look 可停用按需视觉；显式 deterministic Vision 或 memory Context 配置可用于
-  受控降级。供应商失败不自动切换，不使用旧 Context 猜答案。

@@ -31,7 +31,7 @@
 |---|---|---|
 | 1A · Seed | 文字对话、加密事件账本、身份连续性、备份恢复与观测 | [架构方向](./architecture-direction.md)、下方 1A 基线 |
 | 1B · Presence | 原生 Mac、快捷键、实时语音、打断、重连和生命周期控制 | [1B 验收](./release-1b-acceptance.md) |
-| 1C · Sight / Natural Pointing | 手动 Context、本地唤醒、按需完整单屏视觉问答、本机隐私过滤 | [1C 验收](./release-1c-acceptance.md)、[Natural Pointing 合同](./natural-pointing-handoff.md) |
+| 1C · Sight / Natural Pointing | 手动 Context、本地唤醒、按需完整单屏视觉问答、本机隐私过滤 | [1C 验收](./release-1c-acceptance.md)、[架构合同](./architecture-direction.md#41-natural-pointing) |
 | 1D · Continuity | 统一有界上下文、明确与自动记忆、来源召回、纠正删除和恢复防复活 | [1D 规格](./release-1d-spec.md)、[1D 验收](./release-1d-acceptance.md) |
 
 1A 历史基线（2026-08-19）：20 轮真实 DeepSeek 对话、40 条加密事件恢复、
